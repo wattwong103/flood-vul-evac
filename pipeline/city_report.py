@@ -46,7 +46,7 @@ def figure_city_baseline(run_id: str, report_dir: Path) -> Path:
         columns=["height_source", "centre_x", "centre_y"],
     )
 
-    figure, axes = plt.subplots(2, 2, figsize=(15, 12))
+    figure, axes = plt.subplots(2, 3, figsize=(19, 12))
     figure.suptitle(
         "BKK/FLOW city baseline — Bangkok Metropolitan Administration\n"
         f"{stats['geography']['area_km2']:,.0f} km² | {stats['network']['edges']:,} network edges | "
@@ -94,8 +94,31 @@ def figure_city_baseline(run_id: str, report_dir: Path) -> Path:
     )
     _draw_outline(axis, aoi)
 
-    # 4. The terrain evidence behind the missing flood layer.
+    # 4. OBSERVED surface water, the one non-scenario hazard layer.
     axis = axes[1][1]
+    _plot_observed_water(axis, aoi, stats)
+    axis.set_title("OBSERVED surface water (JRC GSW) - extent, not depth", fontsize=10)
+
+    # 5. The observed record across years.
+    axis = axes[0][2]
+    years = stats["flood"]["observed_extent"]["years"]
+    if years:
+        labels = [str(entry["year"]) for entry in years]
+        values = [entry["water_km2"] for entry in years]
+        bars = axis.bar(labels, values, color="#0369a1")
+        axis.bar_label(bars, fmt="%.0f", fontsize=8)
+        baseline = min(years, key=lambda e: e["water_km2"])["year"]
+        axis.set_title("Observed water extent by year (Landsat)", fontsize=10)
+        axis.set_ylabel("water extent (km2)")
+        axis.text(
+            0.02, 0.95,
+            "2011's flood is absent here: an annual\nLandsat composite cannot capture it.",
+            transform=axis.transAxes, fontsize=7.5, va="top", color="#b91c1c",
+        )
+        axis.tick_params(axis="x", labelsize=8)
+
+    # 6. The terrain evidence behind the missing depth layer.
+    axis = axes[1][2]
     transect = np.array([9, 8, 9, 4, 4, 10, 7, 9, 9, 7, 5, 5, 10, 9, 7, 10, 9, 3, 10, 11, 10, 8, 13, 15, 9, 12, 7, 10, 3, 10, 4, 7], dtype=float)
     position = np.arange(len(transect))
     axis.bar(position, transect, color="#dc2626", width=0.75, label="measured terrain (transect across the river)")
@@ -173,11 +196,38 @@ def write_city_summary(run_id: str, report_dir: Path, figure: Path) -> Path:
         f"- Mapped water features: {stats['water']['features']:,} "
         f"({stats['water']['waterway_length_km']:,.0f} km of mapped waterway)",
         "",
-        "## Flood and evacuation",
+        "## Observed surface water (the one observational hazard layer)",
         "",
-        f"- Flood layer status: **{stats['flood']['status']}**",
+        f"- Source: {stats['flood']['observed_extent']['source_id']}, "
+        f"{stats['flood']['observed_extent']['measures']}",
         "",
-        "> " + stats["flood"]["reason"],
+        "| year | water km2 | share of classified | excess vs baseline km2 |",
+        "|---|---:|---:|---:|",
+    ]
+    for entry in stats["flood"]["observed_extent"]["years"]:
+        lines.append(
+            f"| {entry['year']} | {entry['water_km2']:.1f} | "
+            f"{100 * entry['water_share']:.2f}% | {entry['excess_km2_vs_baseline']:+.1f} |"
+        )
+    lines += [
+        "",
+        "2011s flood does not appear here: an annual Landsat composite cannot capture",
+        "a flood lasting weeks inside a single year. Every year here is a lower bound.",
+        "lasts weeks inside a year. Every year here is a lower bound on flood extent.",
+        "",
+        "## Flood depth and evacuation",
+        "",
+        f"- Depth layer status: **{stats['flood']['depth_status']}**",
+        "",
+        "> " + stats["flood"]["depth_reason"],
+        "",
+        "## Destination candidates",
+        "",
+        f"- {stats['destinations']['candidates']:,} candidates from OSM tags, "
+        f"**{stats['destinations']['verified']} verified**",
+        f"- Classes: {json.dumps(stats['destinations']['by_class'])}",
+        "",
+        "> " + stats["destinations"]["note"],
         "",
         "Full evidence, including the measured terrain transect, is in "
         "[docs/CITY_SCALE_LIMITATIONS.md](../../../../docs/CITY_SCALE_LIMITATIONS.md).",
@@ -213,6 +263,53 @@ def main() -> int:
     summary = write_city_summary(run_id, report_dir, figure)
     print(json.dumps({"figure": str(figure), "summary": str(summary)}, indent=2))
     return 0
+
+
+
+
+def _plot_observed_water(axis, aoi, stats) -> None:
+    """Draw the wettest observed year as a water mask over the AOI."""
+    import rasterio
+    from rasterio.mask import mask as rio_mask
+    from rasterio.windows import from_bounds
+
+    from bkkflow.sources import gsw
+
+    years = stats["flood"]["observed_extent"]["years"]
+    if not years:
+        axis.text(0.5, 0.5, "observed layer unavailable", ha="center", transform=axis.transAxes)
+        return
+    wettest = max(years, key=lambda entry: entry["water_km2"])
+    path = Path("data/staged/gsw") / gsw.tile_name_for(wettest["year"], tuple(aoi.to_crs("OGC:CRS84").geometry.union_all().bounds))
+    if not path.is_file():
+        axis.text(0.5, 0.5, f"tile for {wettest['year']} not staged", ha="center", transform=axis.transAxes)
+        return
+    geometry = aoi.to_crs("OGC:CRS84").geometry.union_all()
+    with rasterio.open(path) as dataset:
+        data, transform = rio_mask(dataset, [geometry], crop=True, filled=True, nodata=gsw.CODE_NO_DATA_LAND)
+    array = data[0]
+    rows, cols = array.shape
+    # Compute cell centres from the affine transform directly; rasterio's xy()
+    # does not accept the whole grid in one call.
+    step = max(rows // 700, 1)
+    row_index, col_index = np.mgrid[0:rows:step, 0:cols:step]
+    xs = transform.c + transform.a * (col_index + 0.5)
+    ys = transform.f + transform.e * (row_index + 0.5)
+    sampled = array[row_index, col_index]
+    water = sampled == gsw.CODE_WATER
+    # The mask transform is in the raster CRS (WGS84); the axes are in the
+    # analysis CRS, so the sampled points have to be reprojected too.
+    from pyproj import Transformer
+
+    to_analysis = Transformer.from_crs(dataset.crs, aoi.crs, always_xy=True)
+    px, py = to_analysis.transform(xs[water], ys[water])
+    axis.scatter(px, py, s=0.6, c="#1d4ed8", marker="s", linewidths=0)
+    axis.text(
+        0.02, 0.02,
+        f"{wettest['year']}: {wettest['water_km2']:.0f} km2 ({100*wettest['water_share']:.1f}% of classified area)",
+        transform=axis.transAxes, fontsize=7.5,
+    )
+    _draw_outline(axis, aoi)
 
 
 if __name__ == "__main__":

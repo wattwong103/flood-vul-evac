@@ -1,5 +1,5 @@
 {
-  "registry_version": "2026-09-30.1",
+  "registry_version": "2026-09-30.2",
   "country": "Thailand",
   "scope": "Bangkok flood exposure and evacuation research",
   "policy": "A source is approved only when it is publicly accessible and has explicit reuse permission at resource level.",
@@ -213,6 +213,36 @@
       "status": "verify",
       "reviewed_at": "2026-09-29",
       "notes": "Do not ingest into the open-only core until a specific rainfall resource passes the two-part access and reuse gate."
+    },
+    {
+      "source_id": "jrc-global-surface-water-v1.4",
+      "agency": "European Commission, Joint Research Centre (Copernicus Programme)",
+      "dataset": "Global Surface Water v1.4 yearly classification, 1984-2021",
+      "model_role": "OBSERVED surface-water extent; the only observational hazard layer available to the project",
+      "resource_url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GSWE/YearlyClassification/LATEST/tiles/",
+      "format": "GeoTIFF, 10 degree tiles, 40000x40000 at 0.00025 degree (about 30 m)",
+      "spatial_resolution": "About 30 m",
+      "temporal_resolution": "Annual, 1984-2021",
+      "authentication": "None; public JEODPP open-data mirror",
+      "licence": "CC BY 4.0",
+      "status": "approved",
+      "reviewed_at": "2026-09-30",
+      "notes": "Landsat 5/7/8 derived water/non-water classification per year. Measures EXTENT, not depth, duration or direction. An annual composite under-detects short-lived inundation, so each year is a lower bound; 2011 is known to be poorly captured. A year cannot resolve within-year timing, so it cannot validate a 4-hour evacuation scenario directly, but it can validate spatial extent."
+    },
+    {
+      "source_id": "ghsl-jrc-ghspop-ghsbuilts",
+      "agency": "European Commission, Joint Research Centre / EC Copernicus",
+      "dataset": "Global Human Settlement Layer GHS-POP and GHS-BUILT-S",
+      "model_role": "Independent population and built-up cross-check against WorldPop and OSM footprints",
+      "resource_url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/",
+      "format": "GeoTIFF (global archives are 12 GB per epoch; tile-level access required)",
+      "spatial_resolution": "100 m (3 arc-second geographic or 100 m Mollweide)",
+      "temporal_resolution": "1975-2030 in five-year epochs",
+      "authentication": "None; public JEODPP open-data mirror",
+      "licence": "CC BY 4.0",
+      "status": "verify",
+      "reviewed_at": "2026-09-30",
+      "notes": "Registered but NOT ingested. The catalogue is reachable and browsable, but the per-epoch archives are single 12 GB files with an empty tile subfolder, so an AOI-scoped pull is not yet demonstrated. Keep as verify until a real extract is produced."
     }
   ]
 }

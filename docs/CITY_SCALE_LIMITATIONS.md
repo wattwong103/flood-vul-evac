@@ -90,6 +90,40 @@ it as a city flood map would convert a limitation into a false headline.
 A smoothing pass was considered and rejected: smoothing reduces visual noise
 but cannot remove a systematic bias of the same magnitude as the signal.
 
+## What changed after this finding: observed extent is now available
+
+The search for a better elevation source turned up something more useful than a
+DEM. **JRC Global Surface Water v1.4** (European Commission Joint Research
+Centre, CC BY 4.0) is reachable on the public JEODPP mirror and provides a
+Landsat-derived yearly water classification for 1984-2021 at about 30 m.
+
+It is now ingested for 2010, 2011, 2012 and 2020, and it changes the
+project's evidentiary position: for the first time there is a hazard layer in
+this project that is **observed rather than asserted**.
+
+| year | observed water | share of classified area | excess vs 2010 |
+|---|---:|---:|---:|
+| 2010 | 114.2 km² | 7.63% | baseline |
+| 2011 | 114.0 km² | 7.68% | −0.15 km² |
+| 2012 | 137.8 km² | 9.12% | +23.7 km² |
+| 2020 | 114.3 km² | 7.72% | +0.12 km² |
+
+What it does and does not fix:
+
+- It **validates spatial extent**. A modelled or scenario surface can now be
+  scored against a real observed layer, which is what the plan's Phase 2 exit
+  criterion asks for.
+- It does **not** provide depth. The depth blocker above is unchanged.
+- It does **not** provide timing. A yearly classification cannot validate a
+  four-hour evacuation scenario, and 2011's absence from the record is direct
+  evidence of that limit rather than a data gap.
+- Every year is a **lower bound**: annual composites under-detect short-lived
+  inundation.
+
+Elevation remains unavailable. Open-Meteo's elevation API was tested as an
+alternative and is *worse* (8 m at Khlong San, against terrarium's 5 m), because
+it derives from the same SRTM source.
+
 ## What the city build does deliver
 
 Everything that does not depend on a defensible depth surface:

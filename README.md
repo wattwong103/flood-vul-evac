@@ -49,7 +49,28 @@ never silently substitutes for a pilot result.
 | Public aggregation | 1 km fixed |
 | Routing | compressed CSR index; a **full-city travel-time field takes ~2 s** and reaches 98.3% of nodes |
 
-**This run has no flood layer and no evacuation outcomes.** That is a decision
+**Observed hazard layer (new):** JRC Global Surface Water v1.4, Landsat-derived
+yearly water classification 1984-2021, ingested for 2010, 2011, 2012 and 2020.
+This is the **first genuinely observational hazard data in the project** — every
+other input is either a modelled surface or a declared scenario.
+
+| year | observed water | share of classified area | excess vs 2010 |
+|---|---:|---:|---:|
+| 2010 | 114.2 km² | 7.63% | baseline |
+| 2011 | 114.0 km² | 7.68% | −0.15 km² |
+| **2012** | **137.8 km²** | **9.12%** | **+23.7 km²** |
+| 2020 | 114.3 km² | 7.72% | +0.12 km² |
+
+The 2012 signal is a real anomaly. **2011's flood is absent from this record**,
+which is the product behaving as documented: an annual Landsat composite cannot
+capture a flood lasting weeks. Every year here is a lower bound on extent.
+
+**Destination candidates (new):** 1,400 records recovered from the OSM points
+layer — 343 shelter tags, 296 health care, 296 education, 58 emergency service,
+312 community facilities, 95 commerce. **Zero are verified.** A shelter tag is
+someone's mapping decision, not an operator, a capacity or an inspection.
+
+**This run has no flood *depth* layer and no evacuation outcomes.** That is a decision
 on the record, not an omission: the only reachable open terrain source carries
 roughly 5–10 m of vertical error across a floodplain whose flood-relevant
 elevation range is 0–2 m, so a stage-based depth surface would be a noise field

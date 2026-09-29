@@ -29,7 +29,7 @@ from . import city_network as city_network_module
 from . import manifest as manifest_module
 from . import population as population_module
 from . import validate as validate_module
-from .sources import city_osm
+from .sources import city_osm, destinations as destinations_source, gsw
 from .util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
@@ -189,6 +189,45 @@ def execute_city_run(
     record("water", time.time() - stage_start, rows=len(water),
            note=f"{water_length_km:.0f} km mapped waterway length")
 
+    # ---- observed surface water (the only observational hazard layer) ----
+    stage_start = time.time()
+    observed = _observed_extent(analysis_crs, aoi_frame, aoi_id)
+    write_json(run_dir / "observed_water.json", observed)
+    context_warning = (
+        f"Observed surface water from JRC Global Surface Water (Landsat) is available for "
+        f"{len(observed['years'])} years: " + ", ".join(
+            f"{entry['year']} {entry['aoi_water_share']:.1%}" for entry in observed["years"]
+        ) + ". It is EXTENT, not depth, and the annual composite does not capture the "
+        "2011 flood."
+    )
+    warnings.append(context_warning)
+    anomaly = max(observed["years"], key=lambda entry: entry["aoi_water_km2"])
+    record(
+        "observed_water",
+        time.time() - stage_start,
+        rows=len(observed["years"]),
+        note=f"JRC GSW yearly classification; wettest year {anomaly['year']} at "
+             f"{anomaly['aoi_water_km2']:.1f} km2",
+    )
+
+    # ---- destination candidates ------------------------------------------
+    stage_start = time.time()
+    destination_record = destinations_source.extract_destinations()
+    warnings.append(
+        f"{destination_record['rows']:,} destination candidates are extracted from OSM "
+        f"tags, including {destination_record['shelter_candidates']} tagged shelters. "
+        "Every one is UNVERIFIED: no operator, no capacity, no inspection date. None may be "
+        "presented as a refuge."
+    )
+    record(
+        "destinations",
+        time.time() - stage_start,
+        rows=int(destination_record["rows"]),
+        note="0 verified; " + ", ".join(
+            f"{key}={value}" for key, value in list(destination_record["by_class"].items())[:4]
+        ),
+    )
+
     # ---- population ------------------------------------------------------
     stage_start = time.time()
     cells = gpd.read_parquet(CURATED_DIR / "city" / "population" / "population_cells.parquet")
@@ -284,11 +323,32 @@ def execute_city_run(
     )
     report.add(
         validate_module.Check(
-            "flood.not_derived_is_declared",
+            "flood.depth_absence_is_declared",
             "flood depth is absent and the absence is declared with a reason",
             True,
-            "flood fields null with an explicit reason",
+            "depth fields null with an explicit reason",
             FLOOD_NOT_COMPUTED,
+        )
+    )
+    report.add(
+        validate_module.Check(
+            "flood.observed_extent_is_observation",
+            "an observed, non-scenario hazard layer is present and labelled as such",
+            observed.get("status") == "ok"
+            and observed.get("is_observation") is True
+            and len(observed.get("years", [])) > 0,
+            "status ok, is_observation true, at least one year measured",
+            f"{observed.get('status')}, {len(observed.get('years', []))} years",
+        )
+    )
+    report.add(
+        validate_module.Check(
+            "destinations.none_verified_without_inventory",
+            "no OSM tag candidate is presented as a verified refuge",
+            int(destination_record["verified_count"]) == 0,
+            "0 verified destinations without a refuge inventory",
+            f"{destination_record['verified_count']} verified of "
+            f"{destination_record['rows']} candidates",
         )
     )
     write_json(run_dir / "validation.json", report.as_dict())
@@ -378,9 +438,14 @@ def execute_city_run(
             "model_version": "0.0.0",
             "time_step_seconds": 300,
             "parameters": {
-                "status": FLOOD_NOT_COMPUTED,
-                "reason": FLOOD_REASON,
+                "depth_status": FLOOD_NOT_COMPUTED,
+                "depth_reason": FLOOD_REASON,
                 "reference": "docs/CITY_SCALE_LIMITATIONS.md",
+                "observed_extent_source_id": observed.get("source_id"),
+                "observed_extent_years": [
+                    entry["year"] for entry in observed.get("years", [])
+                ],
+                "observed_extent_is_observation": True,
             },
         },
         evacuation_scenario_entry={
@@ -400,6 +465,8 @@ def execute_city_run(
             manifest_module.output_entry("buildings", buildings_path, row_count=len(building_table), crs=analysis_crs),
             manifest_module.output_entry("persons", persons_path, row_count=len(persons)),
             manifest_module.output_entry("population_grid_1km", run_dir / "population_grid_1km.parquet", row_count=len(grid)),
+            manifest_module.output_entry("destinations", Path(destination_record["path"]), row_count=int(destination_record["rows"])),
+            manifest_module.output_entry("observed_water", run_dir / "observed_water.json", row_count=len(observed.get("years", []))),
         ],
         warnings=warnings,
         validation_status="demonstration",
@@ -445,16 +512,42 @@ def execute_city_run(
         },
         "water": {"features": int(len(water)), "waterway_length_km": round(water_length_km, 2)},
         "flood": {
-            "status": FLOOD_NOT_COMPUTED,
-            "reason": FLOOD_REASON,
+            # Depth and closure remain uncomputable; observed extent is real.
+            "depth_status": FLOOD_NOT_COMPUTED,
+            "depth_reason": FLOOD_REASON,
             "max_depth_m": None,
             "flooded_area_km2": None,
             "edges_closed": None,
-            "source_role": None,
+            "depth_source_role": None,
+            "observed_extent": {
+                "status": observed.get("status"),
+                "source_id": observed.get("source_id"),
+                "is_observation": True,
+                "measures": "water extent, NOT depth, duration or direction",
+                "licence": observed.get("licence"),
+                "years": [
+                    {
+                        "year": entry["year"],
+                        "water_km2": entry["aoi_water_km2"],
+                        "water_share": entry["aoi_water_share"],
+                        "classified_km2": entry["aoi_area_km2"],
+                        "excess_km2_vs_baseline": entry["excess_km2_vs_baseline"],
+                    }
+                    for entry in observed.get("years", [])
+                ],
+                "note": observed.get("note"),
+            },
+        },
+        "destinations": {
+            "candidates": int(destination_record["rows"]),
+            "verified": int(destination_record["verified_count"]),
+            "shelter_tag_candidates": int(destination_record["shelter_candidates"]),
+            "by_class": destination_record["by_class"],
+            "note": destination_record["note"],
         },
         "evacuation": {
             "status": "not_computed",
-            "reason": "requires a flood layer; see flood.reason",
+            "reason": "requires a depth surface; see flood.depth_reason",
             "cohort_weighted": None,
             "arrived_weighted": None,
             "unserved_weighted": None,
@@ -500,3 +593,41 @@ def execute_city_run(
         "elapsed_seconds": stats["elapsed_seconds"],
         "stats": stats,
     }
+
+OBSERVED_YEARS = (2010, 2011, 2012, 2020)
+
+
+def _observed_extent(
+    analysis_crs: str, aoi_frame: gpd.GeoDataFrame, aoi_id: str
+) -> dict[str, Any]:
+    """Fetch the JRC yearly observed surface-water record for the AOI.
+
+    Degrades to a recorded unavailability rather than aborting the run: an
+    observed layer is valuable, but a transient download failure must not cost
+    us the whole city baseline.
+    """
+    from .http import HttpClient
+    from .sources import gsw
+
+    bounds = tuple(float(value) for value in aoi_frame.geometry.union_all().bounds)
+    try:
+        summary = gsw.fetch_years(HttpClient(timeout=900), OBSERVED_YEARS, bounds, aoi_frame)
+    except Exception as error:  # noqa: BLE001 - recorded, not fatal
+        return {
+            "status": "unavailable",
+            "reason": f"JRC Global Surface Water could not be retrieved: {error}"[:300],
+            "source_id": gsw.SOURCE_ID,
+            "is_observation": True,
+            "measures": "water extent, NOT depth",
+            "years": [],
+        }
+    summary["status"] = "ok"
+    summary["aoi_id"] = aoi_id
+    summary["analysis_crs"] = analysis_crs
+    summary["note"] = (
+        "Observed extent is not a depth surface and cannot drive edge closure or "
+        "clearance time. It validates spatial extent and supplies the only "
+        "non-modelled, non-scenario hazard evidence in the project."
+    )
+    return summary
+
