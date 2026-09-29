@@ -1,0 +1,52 @@
+{
+  "scenario_set_version": "bkk-scenario-set-v0.1",
+  "status": "demonstration",
+  "analysis_time_of_day": "evening",
+  "flood": {
+    "scenario_id": "khlong-san-moderate-2011-analogue",
+    "severity": "moderate",
+    "start_time_s": 64800,
+    "peak_time_s": 68400,
+    "end_time_s": 79200,
+    "time_step_s": 300,
+    "cell_size_m": 50,
+    "threshold_set_version": "bkk-demo-thresholds-v0.1",
+    "observed_source_available": false,
+    "notes": [
+      "Timing is a declared scenario window shaped like a monsoon flood event, not a reconstructed hydrograph.",
+      "No rainfall, river-stage or depth measurement passed the project licence gate, so depth is a distance-to-water scenario decay.",
+      "GISTDA open-data host did not resolve from the build environment, so no observed extent layer exists in this run."
+    ]
+  },
+  "evacuation": {
+    "scenario_id": "ordered-evacuation-illustrative",
+    "warning_time_s": 64800,
+    "warning_reach": 0.92,
+    "compliance": 0.78,
+    "preparation_delay_mean_s": 900,
+    "preparation_delay_sd_s": 600,
+    "walk_speed_multiplier": 1.0,
+    "reduced_mobility_share": 0.09,
+    "refuge_capacity": 2000,
+    "destination_count": 3,
+    "notes": [
+      "Destinations are hypothetical model targets, not verified shelters. No refuge inventory exists in this build.",
+      "Warning reach, compliance and preparation delay are uncalibrated priors and must be treated as sensitivity parameters.",
+      "Reduced-mobility agents are assumed to walk at the standard pedestrian speed; no assistance-need routing is implemented."
+    ]
+  },
+  "baseline_comparison": {
+    "enabled": true,
+    "description": "A dry run with the flood scenario disabled, used to isolate the flood effect on clearance time."
+  },
+  "sensitivity": {
+    "flood_severity": ["low", "moderate", "high"],
+    "compliance": [0.6, 0.78, 0.9],
+    "threshold_set_version": ["bkk-demo-thresholds-v0.1"]
+  },
+  "warnings": [
+    "No destination in this run is a verified refuge.",
+    "Clearance times depend on uncalibrated behavioural priors and must not be read as predictions.",
+    "The flood depth surface is a scenario, not a hydraulic simulation or an observation."
+  ]
+}

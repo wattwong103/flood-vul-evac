@@ -1,0 +1,796 @@
+"""Run orchestration.
+
+The runner executes the PFLOW stage sequence, writes one immutable artefact
+per stage, records progress, and refuses to publish a run that fails
+validation. Every stage is timed and its row count is reported, because the
+website's stage rail reads those numbers directly.
+
+The run state machine is:
+
+    draft -> validating_inputs -> population -> activities -> trips ->
+    trajectories -> aggregates -> flood -> cohort -> evacuation ->
+    validating_outputs -> published | failed
+"""
+
+from __future__ import annotations
+
+import time
+import traceback
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+
+from . import aoi as aoi_module
+from . import buildings as buildings_module
+from . import evacuation as evacuation_module
+from . import flood as flood_module
+from . import manifest as manifest_module
+from . import mobility as mobility_module
+from . import network as network_module
+from . import population as population_module
+from . import validate as validate_module
+from .sources import population_source
+from .sources.registry import load_registry
+from .util import (
+    CURATED_DIR,
+    REPO_ROOT,
+    RUNS_DIR,
+    ensure_dir,
+    read_json,
+    sha256_file,
+    utc_now_iso,
+    write_json,
+)
+
+CONFIG_DIR = REPO_ROOT / "config"
+
+
+def load_config(name: str) -> dict[str, Any]:
+    return read_json(CONFIG_DIR / name)
+
+
+@dataclass
+class RunContext:
+    run_id: str
+    run_dir: Path
+    pilot: dict[str, Any]
+    population_config: dict[str, Any]
+    scenario_config: dict[str, Any]
+    stages: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    source_versions: list[dict[str, Any]] = field(default_factory=list)
+    outputs: list[dict[str, Any]] = field(default_factory=list)
+    started_at: str = field(default_factory=utc_now_iso)
+
+    def record(self, stage: str, seconds: float, rows: int | None = None, note: str = "") -> None:
+        self.stages.append(
+            {
+                "stage": stage,
+                "status": "completed",
+                "seconds": round(float(seconds), 3),
+                "rows": rows,
+                "note": note,
+                "completed_at": utc_now_iso(),
+            }
+        )
+
+    def warn(self, message: str) -> None:
+        if message not in self.warnings:
+            self.warnings.append(message)
+
+    def write_state(self, state: str, *, error: str | None = None) -> None:
+        payload = {
+            "run_id": self.run_id,
+            "state": state,
+            "started_at": self.started_at,
+            "updated_at": utc_now_iso(),
+            "stage_count": len(self.stages),
+            "stages": self.stages,
+            "warnings": self.warnings,
+            "error": error,
+        }
+        write_json(self.run_dir / "run_state.json", payload)
+
+
+def _write_parquet(context: RunContext, name: str, frame: pd.DataFrame | gpd.GeoDataFrame) -> Path:
+    path = context.run_dir / name
+    if isinstance(frame, gpd.GeoDataFrame):
+        frame.to_parquet(path, index=False)
+    else:
+        frame.to_parquet(path, index=False)
+    return path
+
+
+def register_output(
+    context: RunContext, role: str, path: Path, *, rows: int | None = None, crs: str | None = None
+) -> None:
+    context.outputs.append(
+        manifest_module.output_entry(role, path, row_count=rows, crs=crs)
+    )
+
+
+def execute_run(
+    *,
+    run_id: str | None = None,
+    flood_enabled: bool = True,
+    max_agents: int | None = None,
+) -> dict[str, Any]:
+    """Run the full pipeline once and return the published run summary."""
+    run_id = run_id or str(uuid.uuid4())
+    run_dir = ensure_dir(RUNS_DIR / run_id)
+
+    pilot = load_config("pilot.json")
+    population_config = load_config("population.json")
+    scenario_config = load_config("scenario.json")
+
+    context = RunContext(
+        run_id=run_id,
+        run_dir=run_dir,
+        pilot=pilot,
+        population_config=population_config,
+        scenario_config=scenario_config,
+    )
+    context.write_state("validating_inputs")
+
+    analysis_crs = pilot["analysis_crs"]
+    aoi_id = pilot["aoi"]["aoi_id"]
+    registry = load_registry()
+
+    # ---- licence gate ----------------------------------------------------
+    required_sources = [
+        "worldpop-global2-tha-100m-r2025a",
+        "osm-thailand-geofabrik",
+    ]
+    registry.require_approved(required_sources)
+    stage_start = time.time()
+    context.record("sources", time.time() - stage_start, rows=len(registry), note="licence gate passed")
+
+    # ---- AOI -------------------------------------------------------------
+    aoi_frame = aoi_module.load_aoi(aoi_id)
+    aoi_provenance = read_json(CURATED_DIR / "aoi" / f"{aoi_id}.provenance.json")
+    context.source_versions.append(
+        {
+            "source_id": "osm-thailand-geofabrik",
+            "retrieved_at": aoi_provenance["retrieved_at"],
+            "content_sha256": aoi_provenance["content_sha256"],
+            "licence_snapshot": "ODbL 1.0 (c) OpenStreetMap contributors",
+            "request_parameters": {"role": "aoi_boundary", "osm": f"R{aoi_provenance['osm_id']}"},
+        }
+    )
+
+    # ---- P0/P1 population ------------------------------------------------
+    stage_start = time.time()
+    clip_path = CURATED_DIR / "population" / "population_cells.parquet"
+    cells = gpd.read_parquet(clip_path)
+    total_residents = float(cells["pop_count"].sum())
+    context.record("population_cells", time.time() - stage_start, rows=len(cells))
+
+    population_version = population_config["population_version"]
+    seed = int(population_config["seed"])
+
+    sex_shares = population_config.get("sex_split")
+    demographics = population_module.assign_demographics(
+        cells.assign(pop_scaled=cells["pop_count"].to_numpy()),
+        sex_shares=sex_shares,
+        age_bands=None,  # no age source passed the gate: recorded as unknown
+    )
+    if "unknown" in set(demographics["age_band"]):
+        context.warn("age_band is 'unknown' for every person; no age-structure source passed the licence gate.")
+
+    persons = population_module.make_weighted_persons(
+        cells,
+        demographics,
+        population_version=population_version,
+        seed=seed,
+        mobility_profiles=tuple(population_config["mobility_profiles"]),
+    )
+    for warning in population_config.get("warnings", []):
+        context.warn(warning)
+    persons_path = _write_parquet(context, "persons.parquet", persons)
+    register_output(context, "persons", persons_path, rows=len(persons))
+
+    population_qa = population_module.PopulationQA(
+        population_version=population_version,
+        status="demonstration",
+        total_residents=total_residents,
+        cell_count=int(len(cells)),
+        occupied_cell_count=int((cells["pop_count"] > 0).sum()),
+        sparsity=round(float(1.0 - (cells["pop_count"] > 0).sum() / max(len(cells), 1)), 6),
+        control_error={
+            "status": "unavailable",
+            "reason": "no external administrative control total was ingested in this build",
+        },
+        demographics={
+            "age_bands": {"unknown": 1.0},
+            "sex_split": sex_shares or {"male": 0.5, "female": 0.5},
+            "age_structure_source": "none_passed_licence_gate",
+        },
+        building_allocation={
+            "status": "none",
+            "reason": "OSM building use does not prove residential occupancy; allocation would be an invention",
+        },
+        warnings=list(context.warnings),
+    ).as_dict()
+    write_json(run_dir / "population_qa.json", population_qa)
+    context.record("persons", time.time() - stage_start, rows=len(persons))
+
+    # ---- network ---------------------------------------------------------
+    stage_start = time.time()
+    roads = gpd.read_parquet(CURATED_DIR / "osm" / "roads.parquet")
+    osm_provenance = read_json(CURATED_DIR / "osm" / "provenance.json")
+    network_version = f"osm-khlong-san-{osm_provenance['fetches'][0]['retrieved_at'][:10]}"
+    build = network_module.build_network(
+        roads, analysis_crs=analysis_crs, network_version=network_version, aoi_geometry=aoi_frame
+    )
+    edges = build.edges
+    edges_out = edges.copy()
+    edges_out["geometry_wkt"] = edges_out.geometry.to_wkt()
+    edges_path = _write_parquet(context, "network_edges.parquet", edges_out.drop(columns="geometry"))
+    register_output(context, "network_edges", edges_path, rows=len(edges), crs=analysis_crs)
+    for fetch in osm_provenance["fetches"]:
+        context.source_versions.append(
+            {
+                "source_id": "osm-thailand-geofabrik",
+                "retrieved_at": fetch["retrieved_at"],
+                "content_sha256": fetch["content_sha256"],
+                "licence_snapshot": "ODbL 1.0 (c) OpenStreetMap contributors",
+                "request_parameters": {"layer": "osm_extract", "query_sha256": fetch["query_sha256"]},
+            }
+        )
+    context.record("network", time.time() - stage_start, rows=len(edges), note=json_note(build.stats))
+
+    # ---- buildings -------------------------------------------------------
+    stage_start = time.time()
+    raw_buildings = gpd.read_parquet(CURATED_DIR / "osm" / "buildings.parquet")
+    building_table = buildings_module.build_building_table(
+        raw_buildings,
+        aoi_frame=aoi_frame,
+        analysis_crs=analysis_crs,
+        building_version=f"osm-buildings-{osm_provenance['fetches'][1]['retrieved_at'][:10]}",
+    )
+    coverage = buildings_module.height_coverage(building_table)
+    if coverage.get("coverage_share", 0) < 0.5:
+        context.warn(
+            f"building height coverage is {coverage.get('coverage_share', 0):.1%}; "
+            "most footprints have no height evidence and are marked unknown rather than defaulted."
+        )
+    candidate_count = int(building_table["osm_shelter_tag"].sum())
+    if candidate_count:
+        context.warn(
+            f"{candidate_count} OSM amenity=shelter tags exist in the AOI. They are unverified "
+            "candidates and are never presented as refuges."
+        )
+    context.record("buildings", time.time() - stage_start, rows=len(building_table), note=json_note(coverage))
+
+    # ---- P2/P3/P4 mobility ---------------------------------------------
+    stage_start = time.time()
+    limit = max_agents or int(population_config["mobility_sample"]["max_agents"])
+    sample = population_module.sample_representative_agents(persons, max_agents=limit, seed=seed)
+    cells_projected = cells.to_crs(analysis_crs)
+    cell_centroids = cells_projected.geometry.centroid
+    homes_xy = {
+        cell_id: (float(point.x), float(point.y))
+        for cell_id, point in zip(cells_projected["cell_id"], cell_centroids)
+    }
+    destinations_candidates = building_table[
+        building_table["use_class"].astype(str).isin(
+            ["commercial", "retail", "office", "school", "university", "hotel", "apartments", "yes", "house"]
+        )
+    ]
+
+    activities = mobility_module.generate_activities(
+        sample,
+        candidates=destinations_candidates,
+        analysis_crs=analysis_crs,
+        homes_xy=homes_xy,
+        seed=seed,
+    )
+    activities_path = _write_parquet(context, "activities.parquet", activities)
+    register_output(context, "activities", activities_path, rows=len(activities))
+    context.record("activities", time.time() - stage_start, rows=len(activities),
+                   note=f"source_status=scenario_prior; {len(sample)} sampled agents")
+
+    stage_start = time.time()
+    trips = mobility_module.generate_trips(
+        activities,
+        seed=seed,
+        mobility_profiles=sample.set_index("person_id")["mobility_profile"],
+    )
+    trips_path = _write_parquet(context, "trips.parquet", trips)
+    register_output(context, "trips", trips_path, rows=len(trips))
+    context.record("trips", time.time() - stage_start, rows=len(trips))
+
+    stage_start = time.time()
+    walk_graph = mobility_module.build_routing_graph(edges, mobility_module.MODE_WALK)
+    car_graph = mobility_module.build_routing_graph(edges, mobility_module.MODE_CAR)
+    indices = {
+        mobility_module.MODE_WALK: mobility_module.NetworkIndex(walk_graph, analysis_crs),
+        mobility_module.MODE_CAR: mobility_module.NetworkIndex(car_graph, analysis_crs),
+    }
+    trips, waypoints = mobility_module.route_trips(trips, indices)
+    trips_path = _write_parquet(context, "trips.parquet", trips)
+    register_output(context, "trips", trips_path, rows=len(trips))
+    waypoints_path = _write_parquet(context, "waypoints.parquet", waypoints)
+    register_output(context, "waypoints", waypoints_path, rows=len(waypoints))
+    routed = int((trips["route_status"] == "routed").sum())
+    context.record("trajectories", time.time() - stage_start, rows=len(waypoints),
+                   note=f"{routed}/{len(trips)} trips routed; no straight-line fallback")
+
+    # ---- P5 aggregates ---------------------------------------------------
+    stage_start = time.time()
+    mesh_volume = mobility_module.aggregate_mesh_volume(
+        activities, trips, analysis_crs=analysis_crs, mesh_size_m=500, time_step_s=600
+    )
+    mesh_path = _write_parquet(context, "mesh_volume.parquet", mesh_volume)
+    register_output(context, "mesh_volume", mesh_path, rows=len(mesh_volume))
+    link_volume = mobility_module.aggregate_link_volume(waypoints)
+    link_path = _write_parquet(context, "link_volume.parquet", link_volume)
+    register_output(context, "link_volume", link_path, rows=len(link_volume))
+    context.record("aggregates", time.time() - stage_start, rows=len(mesh_volume) + len(link_volume))
+
+    return _finish_run(
+        context=context,
+        aoi_frame=aoi_frame,
+        aoi_provenance=aoi_provenance,
+        persons=persons,
+        sample=sample,
+        activities=activities,
+        trips=trips,
+        waypoints=waypoints,
+        mesh_volume=mesh_volume,
+        link_volume=link_volume,
+        edges=edges,
+        building_table=building_table,
+        indices=indices,
+        flood_enabled=flood_enabled,
+        total_residents=total_residents,
+        routed_trips=routed,
+    )
+
+
+def json_note(payload: dict[str, Any]) -> str:
+    return ", ".join(f"{key}={value}" for key, value in list(payload.items())[:4])
+
+
+def _finish_run(
+    *,
+    context: RunContext,
+    aoi_frame: gpd.GeoDataFrame,
+    aoi_provenance: dict[str, Any],
+    persons: pd.DataFrame,
+    sample: pd.DataFrame,
+    activities: pd.DataFrame,
+    trips: pd.DataFrame,
+    waypoints: pd.DataFrame,
+    mesh_volume: pd.DataFrame,
+    link_volume: pd.DataFrame,
+    edges: gpd.GeoDataFrame,
+    building_table: gpd.GeoDataFrame,
+    indices: dict[int, mobility_module.NetworkIndex],
+    flood_enabled: bool,
+    total_residents: float,
+    routed_trips: int,
+) -> dict[str, Any]:
+    """Flood, cohort, evacuation, validation and publication."""
+    analysis_crs = context.pilot["analysis_crs"]
+    scenario_config = context.scenario_config
+    population_config = context.population_config
+    seed = int(population_config["seed"])
+
+    # ---- F1/F2 flood -----------------------------------------------------
+    stage_start = time.time()
+    water = gpd.read_parquet(CURATED_DIR / "osm" / "water.parquet")
+    flood_config = scenario_config["flood"]
+    scenario = flood_module.FloodScenario(
+        scenario_id=flood_config["scenario_id"],
+        severity=flood_config["severity"] if flood_enabled else "low",
+        start_time_s=flood_config["start_time_s"],
+        peak_time_s=flood_config["peak_time_s"],
+        end_time_s=flood_config["end_time_s"],
+        time_step_s=flood_config["time_step_s"],
+        observed_source_available=flood_config["observed_source_available"],
+        notes=list(flood_config["notes"]),
+    )
+    if not flood_enabled:
+        scenario.severity = "low"
+        scenario.peak_depth_m = 0.0
+        context.warn("baseline run: flood disabled, used for dry-versus-flooded comparison")
+    else:
+        context.warn(
+            "No terrain elevation model was ingested, so the depth surface is a "
+            "distance-to-water decay only. Flooding is therefore confined to a "
+            "corridor along canals and the river; low-lying basins away from water "
+            "cannot be represented. This is the plan's drainage-blindness risk and "
+            "is the highest-value next data acquisition."
+        )
+
+    surface = flood_module.build_depth_surface(
+        water,
+        scenario=scenario,
+        analysis_crs=analysis_crs,
+        cell_size_m=flood_config["cell_size_m"],
+        aoi_geometry=aoi_frame,
+    )
+    slices = flood_module.build_flood_slices(surface, scenario=scenario)
+    slices_path = _write_parquet(context, "flood_slices.parquet", slices)
+    register_output(context, "flood_slices", slices_path, rows=len(slices))
+
+    edge_depths = flood_module.sample_edge_depths(edges, surface)
+    edge_states = flood_module.build_edge_states(
+        edges,
+        edge_depths,
+        scenario=scenario,
+        threshold_set_version=flood_config["threshold_set_version"],
+    )
+    edge_states_path = _write_parquet(context, "edge_states.parquet", edge_states)
+    register_output(context, "edge_states", edge_states_path, rows=len(edge_states))
+
+    exposure = flood_module.build_building_exposure(building_table, surface)
+    building_table = building_table.merge(exposure, on="building_id", how="left")
+    building_out = building_table.copy()
+    building_out["geometry_wkt"] = building_out.geometry.to_wkt()
+    buildings_path = _write_parquet(context, "buildings.parquet", building_out.drop(columns="geometry"))
+    register_output(context, "buildings", buildings_path, rows=len(building_table), crs=analysis_crs)
+    context.record("flood", time.time() - stage_start, rows=len(slices),
+                   note=f"source_role=scenario; {len(surface)} depth cells")
+
+    # ---- E1 cohort -------------------------------------------------------
+    stage_start = time.time()
+    from pyproj import Transformer
+
+    to_wgs84 = Transformer.from_crs(analysis_crs, "OGC:CRS84", always_xy=True)
+    to_analysis = Transformer.from_crs("OGC:CRS84", analysis_crs, always_xy=True)
+    people_present = sample.copy()
+    if not activities.empty:
+        at_time = scenario.start_time_s
+        active = activities[
+            (activities["start_time_s"] <= at_time) & (activities["end_time_s"] > at_time)
+        ]
+        present_ids = set(active["person_id"])
+        people_present = sample[sample["person_id"].isin(present_ids)].copy()
+    people_present["x"], people_present["y"] = to_analysis.transform(
+        people_present["lon"].to_numpy(), people_present["lat"].to_numpy()
+    )
+
+    # One KD-tree for the whole cohort rather than one query per person.
+    from scipy.spatial import cKDTree
+
+    depth_tree = cKDTree(np.column_stack([surface["x"].to_numpy(), surface["y"].to_numpy()])) if len(surface) else None
+    surface_depths = surface["peak_depth_m"].to_numpy() if len(surface) else np.array([0.0])
+
+    def depth_at(lon: float, lat: float) -> float:
+        # Persons are stored in WGS84; the surface lives in the analysis CRS.
+        if depth_tree is None:
+            return 0.0
+        px, py = to_analysis.transform(lon, lat)
+        _, index = depth_tree.query([px, py])
+        return float(surface_depths[int(index)])
+
+    # The dry baseline orders the same population as the flooded run; only the
+    # water is removed. Using the flood exposure rule for both would make the
+    # comparison meaningless, because the dry run would have no cohort at all.
+    exposure_threshold = 0.15 if flood_enabled else 0.0
+    cohort, cohort_reconciliation = evacuation_module.select_cohort(
+        people_present,
+        surface_depth_at=depth_at,
+        scenario_time_s=scenario.start_time_s,
+        min_depth_m=exposure_threshold,
+    )
+    cohort_path = _write_parquet(context, "cohort.parquet", cohort)
+    register_output(context, "cohort", cohort_path, rows=len(cohort))
+    context.record("cohort", time.time() - stage_start, rows=len(cohort),
+                   note=json_note(cohort_reconciliation))
+
+    # ---- E2 evacuation ---------------------------------------------------
+    stage_start = time.time()
+    evac_config = scenario_config["evacuation"]
+    destinations = evacuation_module.build_hypothetical_destinations(
+        building_table[building_table["footprint_m2"] > 0],
+        analysis_crs=analysis_crs,
+        count=evac_config["destination_count"],
+        capacity=evac_config["refuge_capacity"],
+    )
+    refuges_out = destinations.copy()
+    refuges_out["geometry_wkt"] = refuges_out.geometry.to_wkt()
+    refuges_path = _write_parquet(
+        context, "refuges.parquet", refuges_out.drop(columns="geometry")
+    )
+    register_output(context, "refuges", refuges_path, rows=len(destinations))
+
+    # Build the peak-time walk graph once: ways closed at the peak are not in
+    # the graph at all, so routing cannot traverse them.
+    peak_walk = edge_states[
+        (edge_states["time_s"] == scenario.peak_time_s)
+        & (edge_states["mode"] == mobility_module.MODE_WALK)
+    ]
+    closed_edge_ids = set(peak_walk[peak_walk["closed"]]["edge_id"])
+    evacuation_index = mobility_module.NetworkIndex(
+        mobility_module.build_routing_graph(
+            edges, mobility_module.MODE_WALK, excluded_edge_ids=closed_edge_ids
+        ),
+        analysis_crs,
+    )
+
+    def route_lookup(lon: float, lat: float, dest_x: float, dest_y: float):
+        """Route one person to one destination.
+
+        The person is held in WGS84 (as stored on ``persons``); the destination
+        comes from the building table and is already in the analysis CRS. Only
+        the person needs transforming.
+        """
+        px, py = to_analysis.transform(lon, lat)
+        origin = evacuation_index.snap(px, py)
+        destination = evacuation_index.snap(dest_x, dest_y)
+        if origin is None or destination is None:
+            return None
+        result = evacuation_index.route(origin, destination)
+        if result is None:
+            return None
+        path, cost = result
+        used = [
+            evacuation_index.graph[path[i]][path[i + 1]]["edge_id"]
+            for i in range(len(path) - 1)
+        ]
+        distance = sum(
+            evacuation_index.graph[path[i]][path[i + 1]]["length_m"]
+            for i in range(len(path) - 1)
+        )
+        return float(cost), float(distance), used
+
+    evacuation_scenario = evacuation_module.EvacuationScenario(
+        scenario_id=evac_config["scenario_id"],
+        warning_time_s=evac_config["warning_time_s"],
+        warning_reach=evac_config["warning_reach"],
+        compliance=evac_config["compliance"],
+        preparation_delay_mean_s=evac_config["preparation_delay_mean_s"],
+        preparation_delay_sd_s=evac_config["preparation_delay_sd_s"],
+        walk_speed_multiplier=evac_config["walk_speed_multiplier"],
+        reduced_mobility_share=evac_config["reduced_mobility_share"],
+        refuge_capacity=evac_config["refuge_capacity"],
+        destinations=destinations.drop(columns="geometry").to_dict("records"),
+        notes=list(evac_config["notes"]),
+    )
+    states, outcomes = evacuation_module.simulate_evacuation(
+        cohort, destinations=destinations, route_lookup=route_lookup,
+        scenario=evacuation_scenario, seed=seed,
+    )
+    states_path = _write_parquet(context, "evacuation_states.parquet", states)
+    register_output(context, "evacuation_states", states_path, rows=len(states))
+    conservation = evacuation_module.check_conservation(states, cohort_reconciliation["cohort_weighted"])
+    context.record("evacuation", time.time() - stage_start, rows=len(states),
+                   note=json_note(outcomes.get("clearance_time_minutes", {})))
+
+    # ---- V1 validation ---------------------------------------------------
+    stage_start = time.time()
+    report = validate_module.run_all_checks(
+        persons=persons,
+        sample=sample,
+        activities=activities,
+        trips=trips,
+        waypoints=waypoints,
+        edge_states=edge_states,
+        buildings=building_table,
+        total_residents=total_residents,
+        public_min_cell_m=int(population_config["privacy"]["public_min_cell_metres"]),
+        extra={
+            "evacuation.conservation": validate_module.Check(
+                "evacuation.conservation",
+                "every cohort member lands in exactly one terminal state",
+                conservation["passed"],
+                conservation.get("tolerance", "residual <= tolerance"),
+                conservation.get("residual"),
+            )
+        },
+    )
+    write_json(context.run_dir / "validation.json", report.as_dict())
+    context.record("validate", time.time() - stage_start, rows=report.as_dict()["checks_total"],
+                   note=f"{report.as_dict()['checks_failed']} failed checks")
+
+    # ---- U1 publish ------------------------------------------------------
+    stage_start = time.time()
+    manifest = manifest_module.build_manifest(
+        run_id=context.run_id,
+        geography={
+            "country": "Thailand",
+            "aoi_id": aoi_provenance["aoi_id"],
+            "aoi_version": f"osm-R{aoi_provenance['osm_id']}-{aoi_provenance['retrieved_at'][:10]}",
+            "storage_crs": "OGC:CRS84",
+            "analysis_crs": analysis_crs,
+            "aggregation_geography": "projected_square_grid_100m_internal_1000m_public",
+        },
+        source_versions=_dedupe_sources(context.source_versions),
+        population_model={
+            "population_version": population_config["population_version"],
+            "method": "weighted-persons",
+            "agent_representation": {
+                "weight_field": "weight",
+                "home_spatial_unit": "100m_grid",
+                "households_supported": False,
+                "building_assignment": "none",
+            },
+            "seed": seed,
+            "control_source_ids": [
+                "worldpop-global2-tha-100m-r2025a",
+                "osm-thailand-geofabrik",
+            ],
+            "time_profile": {
+                "status": "illustrative",
+                "activity_model_version": "pflow-bkk-activity-scenario-v0.1",
+                "external_trip_policy": "boundary_flows_not_modelled",
+            },
+            "privacy": {
+                "public_min_cell_metres": int(population_config["privacy"]["public_min_cell_metres"]),
+                "minimum_reported_count": int(population_config["privacy"]["minimum_reported_count"]),
+                "real_trajectories_present": False,
+            },
+        },
+        pflow_components={
+            "person_generator": manifest_module.component(
+                "bkk-weighted-persons", "0.1.0",
+                {
+                    "population_version": population_config["population_version"],
+                    "seed": seed,
+                    "weighted_person_records": int(len(persons)),
+                },
+            ),
+            "activity_generator": manifest_module.component(
+                "bkk-scenario-activity-chain", "0.1.0",
+                {"status": "scenario_prior_uncalibrated", "sampled_agents": int(len(sample))},
+            ),
+            "trip_generator": manifest_module.component(
+                "bkk-adjacent-activity-trips", "0.1.0",
+                {"routed": int(routed_trips), "total": int(len(trips))},
+            ),
+            "trajectory_generator": manifest_module.component(
+                "bkk-astar-osm-graph", "0.1.0",
+                {"algorithm": "astar", "network_version": build_stats_network_version(edges)},
+            ),
+            "aggregation": manifest_module.component(
+                "bkk-mesh-link-aggregate", "0.1.0",
+                {"mesh_size_m": 500, "time_step_s": 600},
+            ),
+        },
+        flood_scenario_entry=scenario.as_manifest_entry("0.1.0"),
+        evacuation_scenario_entry=evacuation_scenario.as_manifest_entry(seed),
+        outputs=context.outputs,
+        warnings=context.warnings,
+        validation_status="demonstration",
+    )
+    schema_problems = manifest_module.validate_manifest(manifest)
+    if schema_problems:
+        manifest["warnings"].append(f"manifest schema problems: {len(schema_problems)}")
+    write_json(context.run_dir / "manifest.json", manifest)
+
+    stats = _build_stats(
+        context=context,
+        manifest=manifest,
+        cohort_reconciliation=cohort_reconciliation,
+        outcomes=outcomes,
+        edge_states=edge_states,
+        scenario=scenario,
+        surface=surface,
+        building_table=building_table,
+        report=report,
+    )
+    write_json(context.run_dir / "stats.json", stats)
+    context.record("publish", time.time() - stage_start, rows=len(context.outputs))
+
+    context.write_state("published" if report.passed else "failed_validation")
+    return {
+        "run_id": context.run_id,
+        "run_dir": str(context.run_dir),
+        "validation_status": "demonstration",
+        "validation_passed": report.passed,
+        "checks": report.as_dict()["checks_total"],
+        "checks_failed": report.as_dict()["checks_failed"],
+        "warnings": len(context.warnings),
+        "stats": stats,
+    }
+
+
+def build_stats_network_version(edges: gpd.GeoDataFrame) -> str:
+    if "network_version" in edges.columns and len(edges):
+        return str(edges["network_version"].iloc[0])
+    return "unknown"
+
+
+def _dedupe_sources(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        key = f"{entry['source_id']}:{entry['content_sha256']}"
+        seen.setdefault(key, entry)
+    return list(seen.values())
+
+
+def _build_stats(
+    *,
+    context: RunContext,
+    manifest: dict[str, Any],
+    cohort_reconciliation: dict[str, Any],
+    outcomes: dict[str, Any],
+    edge_states: pd.DataFrame,
+    scenario: flood_module.FloodScenario,
+    surface: gpd.GeoDataFrame,
+    building_table: gpd.GeoDataFrame,
+    report: validate_module.ValidationReport,
+) -> dict[str, Any]:
+    """Assemble the API-facing statistics payload from the contract."""
+    persons = pd.read_parquet(context.run_dir / "persons.parquet")
+    peak_states = edge_states[
+        (edge_states["time_s"] == scenario.peak_time_s) & (edge_states["mode"] == mobility_module.MODE_WALK)
+    ]
+    total_edges = int(edge_states["edge_id"].nunique())
+    closed_edges = int(peak_states[peak_states["closed"]]["edge_id"].nunique())
+    average_factor = float(peak_states["speed_multiplier"].mean()) if not peak_states.empty else 1.0
+    flooded_buildings = int(building_table["flooded"].sum()) if "flooded" in building_table else 0
+
+    flooded_cells = surface[surface["peak_depth_m"] >= 0.15] if len(surface) else surface
+    cell_area = float(context.scenario_config["flood"]["cell_size_m"]) ** 2
+    return {
+        "run_id": context.run_id,
+        "validation_status": manifest["validation_status"],
+        "created_at": manifest["created_at"],
+        "geography": {
+            "aoi_id": manifest["geography"]["aoi_id"],
+            "name": context.pilot["aoi"]["name_en"],
+            "area_km2": context.pilot["aoi"]["area_km2"],
+            "analysis_crs": manifest["geography"]["analysis_crs"],
+        },
+        "population": {
+            "residents_weighted": round(float(persons["weight"].sum()), 2),
+            "people_present": cohort_reconciliation["present_weighted"],
+            "people_exposed": cohort_reconciliation["exposed_weighted"],
+            "exposed_share_of_present": round(
+                cohort_reconciliation["exposed_weighted"]
+                / max(cohort_reconciliation["present_weighted"], 1e-9),
+                6,
+            ),
+            "population_version": manifest["population_model"]["population_version"],
+            "time_profile": context.scenario_config.get("analysis_time_of_day", "evening"),
+        },
+        "flood": {
+            "max_depth_m": round(float(surface["peak_depth_m"].max()) if len(surface) else 0.0, 4),
+            "flooded_area_km2": round(
+                float(len(flooded_cells) * cell_area / 1e6), 4
+            ),
+            "flooded_area_basis": "50 m scenario cells at or above 0.15 m peak depth",
+            "edges_closed": closed_edges,
+            "edges_total": total_edges,
+            "road_capacity_loss_share": round(1.0 - average_factor, 6),
+            "flooded_buildings": flooded_buildings,
+            "source_role": "scenario",
+            "model": {
+                "name": manifest["flood_scenario"]["model_name"],
+                "version": manifest["flood_scenario"]["model_version"],
+            },
+        },
+        "evacuation": {
+            "cohort_weighted": outcomes["cohort_weighted"],
+            "arrived_weighted": outcomes["arrived_weighted"],
+            "unserved_weighted": outcomes["unserved_weighted"],
+            "clearance_time_minutes": outcomes["clearance_time_minutes"],
+            "state_distribution": outcomes["state_distribution"],
+            "top_bottleneck_edges": outcomes["top_bottleneck_edges"],
+            "destinations": outcomes["destinations"],
+        },
+        "stages": context.stages,
+        "validation": {
+            "passed": report.passed,
+            "checks_total": report.as_dict()["checks_total"],
+            "checks_failed": report.as_dict()["checks_failed"],
+        },
+        "warnings": context.warnings,
+        "sources": [
+            {
+                "source_id": entry["source_id"],
+                "licence": "ODbL 1.0" if entry["source_id"].startswith("osm") else "CC BY 4.0",
+                "status": "approved",
+            }
+            for entry in manifest["source_versions"]
+        ],
+    }
