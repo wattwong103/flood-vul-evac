@@ -9,6 +9,9 @@ Reviewed 2026-09-29.
 - Geofabrik GmbH and OpenStreetMap contributors. *Thailand OpenStreetMap extract*. ODbL 1.0. https://download.geofabrik.de/asia/thailand.html
 - Google Research. *Open Buildings 2.5D Temporal Dataset*. CC BY 4.0 or ODbL 1.0. https://sites.research.google/gr/open-buildings/temporal/
 - GISTDA. *Flood extent, previous 1 day*. Open Data Common; API-key registration required. https://opendata.gistda.or.th/en/dataset/disasters-03
+- National Housing Authority / Department of Provincial Administration. *Population and houses by subdistrict, 2025 (2568).* Open Data Common. https://data.go.th/en/dataset/popu2568
+- National Statistical Office / Department of Provincial Administration. *Registered population by district and sex, 2021–2025.* Creative Commons Attribution. https://data.go.th/dataset/0405_01_0005
+- WorldPop. *Thailand age and sex structures, 2026, R2025A v1, 100 m.* CC BY 4.0. https://hub.worldpop.org/geodata/summary?id=83424
 - WorldPop. *Population Counts, Global2 R2025A*. CC BY 4.0. https://hub.worldpop.org/project/categories?id=3
 
 ## Methods and software

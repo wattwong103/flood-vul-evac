@@ -1,5 +1,5 @@
 {
-  "registry_version": "2026-09-29.1",
+  "registry_version": "2026-09-29.2",
   "country": "Thailand",
   "scope": "Bangkok flood exposure and evacuation research",
   "policy": "A source is approved only when it is publicly accessible and has explicit reuse permission at resource level.",
@@ -78,6 +78,51 @@
       "status": "approved",
       "reviewed_at": "2026-09-29",
       "notes": "A gridded estimate is not a daytime activity population; demographic and activity marginals require separate evidence."
+    },
+    {
+      "source_id": "worldpop-tha-age-sex-2026-r2025a",
+      "agency": "WorldPop",
+      "dataset": "Thailand age and sex structures, 2026, R2025A",
+      "model_role": "Age/sex population marginals and vulnerability strata",
+      "resource_url": "https://hub.worldpop.org/geodata/summary?id=83424",
+      "format": "GeoTIFF",
+      "spatial_resolution": "100 m",
+      "temporal_resolution": "2026 estimate",
+      "authentication": "None stated",
+      "licence": "CC BY 4.0",
+      "status": "approved",
+      "reviewed_at": "2026-09-29",
+      "notes": "Modelled aggregate estimates in age bands and by sex; do not treat cells as individual records or exact household composition. DOI: 10.5258/SOTON/WP00841."
+    },
+    {
+      "source_id": "dopa-nha-subdistrict-population-houses-2568",
+      "agency": "Department of Provincial Administration / National Housing Authority",
+      "dataset": "Population and houses by subdistrict, 2025 (2568)",
+      "model_role": "Population, sex and house control totals for reconciliation",
+      "resource_url": "https://data.go.th/en/dataset/popu2568",
+      "format": "CSV",
+      "spatial_resolution": "Subdistrict",
+      "temporal_resolution": "2025",
+      "authentication": "None stated",
+      "licence": "Open Data Common",
+      "status": "approved",
+      "reviewed_at": "2026-09-29",
+      "notes": "Aggregate administrative controls. Record the downloaded resource URL, reporting date, geography crosswalk and checksum in each population build."
+    },
+    {
+      "source_id": "nso-dopa-population-district-sex-2564-2568",
+      "agency": "National Statistical Office / Department of Provincial Administration",
+      "dataset": "Registered population by area, sex and district, 2021–2025",
+      "model_role": "Population trend check and held-out district validation",
+      "resource_url": "https://data.go.th/en/dataset/0405_01_0005",
+      "format": "CSV / data.go.th API",
+      "spatial_resolution": "District",
+      "temporal_resolution": "Annual, 2021–2025",
+      "authentication": "None stated",
+      "licence": "Creative Commons Attribution",
+      "status": "approved",
+      "reviewed_at": "2026-09-29",
+      "notes": "Registered-population controls are not a daytime activity population. Preserve source-year and sex-category definitions."
     },
     {
       "source_id": "bma-flood-risk-watch-2023",

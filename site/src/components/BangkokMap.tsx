@@ -1,10 +1,12 @@
-import { Building2, Layers3, Minus, Navigation, Plus } from 'lucide-react'
+import { Building2, Layers3, Minus, Navigation, Plus, Users } from 'lucide-react'
 
-type LayerState = { flood: boolean; buildings: boolean; routes: boolean }
+type LayerState = { population: boolean; flood: boolean; buildings: boolean; routes: boolean }
 type BangkokMapProps = {
   severity: number
   time: number
   isRunning: boolean
+  populationPeriod: 'day' | 'evening' | 'night'
+  populationFactor: number
   layers: LayerState
   onLayerChange: (layer: keyof LayerState) => void
 }
@@ -40,6 +42,13 @@ const minorRoads = [
   'M471 112 L400 582', 'M606 126 L535 570', 'M718 178 L627 555', 'M193 287 L690 319', 'M213 382 L700 407',
 ]
 
+const populationCells = [
+  { x: 285, y: 184, v: .54 }, { x: 365, y: 176, v: .76 }, { x: 454, y: 184, v: .91 }, { x: 552, y: 177, v: .72 }, { x: 646, y: 188, v: .49 },
+  { x: 254, y: 292, v: .68 }, { x: 349, y: 286, v: 1 }, { x: 448, y: 292, v: .84 }, { x: 551, y: 286, v: .94 }, { x: 654, y: 297, v: .62 },
+  { x: 251, y: 399, v: .73 }, { x: 354, y: 398, v: .92 }, { x: 455, y: 397, v: .79 }, { x: 558, y: 395, v: .69 }, { x: 652, y: 405, v: .53 },
+  { x: 285, y: 498, v: .46 }, { x: 385, y: 496, v: .67 }, { x: 492, y: 501, v: .58 }, { x: 592, y: 500, v: .44 },
+]
+
 function ExtrudedBuilding({ x, y, w, h, z, risk, severity }: (typeof buildings)[number] & { severity: number }) {
   const lift = Math.max(8, z * 0.52)
   const threatened = risk === 1 && severity > 0.48
@@ -54,14 +63,16 @@ function ExtrudedBuilding({ x, y, w, h, z, risk, severity }: (typeof buildings)[
   )
 }
 
-export function BangkokMap({ severity, time, isRunning, layers, onLayerChange }: BangkokMapProps) {
+export function BangkokMap({ severity, time, isRunning, populationPeriod, populationFactor, layers, onLayerChange }: BangkokMapProps) {
   const depth = Math.round(12 + severity * 88)
   const floodScale = 0.9 + severity * 0.18
+  const currentStage = time < 18 ? 0 : time < 42 ? 1 : time < 68 ? 2 : time < 92 ? 3 : 4
+  const stageLabels = ['People', 'Activities', 'Trips', 'Trajectories', 'Flood + evacuation']
   return (
     <div className="map-shell">
       <svg className="city-map" viewBox="0 0 860 650" role="img" aria-labelledby="map-title map-desc">
         <title id="map-title">Illustrative Bangkok flood and evacuation scenario</title>
-        <desc id="map-desc">A stylised map showing the Chao Phraya River, flood extent, building heights, roads and animated evacuation agents.</desc>
+        <desc id="map-desc">A stylised map showing synthetic time-of-day population, the Chao Phraya River, flood extent, building heights, roads and animated evacuation agents.</desc>
         <defs>
           <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#98aaa7" strokeWidth=".65" opacity=".34" /></pattern>
           <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="3" stdDeviation="4" floodColor="#163039" floodOpacity=".18" /></filter>
@@ -72,6 +83,9 @@ export function BangkokMap({ severity, time, isRunning, layers, onLayerChange }:
           <path d="M102 154L318 88 403 192 286 310 94 280Z" /><path d="M403 192L600 86 791 179 710 323 503 296Z" />
           <path d="M94 280L286 310 314 512 129 578 52 425Z" /><path d="M286 310L503 296 710 323 768 528 559 598 314 512Z" />
         </g>
+        {layers.population && <g className={`population-layer ${populationPeriod}`} aria-label={`${populationPeriod} synthetic population density`}>
+          {populationCells.map((cell, index) => <g key={index}><circle cx={cell.x} cy={cell.y} r={20 + cell.v * 26 * populationFactor} fill="#eda651" opacity={.045 + cell.v * .09 * populationFactor} /><circle cx={cell.x} cy={cell.y} r={5 + cell.v * 10 * populationFactor} fill="#c85e43" opacity={.12 + cell.v * .13 * populationFactor} /></g>)}
+        </g>}
         {minorRoads.map((road) => <g key={road}><path d={road} fill="none" stroke="#f6f3e9" strokeWidth="9" /><path d={road} fill="none" stroke="#788b88" strokeWidth="1.2" strokeDasharray="3 6" opacity=".7" /></g>)}
         <g className="major-roads" fill="none" strokeLinecap="round">
           <path d="M117 488 C275 415 371 367 502 250 C596 165 700 120 805 96" stroke="#fbf8ef" strokeWidth="16" /><path d="M117 488 C275 415 371 367 502 250 C596 165 700 120 805 96" stroke="#d3a14c" strokeWidth="2.6" />
@@ -97,14 +111,16 @@ export function BangkokMap({ severity, time, isRunning, layers, onLayerChange }:
         <g transform="translate(226 541)"><circle r="10" fill="#f0a94b" stroke="#fff7dc" strokeWidth="3" /></g>
         <g className="map-labels" fill="#294746"><text x="268" y="178">RATCHATHEWI</text><text x="551" y="162">HUAI KHWANG</text><text x="280" y="554">PATHUM WAN</text><text x="596" y="515">KLONG TOEI</text><text x="76" y="324" transform="rotate(78 76 324)" fill="#f1fbf8">CHAO PHRAYA</text></g>
         <g className="road-labels" fill="#87602f"><text x="485" y="238" transform="rotate(-40 485 238)">Phetchaburi Rd</text><text x="421" y="292" transform="rotate(30 421 292)">Rama IX Rd</text></g>
-        <g transform="translate(670 570)" className="map-key"><rect width="166" height="58" rx="3" fill="#fbf8ef" stroke="#9aaba7" /><rect x="13" y="13" width="10" height="10" fill="#216f83" /><text x="31" y="22">Flood depth</text><path d="M13 41H61" stroke="#127465" strokeWidth="4" strokeDasharray="8 5" /><text x="70" y="45">Safe route</text></g>
+        <g transform="translate(670 552)" className="map-key"><rect width="166" height="76" rx="3" fill="#fbf8ef" stroke="#9aaba7" /><circle cx="18" cy="16" r="7" fill="#d87849" opacity=".55" /><text x="31" y="20">Synthetic presence</text><rect x="13" y="32" width="10" height="10" fill="#216f83" /><text x="31" y="41">Flood depth</text><path d="M13 59H61" stroke="#127465" strokeWidth="4" strokeDasharray="8 5" /><text x="70" y="63">Safe route</text></g>
       </svg>
       <div className="map-caption"><span>MODELLED DEPTH</span><strong>{depth} cm</strong><small>at selected road</small></div>
       <div className="layer-control" aria-label="Map layers">
+        <button className={layers.population ? 'active' : ''} onClick={() => onLayerChange('population')} aria-pressed={layers.population}><Users size={15} />Population</button>
         <button className={layers.flood ? 'active' : ''} onClick={() => onLayerChange('flood')} aria-pressed={layers.flood}><span className="water-dot" />Flood</button>
         <button className={layers.buildings ? 'active' : ''} onClick={() => onLayerChange('buildings')} aria-pressed={layers.buildings}><Building2 size={15} />Height</button>
         <button className={layers.routes ? 'active' : ''} onClick={() => onLayerChange('routes')} aria-pressed={layers.routes}><Navigation size={15} />Routes</button>
       </div>
+      <div className="pflow-stage-rail" aria-label="PFLOW simulation stages"><span>PFLOW / BKK</span>{stageLabels.map((label, index) => <div className={index < currentStage ? 'done' : index === currentStage ? 'current' : ''} key={label}><i>{index < currentStage ? '✓' : index + 1}</i><b>{label}</b></div>)}</div>
       <div className="map-tools" aria-hidden="true"><button tabIndex={-1}><Plus size={17} /></button><button tabIndex={-1}><Minus size={17} /></button><button tabIndex={-1}><Layers3 size={17} /></button></div>
     </div>
   )

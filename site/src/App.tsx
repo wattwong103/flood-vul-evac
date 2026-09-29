@@ -7,8 +7,14 @@ import { BangkokMap } from './components/BangkokMap'
 import { dataSources, scenarios, type SourceStatus } from './data'
 import './App.css'
 
-type View = 'scenario' | 'data' | 'method'
-type Layer = 'flood' | 'buildings' | 'routes'
+type View = 'scenario' | 'population' | 'data' | 'method'
+type Layer = 'population' | 'flood' | 'buildings' | 'routes'
+type PopulationPeriod = 'day' | 'evening' | 'night'
+const populationPeriods: Record<PopulationPeriod, { label: string; time: string; factor: number; note: string }> = {
+  day: { label: 'Day', time: '12:00', factor: 1.42, note: 'work + school attraction' },
+  evening: { label: 'Evening', time: '18:00', factor: 1, note: 'commute + return trips' },
+  night: { label: 'Night', time: '02:00', factor: 0.78, note: 'resident-weighted presence' },
+}
 const statusCopy: Record<SourceStatus, { label: string; description: string }> = {
   approved: { label: 'Approved', description: 'Accessible and explicitly reusable' },
   verify: { label: 'Verify', description: 'Public, but the licence needs confirmation' },
@@ -16,9 +22,10 @@ const statusCopy: Record<SourceStatus, { label: string; description: string }> =
 }
 const formatPeople = (value: number) => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
 
-function ScenarioPanel({ rainfall, river, tide, onRainfall, onRiver, onTide, onPreset, isRunning, onRun, onReset }: {
+function ScenarioPanel({ rainfall, river, tide, populationPeriod, onRainfall, onRiver, onTide, onPopulationPeriod, onPreset, isRunning, onRun, onReset }: {
   rainfall: number; river: number; tide: string
-  onRainfall: (value: number) => void; onRiver: (value: number) => void; onTide: (value: string) => void
+  populationPeriod: PopulationPeriod
+  onRainfall: (value: number) => void; onRiver: (value: number) => void; onTide: (value: string) => void; onPopulationPeriod: (value: PopulationPeriod) => void
   onPreset: (name: keyof typeof scenarios) => void; isRunning: boolean; onRun: () => void; onReset: () => void
 }) {
   return (
@@ -43,6 +50,11 @@ function ScenarioPanel({ rainfall, river, tide, onRainfall, onRiver, onTide, onP
         <legend>Tide condition</legend>
         <div>{['Normal', 'Rising', 'High'].map((option) => <button key={option} className={tide === option ? 'selected' : ''} onClick={() => onTide(option)} type="button">{tide === option && <Check size={14} />} {option}</button>)}</div>
       </fieldset>
+      <fieldset className="population-control">
+        <legend>PFLOW population clock</legend>
+        <div>{(Object.keys(populationPeriods) as PopulationPeriod[]).map((period) => <button key={period} className={populationPeriod === period ? 'selected' : ''} onClick={() => onPopulationPeriod(period)} type="button"><b>{populationPeriods[period].time}</b><span>{populationPeriods[period].label}</span></button>)}</div>
+        <small>{populationPeriods[populationPeriod].note} · illustrative profile</small>
+      </fieldset>
       <div className="run-row">
         <button className="run-button" onClick={onRun}>{isRunning ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}{isRunning ? 'Pause simulation' : 'Run simulation'}</button>
         <button className="reset-button" onClick={onReset} aria-label="Reset simulation"><RotateCcw size={17} /></button>
@@ -52,18 +64,43 @@ function ScenarioPanel({ rainfall, river, tide, onRainfall, onRiver, onTide, onP
   )
 }
 
-function MetricStrip({ severity, time }: { severity: number; time: number }) {
-  const affected = Math.round(14200 + severity * 92800)
+function MetricStrip({ severity, time, populationFactor }: { severity: number; time: number; populationFactor: number }) {
+  const present = Math.round(82400 * populationFactor)
+  const affected = Math.round((14200 + severity * 46800) * populationFactor)
   const roadLoss = Math.round(8 + severity * 53)
   const clearance = Math.round(54 + severity * 47)
   const completion = Math.min(100, Math.round((time / clearance) * 100))
   return (
     <section className="metric-strip" aria-label="Scenario results">
       <div className="time-card"><span><Clock3 size={14} /> SIMULATION TIME</span><strong>{String(Math.floor(time / 60)).padStart(2, '0')}:{String(time % 60).padStart(2, '0')}</strong><div className="timeline"><i style={{ width: `${Math.min(100, time / 1.8)}%` }} /><b style={{ left: `${Math.min(97, time / 1.86)}%` }} /></div><small>18:00 <em>EVACUATION ORDER</em> 21:00</small></div>
-      <div className="metric-card"><span><Users size={15} /> PEOPLE EXPOSED</span><strong>{formatPeople(affected)}</strong><small>illustrative estimate</small></div>
+      <div className="metric-card"><span><Users size={15} /> PEOPLE PRESENT</span><strong>{formatPeople(present)}</strong><small>PFLOW time-of-day · synthetic</small></div>
+      <div className="metric-card"><span><Waves size={15} /> PEOPLE EXPOSED</span><strong>{formatPeople(affected)}</strong><small>subset of people present</small></div>
       <div className="metric-card"><span><Route size={15} /> ROAD CAPACITY LOST</span><strong>{roadLoss}%</strong><small>vs. dry baseline</small></div>
       <div className="metric-card accent"><span><Gauge size={15} /> EVACUATION CLEARANCE</span><strong>{clearance} min</strong><div className="completion"><i style={{ width: `${completion}%` }} /></div><small>{completion}% of agents at safe nodes</small></div>
     </section>
+  )
+}
+
+function PopulationPage() {
+  const profile = [58, 54, 51, 50, 52, 61, 77, 94, 108, 117, 121, 123, 122, 119, 116, 112, 109, 114, 107, 94, 84, 75, 67, 61]
+  const stack = [
+    { n: '01', title: 'Resident baseline', value: '82.4k', text: 'WorldPop 100 m counts reconciled to approved administrative controls.' },
+    { n: '02', title: 'Demographic controls', value: 'age × sex', text: 'Aggregate marginals constrain weights; they are not individual records.' },
+    { n: '03', title: 'Synthetic people', value: 'weighted', text: 'Reproducible non-real agents with home cells and explicit uncertainty.' },
+    { n: '04', title: 'Dynamic PFLOW presence', value: '118.6k', text: 'Activities and trips move people through the pilot area by time of day.' },
+    { n: '05', title: 'Evacuation cohort', value: '31.2k', text: 'Only exposed and scenario-eligible agents enter the evacuation process.' },
+  ]
+  return (
+    <main className="page population-page">
+      <section className="page-intro split-intro"><div><div className="eyebrow"><span>02</span> Population model</div><h1>Five populations.<br />No false precision.</h1></div><div className="method-summary"><p>Resident counts seed the model. PFLOW activities create time-of-day presence. Flood exposure selects an evacuation cohort. These quantities are related, but never interchangeable.</p><span className="synthetic-label"><ShieldCheck size={14} /> Synthetic people, never reconstructed identities</span></div></section>
+      <div className="population-demo-note"><CircleAlert size={14} /> Illustrative pilot values · not Bangkok estimates · pilot area pending</div>
+      <section className="population-stack">{stack.map((item) => <article key={item.n}><span>{item.n}</span><strong>{item.value}</strong><h2>{item.title}</h2><p>{item.text}</p></article>)}</section>
+      <section className="population-dashboard">
+        <article className="profile-card"><div className="card-heading"><div><span className="section-kicker">ILLUSTRATIVE PILOT PROFILE</span><h2>People present across 24 hours</h2></div><b>PFLOW activity state</b></div><div className="profile-chart" aria-label="Illustrative hourly population profile">{profile.map((value, hour) => <i key={hour} style={{ height: `${Math.round(value / 1.3)}%` }}><span>{hour % 6 === 0 ? `${String(hour).padStart(2, '0')}:00` : ''}</span></i>)}</div><p>Numbers are a prototype profile, not measured live occupancy. A research run replaces it with Bangkok-calibrated activity, destination and trip evidence.</p></article>
+        <article className="population-qa"><span className="section-kicker">POPULATION VERSION GATE</span><h2>What must reconcile</h2><ul><li><Check size={15} /> 100 m resident totals → subdistrict controls</li><li><Check size={15} /> age/sex weights → held-out marginals</li><li><Check size={15} /> activities + travellers → people present</li><li><Check size={15} /> exposed + unexposed → people present</li><li><CircleAlert size={15} /> households and vehicle access remain scenarios</li></ul><a href="https://hub.worldpop.org/project/categories?id=3" target="_blank" rel="noreferrer">WorldPop baseline <ExternalLink size={14} /></a></article>
+      </section>
+      <section className="population-principles"><article><h3>Public resolution</h3><p>Start at 1 km for population and mobility reporting. Move to 500 m only after Bangkok validation and disclosure review.</p></article><article><h3>Building allocation</h3><p>Footprints and height can redistribute estimates. Neither proves residential use, occupancy or refuge safety.</p></article><article><h3>Households later</h3><p>Weighted people are the MVP. Household relationships wait for reusable marginals or approved microdata.</p></article></section>
+    </main>
   )
 }
 
@@ -72,7 +109,7 @@ function DataRegistry() {
   const filtered = dataSources.filter((source) => filter === 'all' || source.status === filter)
   return (
     <main className="page registry-page">
-      <section className="page-intro"><div className="eyebrow"><span>02</span> Evidence ledger</div><h1>Every layer earns its place.</h1><p>Open-data purity is a product requirement: public access and explicit reuse permission. If either is missing, the dataset stays out of the operational pipeline.</p></section>
+      <section className="page-intro"><div className="eyebrow"><span>03</span> Evidence ledger</div><h1>Every layer earns its place.</h1><p>Open-data purity is a product requirement: public access and explicit reuse permission. If either is missing, the dataset stays out of the operational pipeline.</p></section>
       <div className="registry-toolbar">
         <div className="registry-filters">{(['all', 'approved', 'verify', 'rejected'] as const).map((status) => <button className={filter === status ? 'active' : ''} key={status} onClick={() => setFilter(status)}>{status === 'all' ? `All sources · ${dataSources.length}` : statusCopy[status].label}</button>)}</div>
         <span className="registry-date">Registry prototype · reviewed 29 Sep 2026</span>
@@ -105,7 +142,7 @@ function MethodPage() {
   ]
   return (
     <main className="page method-page">
-      <section className="page-intro split-intro"><div><div className="eyebrow"><span>03</span> PFLOW → Bangkok method</div><h1>Keep the contract.<br />Rebuild the evidence.</h1></div><div className="method-summary"><p>PFLOW supplies the research spine: people → activities → trips → trajectories → mesh and link volumes. Bangkok gets new open inputs, behavioural calibration, flood intervention and validation.</p><a href="https://github.com/jupedsim/jupedsim" target="_blank" rel="noreferrer">Optional bottleneck-scale pedestrian engine <ExternalLink size={14} /></a></div></section>
+      <section className="page-intro split-intro"><div><div className="eyebrow"><span>04</span> PFLOW → Bangkok method</div><h1>Keep the contract.<br />Rebuild the evidence.</h1></div><div className="method-summary"><p>PFLOW supplies the research spine: people → activities → trips → trajectories → mesh and link volumes. Bangkok gets new open inputs, behavioural calibration, flood intervention and validation.</p><a href="https://github.com/jupedsim/jupedsim" target="_blank" rel="noreferrer">Optional bottleneck-scale pedestrian engine <ExternalLink size={14} /></a></div></section>
       <section className="method-flow">{steps.map(({ number, title, text, icon: Icon }, index) => <article key={title}><div className="method-number">{number}</div><Icon size={30} strokeWidth={1.5} /><h2>{title}</h2><p>{text}</p>{index < steps.length - 1 && <ArrowRight className="method-arrow" size={20} />}</article>)}</section>
       <section className="equation-panel"><div><span>PFLOW CORE</span><p>people + activities → trips + trajectories</p></div><ChevronRight /><div><span>BANGKOK EXTENSION</span><p>flood depth + buildings → constraints</p></div><ChevronRight /><div><span>RESEARCH OUTPUT</span><p>volumes + exposure + clearance</p></div></section>
       <section className="validation-section"><div><span className="section-kicker">WHAT MUST BE TRUE BEFORE LAUNCH</span><h2>Compatibility is not validation.</h2></div><ol><li><b>Population and behaviour.</b> Fit synthetic people, activities, trip rates, purposes, timing and modes to held-out Bangkok evidence.</li><li><b>Flood accuracy.</b> Validate extent against held-out observations and depth against licensed local measurements.</li><li><b>Building height.</b> Compare Open Buildings 2.5D with a representative Bangkok sample; published non-Thailand error is not local accuracy.</li><li><b>Refuge truth.</b> Never infer “safe” from height alone; capacity, access, management and structural suitability require verification.</li></ol></section>
@@ -119,9 +156,10 @@ function App() {
   const [rainfall, setRainfall] = useState(165)
   const [river, setRiver] = useState(1.2)
   const [tide, setTide] = useState('Rising')
+  const [populationPeriod, setPopulationPeriod] = useState<PopulationPeriod>('evening')
   const [time, setTime] = useState(42)
   const [isRunning, setIsRunning] = useState(false)
-  const [layers, setLayers] = useState<Record<Layer, boolean>>({ flood: true, buildings: true, routes: true })
+  const [layers, setLayers] = useState<Record<Layer, boolean>>({ population: true, flood: true, buildings: true, routes: true })
   const severity = useMemo(() => Math.min(1, Math.max(0.12, ((rainfall - 50) / 210) * 0.58 + (river / 2.2) * 0.34 + (tide === 'High' ? 0.16 : tide === 'Rising' ? 0.08 : 0))), [rainfall, river, tide])
 
   useEffect(() => {
@@ -138,11 +176,11 @@ function App() {
     <div className="app">
       <header className="topbar">
         <button className="brand" onClick={() => selectView('scenario')} aria-label="Bangkok Flow home"><span className="brand-mark"><i /><i /><i /></span><strong>BKK<span>/</span>FLOW</strong><small>OPEN FLOOD + EVACUATION LAB</small></button>
-        <nav className={mobileMenu ? 'open' : ''} aria-label="Primary navigation"><button className={view === 'scenario' ? 'active' : ''} onClick={() => selectView('scenario')}><Map size={16} /> Scenario lab</button><button className={view === 'data' ? 'active' : ''} onClick={() => selectView('data')}><Database size={16} /> Data registry</button><button className={view === 'method' ? 'active' : ''} onClick={() => selectView('method')}><BookOpen size={16} /> Method</button></nav>
+        <nav className={mobileMenu ? 'open' : ''} aria-label="Primary navigation"><button className={view === 'scenario' ? 'active' : ''} onClick={() => selectView('scenario')}><Map size={16} /> Scenario lab</button><button className={view === 'population' ? 'active' : ''} onClick={() => selectView('population')}><Users size={16} /> Population</button><button className={view === 'data' ? 'active' : ''} onClick={() => selectView('data')}><Database size={16} /> Data registry</button><button className={view === 'method' ? 'active' : ''} onClick={() => selectView('method')}><BookOpen size={16} /> Method</button></nav>
         <div className="prototype-badge"><i /> RESEARCH PROTOTYPE</div><button className="menu-button" onClick={() => setMobileMenu(!mobileMenu)} aria-label="Toggle menu">{mobileMenu ? <X /> : <Menu />}</button>
       </header>
-      {view === 'scenario' && <main className="scenario-view"><ScenarioPanel rainfall={rainfall} river={river} tide={tide} onRainfall={setRainfall} onRiver={setRiver} onTide={setTide} onPreset={applyPreset} isRunning={isRunning} onRun={() => setIsRunning((current) => !current)} onReset={reset} /><section className="map-stage"><div className="map-status"><i className={isRunning ? 'running' : ''} /><span>{isRunning ? 'MODEL RUNNING' : 'SCENARIO READY'}</span><b>Illustrative Bangkok canvas · pilot AOI pending</b></div><BangkokMap severity={severity} time={time} isRunning={isRunning} layers={layers} onLayerChange={(layer) => setLayers((current) => ({ ...current, [layer]: !current[layer] }))} /><MetricStrip severity={severity} time={time} /></section></main>}
-      {view === 'data' && <DataRegistry />}{view === 'method' && <MethodPage />}
+      {view === 'scenario' && <main className="scenario-view"><ScenarioPanel rainfall={rainfall} river={river} tide={tide} populationPeriod={populationPeriod} onRainfall={setRainfall} onRiver={setRiver} onTide={setTide} onPopulationPeriod={setPopulationPeriod} onPreset={applyPreset} isRunning={isRunning} onRun={() => setIsRunning((current) => !current)} onReset={reset} /><section className="map-stage"><div className="map-status"><i className={isRunning ? 'running' : ''} /><span>{isRunning ? 'MODEL RUNNING' : 'SCENARIO READY'}</span><b>Illustrative synthetic population · not live occupancy</b></div><BangkokMap severity={severity} time={time} isRunning={isRunning} populationPeriod={populationPeriod} populationFactor={populationPeriods[populationPeriod].factor} layers={layers} onLayerChange={(layer) => setLayers((current) => ({ ...current, [layer]: !current[layer] }))} /><MetricStrip severity={severity} time={time} populationFactor={populationPeriods[populationPeriod].factor} /></section></main>}
+      {view === 'population' && <PopulationPage />}{view === 'data' && <DataRegistry />}{view === 'method' && <MethodPage />}
     </div>
   )
 }

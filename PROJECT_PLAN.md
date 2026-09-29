@@ -1,5 +1,7 @@
 # BKK/FLOW — product and implementation plan
 
+> The expanded population, PFLOW, architecture, API, validation, privacy, scale and delivery specification is in [`docs/FULL_IMPLEMENTATION_PLAN.md`](docs/FULL_IMPLEMENTATION_PLAN.md).
+
 ## 1. Product thesis
 
 BKK/FLOW should answer one practical question:

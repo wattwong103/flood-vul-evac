@@ -10,6 +10,7 @@
     "validation_status",
     "geography",
     "source_versions",
+    "population_model",
     "pflow_contract",
     "flood_scenario",
     "evacuation_scenario",
@@ -52,6 +53,48 @@
           "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
           "request_parameters": { "type": "object" },
           "licence_snapshot": { "type": "string" }
+        }
+      }
+    },
+    "population_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["population_version", "method", "agent_representation", "seed", "control_source_ids", "time_profile", "privacy"],
+      "properties": {
+        "population_version": { "type": "string", "minLength": 1 },
+        "method": { "enum": ["weighted-persons", "integerised-persons", "synthetic-households"] },
+        "agent_representation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["weight_field", "home_spatial_unit", "households_supported"],
+          "properties": {
+            "weight_field": { "type": "string", "minLength": 1 },
+            "home_spatial_unit": { "type": "string", "minLength": 1 },
+            "households_supported": { "type": "boolean" },
+            "building_assignment": { "enum": ["none", "partial", "complete"] }
+          }
+        },
+        "seed": { "type": "integer" },
+        "control_source_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
+        "time_profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "activity_model_version"],
+          "properties": {
+            "status": { "enum": ["illustrative", "calibrated", "validated"] },
+            "activity_model_version": { "type": "string", "minLength": 1 },
+            "external_trip_policy": { "type": "string" }
+          }
+        },
+        "privacy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["public_min_cell_metres", "minimum_reported_count", "real_trajectories_present"],
+          "properties": {
+            "public_min_cell_metres": { "type": "integer", "minimum": 100 },
+            "minimum_reported_count": { "type": "integer", "minimum": 1 },
+            "real_trajectories_present": { "const": false }
+          }
         }
       }
     },

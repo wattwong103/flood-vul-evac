@@ -6,9 +6,11 @@ The repository contains:
 
 - `site/` — interactive React prototype
 - `PROJECT_PLAN.md` — product, data, modelling, and delivery plan
+- `docs/FULL_IMPLEMENTATION_PLAN.md` — complete population + PFLOW + flood-evacuation implementation plan
 - `docs/PFLOW_BANGKOK_INTEGRATION.md` — PFLOW-to-Bangkok model contract
 - `data/source-registry.json` — machine-readable, licence-aware source registry
 - `schemas/pflow-bkk-run.schema.json` — reproducible simulation-run contract
+- `config/population.example.json` — open-data weighted-population prototype configuration
 - `site/src/data.ts` — source registry used by the prototype UI
 
 ## Run the prototype
@@ -36,3 +38,4 @@ The implementation branch is `codex/bkk-pflow-open-data`. Downloaded and derived
 3. Every model run is reproducible from versioned inputs and code.
 4. Building height is an exposure and vertical-refuge input—not proof that a building is a safe shelter.
 5. Operational use requires local validation, agency review, and an incident-management owner.
+6. Resident population, time-of-day PFLOW presence, exposed people, and the evacuation cohort are separate quantities.
