@@ -33,6 +33,37 @@ Bangkok, built on the PFLOW people–activities–trips–trajectories contract.
 | Network | 3,755 OSM ways → **7,514 directed edges, 6,701 nodes, 168.7 km** walkable |
 | Buildings | 6,963 OSM footprints, 2,398 intersecting the AOI |
 
+## City scale — Bangkok Metropolitan Administration
+
+A second, larger scope covers the whole BMA. It is a **separate run** and
+never silently substitutes for a pilot result.
+
+| Property | Value |
+|---|---|
+| Area of interest | Bangkok (กรุงเทพมหานคร), admin level 4, OSM relation `R92277` |
+| Area | **1,643.5 km²** |
+| OSM source | one 42 MB regional PBF (BBBike), read locally via GDAL — no tiled Overpass, no rate limits |
+| Network | 215,770 ways → **939,006 edges, 854,628 nodes, 26,744 km** |
+| Buildings | **424,420** OSM footprints with height evidence recoverable |
+| Resident baseline | WorldPop 2020 clipped to the BMA: **10,891,062 residents**, 181,662 cells |
+| Public aggregation | 1 km fixed |
+| Routing | compressed CSR index; a **full-city travel-time field takes ~2 s** and reaches 98.3% of nodes |
+
+**This run has no flood layer and no evacuation outcomes.** That is a decision
+on the record, not an omission: the only reachable open terrain source carries
+roughly 5–10 m of vertical error across a floodplain whose flood-relevant
+elevation range is 0–2 m, so a stage-based depth surface would be a noise field
+wearing the costume of a flood map. Measured evidence, including a transect
+across the Chao Phraya in which the river channel is not resolved at all, is in
+[`docs/CITY_SCALE_LIMITATIONS.md`](docs/CITY_SCALE_LIMITATIONS.md). Every
+hazard field in the city statistics is `null` with a reason attached; a zero
+would read as "no flooding", which is a different and false claim.
+
+Routing is *not* the blocker — at 2 seconds per city-wide travel-time field,
+evacuation at city scale becomes tractable the moment a defensible depth surface
+exists.
+
+
 ## Quick start
 
 ```powershell
@@ -45,13 +76,18 @@ python pipeline/run.py run
 # 3. Execute the dry baseline for comparison.
 python pipeline/run.py run --baseline
 
-# 4. Validate the newest run.
+# 4. City scale: stage the regional extract, then run the city baseline.
+python pipeline/run.py ingest-city
+python pipeline/run.py city
+python pipeline/city_report.py <city_run_id>
+
+# 5. Validate the newest run.
 python pipeline/run.py validate
 
-# 5. Generate figures and the run summary.
+# 6. Generate figures and the run summary.
 python pipeline/report.py <run_id> --compare <baseline_run_id>
 
-# 6. Serve the API and the site.
+# 7. Serve the API and the site.
 uvicorn api.app:app --port 8000
 cd site; pnpm install; pnpm dev
 ```

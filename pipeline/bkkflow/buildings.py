@@ -109,6 +109,33 @@ def build_building_table(
     aoi_projected = aoi_frame.to_crs(analysis_crs)
     clip = aoi_projected.geometry.union_all()
     frame = frame.to_crs(analysis_crs)
+
+    # A single invalid polygon raises a GEOS topology exception that aborts the
+    # whole run, and a real extract always contains some. The validity scan
+    # runs once, in the analysis CRS, where the spatial test will use it.
+    # raises a GEOS topology exception that aborts the entire run. Repair
+    # again in the analysis CRS, immediately before the spatial test.
+    repaired = 0
+    dropped = 0
+    invalid_after = ~frame.geometry.is_valid
+    if invalid_after.any():
+        import shapely
+
+        original = frame.geometry.values[invalid_after]
+        fixed = shapely.make_valid(original)
+        usable = np.array([shapely.get_type_id(item) in (3, 6) for item in fixed])
+        frame = frame.copy()
+        frame.loc[invalid_after, "geometry"] = np.where(usable, fixed, original)
+        repaired += int(invalid_after.sum())
+        # A footprint make_valid could not turn back into a polygon stays
+        # invalid, and one invalid geometry aborts the entire spatial test.
+        # Drop it and count it rather than silently keeping broken geometry.
+        still_invalid = ~frame.geometry.is_valid
+        dropped = int(still_invalid.sum())
+        if dropped:
+            frame = frame[~still_invalid].copy()
+    else:
+        dropped = 0
     frame = frame[frame.geometry.notna() & ~frame.geometry.is_empty]
     frame = frame[frame.geometry.intersects(clip)].copy()
     frame["geometry"] = frame.geometry.intersection(clip)
@@ -116,8 +143,30 @@ def build_building_table(
     frame = frame[frame.geom_type.isin(["Polygon", "MultiPolygon"])]
     frame = frame.reset_index(drop=True)
 
+    # GDAL's OSM driver does not expose the element type, so supply a
+    # consistent one rather than requiring every source to provide it.
+    if "osm_type" not in frame.columns:
+        frame["osm_type"] = "way"
+    if "osm_id" not in frame.columns:
+        frame["osm_id"] = frame.index.to_numpy()
+    # GDAL can emit a null osm_id. Those footprints still need a stable
+    # identity, so fall back to a hash of the footprint centroid rather than
+    # dropping them or numbering them by row order.
+    missing = frame["osm_id"].isna()
+    if missing.any():
+        import hashlib
+
+        centroids = frame.geometry[missing].centroid
+        frame.loc[missing, "osm_id"] = [
+            str(int(hashlib.sha256(f"{c.x:.3f},{c.y:.3f}".encode("utf-8")).hexdigest()[:12], 16))
+            for c in centroids
+        ]
+    # Source extracts deliver osm_id as a string; the fallback above is also a
+    # string, but a caller may pass integers. Normalise so Parquet gets one type.
+    frame["osm_id"] = frame["osm_id"].astype(str)
     frame["building_id"] = [
-        f"b_{int(osm_id)}_{osm_type}" for osm_id, osm_type in zip(frame["osm_id"], frame["osm_type"])
+        f"b_{int(osm_id)}_{osm_type}"
+        for osm_id, osm_type in zip(frame["osm_id"].to_numpy(), frame["osm_type"].to_numpy())
     ]
     frame["footprint_m2"] = frame.geometry.area
     frame["footprint_source"] = "openstreetmap"

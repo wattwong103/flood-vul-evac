@@ -113,6 +113,50 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0 if summary["validation_passed"] else 2
 
 
+def cmd_ingest_city(args: argparse.Namespace) -> int:
+    """Stage the whole-city OSM extract and the city population grid."""
+    import geopandas as gpd
+
+    from bkkflow import aoi as aoi_module
+    from bkkflow import population as population_module
+    from bkkflow.sources import city_osm, population_source
+    from bkkflow.util import ensure_dir
+
+    record = city_osm.ingest_city()
+    print(
+        f"[city] {record.road_ways:,} ways, {record.buildings:,} buildings, "
+        f"{record.waterway_features:,} water features from {record.byte_count:,} bytes"
+    )
+
+    aoi_frame = aoi_module.load_aoi("bangkok-bma")
+    clip = Path("data/staged/population/tha_ppp_2020_bangkok.tif")
+    if not clip.is_file():
+        clip.parent.mkdir(parents=True, exist_ok=True)
+        stats = population_source.clip_to_aoi(
+            "data/staged/population/tha_ppp_2020.tif", aoi_frame.geometry.iloc[0], clip
+        )
+        print(f"[city] population clip total {stats['clip_total_population']:,.0f}")
+    cells = population_module.build_population_cells(
+        clip, aoi_frame, population_version="bkk-city-pop-v0.1-2020", analysis_crs="EPSG:32647"
+    )
+    out = ensure_dir("data/curated/city/population")
+    cells.to_parquet(out / "population_cells.parquet", index=False)
+    print(f"[city] {len(cells):,} cells, {cells['pop_count'].sum():,.0f} residents")
+    return 0
+
+
+def cmd_city(args: argparse.Namespace) -> int:
+    """Execute the city baseline run."""
+    from bkkflow.city_runner import execute_city_run
+
+    summary = execute_city_run()
+    print(json.dumps({k: v for k, v in summary.items() if k != "stats"}, indent=2))
+    print(json.dumps(summary["stats"]["network"], indent=2))
+    print(json.dumps(summary["stats"]["buildings"], indent=2))
+    print(f"flood: {summary['stats']['flood']['status']}")
+    return 0 if summary["validation_passed"] else 2
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     run_id = args.run_id
     if not run_id:
@@ -136,6 +180,10 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("ingest", help="stage licensed sources").set_defaults(func=cmd_ingest)
+    sub.add_parser("ingest-city", help="stage whole-city OSM and population").set_defaults(
+        func=cmd_ingest_city
+    )
+    sub.add_parser("city", help="execute the city baseline run").set_defaults(func=cmd_city)
     sub.add_parser("registry", help="print the source registry").set_defaults(func=cmd_registry)
 
     run = sub.add_parser("run", help="execute one full run")

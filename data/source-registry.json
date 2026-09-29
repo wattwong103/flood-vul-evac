@@ -1,5 +1,5 @@
 {
-  "registry_version": "2026-09-29.2",
+  "registry_version": "2026-09-30.1",
   "country": "Thailand",
   "scope": "Bangkok flood exposure and evacuation research",
   "policy": "A source is approved only when it is publicly accessible and has explicit reuse permission at resource level.",
@@ -78,6 +78,36 @@
       "status": "approved",
       "reviewed_at": "2026-09-29",
       "notes": "A gridded estimate is not a daytime activity population; demographic and activity marginals require separate evidence."
+    },
+    {
+      "source_id": "aws-terrain-tiles-terrarium",
+      "agency": "AWS Open Data (registry of open data on AWS) / Mapzen and upstream compilers",
+      "dataset": "Terrarium terrain tiles, global digital elevation",
+      "model_role": "Terrain elevation for the water-surface flood screening surface",
+      "resource_url": "https://registry.opendata.aws/terrain-tiles/",
+      "format": "PNG terrarium tiles (RGB-encoded metres)",
+      "spatial_resolution": "Approximately 19 m at zoom 13 for Bangkok; higher at greater zoom",
+      "temporal_resolution": "Static compilation of SRTM, NED, ETOPO and other upstream sources",
+      "authentication": "None; public S3 bucket",
+      "licence": "Open data; upstream components are public domain or openly licensed. See the AWS registry entry for per-source attribution.",
+      "status": "approved",
+      "reviewed_at": "2026-09-30",
+      "notes": "Aggregates several upstream elevation sources, so vertical error is heterogeneous across the footprint. It is a screening terrain surface, not a survey DEM. Bangkok is very flat, so small vertical errors translate into large mapped flood areas; report the sensitivity of flooded area to the water-surface level."
+    },
+    {
+      "source_id": "bbbike-bangkok-osm-extract",
+      "agency": "OpenStreetMap contributors / BBBike",
+      "dataset": "Bangkok OpenStreetMap extract",
+      "model_role": "City-scale road, building and waterway geometry for the whole BMA",
+      "resource_url": "https://download.bbbike.org/osm/bbbike/Bangkok/",
+      "format": "OSM PBF",
+      "spatial_resolution": "Feature",
+      "temporal_resolution": "Periodic extract; record the extract date and checksum",
+      "authentication": "None",
+      "licence": "ODbL 1.0",
+      "status": "approved",
+      "reviewed_at": "2026-09-30",
+      "notes": "A single ~42 MB extract covers the whole metropolitan area, which is why city-scale ingestion does not need tiled Overpass queries. The extract date is a modelling parameter: the network version must record it."
     },
     {
       "source_id": "worldpop-tha-age-sex-2026-r2025a",

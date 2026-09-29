@@ -1,0 +1,13 @@
+{
+  "aoi_id": "bangkok-bma",
+  "name": "กรุงเทพมหานคร",
+  "name_en": "Bangkok",
+  "admin_level": "4",
+  "osm_type": "relation",
+  "osm_id": 92277,
+  "attribution": "(c) OpenStreetMap contributors, ODbL 1.0",
+  "content_sha256": "ed9c0213950c540cd59ae1e3be2786f0a4a8fa0f071e43f603fcee3058460afb",
+  "retrieved_at": "2026-09-29T18:00:45+00:00",
+  "area_km2": 1643.5357,
+  "analysis_crs": "EPSG:32647"
+}

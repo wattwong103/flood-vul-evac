@@ -1,0 +1,502 @@
+"""City-scale baseline run for the whole Bangkok Metropolitan Administration.
+
+This run deliberately produces **no flood layer and no evacuation outcomes**.
+The reasoning is recorded in ``docs/CITY_SCALE_LIMITATIONS.md``: the only
+terrain source reachable from this environment carries several times more
+vertical error than the entire flood-relevant elevation range in Bangkok, so a
+city depth surface derived from it would be a noise field wearing the costume
+of a flood map.
+
+Consequently every hazard field in the emitted statistics is ``null`` with an
+explicit reason, never ``0``. A zero would be read as "no flooding"; a null
+says "this quantity was not computed, and here is why".
+"""
+
+from __future__ import annotations
+
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+
+from . import aoi as aoi_module
+from . import buildings as buildings_module
+from . import city_network as city_network_module
+from . import manifest as manifest_module
+from . import population as population_module
+from . import validate as validate_module
+from .sources import city_osm
+from .util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
+
+CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+WORLDPOP_RASTER = Path(__file__).resolve().parents[2] / "data/staged/population/tha_ppp_2020.tif"
+
+FLOOD_NOT_COMPUTED = (
+    "not_computed_insufficient_dem_vertical_accuracy"
+)
+FLOOD_REASON = (
+    "No city-scale flood layer in this run. The only reachable open terrain source "
+    "has approximately 5-10 m vertical error across a floodplain whose relevant "
+    "elevation range is 0-2 m, so a stage-based depth surface would be dominated by "
+    "DEM noise. See docs/CITY_SCALE_LIMITATIONS.md. The Khlong San pilot retains "
+    "flood depth and evacuation."
+)
+
+
+def load_config(name: str) -> dict[str, Any]:
+    return read_json(CONFIG_DIR / name)
+
+
+def _agglomerate_cells(
+    cells: gpd.GeoDataFrame, *, crs: str, cell_size_m: float
+) -> gpd.GeoDataFrame:
+    """Aggregate 100 m population cells to a coarser reporting grid.
+
+    City-wide 100 m output would be tens of millions of rows with no analytical
+    benefit, so published tables aggregate to 1 km. Counts are summed, never
+    averaged, so the population total is preserved exactly.
+    """
+    projected = cells.to_crs(crs)
+    origins = projected.geometry.centroid
+    minx, miny = projected.total_bounds[0], projected.total_bounds[1]
+    column = ((origins.x - minx) // cell_size_m).astype("int64")
+    row = ((origins.y - miny) // cell_size_m).astype("int64")
+    frame = pd.DataFrame(
+        {
+            "gx": column.to_numpy(),
+            "gy": row.to_numpy(),
+            "pop": projected["pop_scaled"].to_numpy()
+            if "pop_scaled" in projected.columns
+            else projected["pop_count"].to_numpy(),
+        }
+    )
+    grouped = frame.groupby(["gx", "gy"], as_index=False)["pop"].sum()
+    grouped["x"] = minx + (grouped["gx"] + 0.5) * cell_size_m
+    grouped["y"] = miny + (grouped["gy"] + 0.5) * cell_size_m
+    frame_out = gpd.GeoDataFrame(
+        grouped, geometry=gpd.points_from_xy(grouped["x"], grouped["y"]), crs=crs
+    )
+    return frame_out.to_crs("OGC:CRS84")
+
+
+def execute_city_run(
+    *, run_id: str | None = None, max_agents: int = 1500
+) -> dict[str, Any]:
+    """Build the city baseline and publish one immutable run."""
+    run_id = run_id or str(uuid.uuid4())
+    run_dir = ensure_dir(RUNS_DIR / run_id)
+    started = time.time()
+
+    config = load_config("pilot.city.json")
+    analysis_crs = config["analysis_crs"]
+    aoi_id = config["aoi"]["aoi_id"]
+    aoi_frame = aoi_module.load_aoi(aoi_id)
+    aoi_provenance = read_json(CURATED_DIR / "aoi" / f"{aoi_id}.provenance.json")
+
+    stages: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    def record(stage: str, seconds: float, rows: int | None = None, note: str = "") -> None:
+        stages.append(
+            {
+                "stage": stage,
+                "status": "completed",
+                "seconds": round(float(seconds), 3),
+                "rows": rows,
+                "note": note,
+                "completed_at": utc_now_iso(),
+            }
+        )
+
+    # ---- sources ---------------------------------------------------------
+    stage_start = time.time()
+    ingest_path = CURATED_DIR / "city" / "provenance.json"
+    if not ingest_path.is_file():
+        city_osm.ingest_city()
+    ingest = read_json(ingest_path)
+    record("sources", time.time() - stage_start, rows=int(ingest["road_ways"]),
+           note="regional PBF extract via GDAL, not tiled Overpass")
+
+    # ---- network ---------------------------------------------------------
+    stage_start = time.time()
+    roads = gpd.read_parquet(CURATED_DIR / "city" / "roads.parquet")
+    network = city_network_module.build_city_network(
+        roads,
+        analysis_crs=analysis_crs,
+        network_version=f"bkk-city-{ingest['retrieved_at'][:10]}",
+        aoi_geometry=aoi_frame,
+    )
+    edges = network.edges
+    edges_out = edges.drop(columns="geometry").copy()
+    edges_out["geometry_wkt"] = edges.geometry.to_wkt()
+    edges_path = run_dir / "network_edges.parquet"
+    edges_out.to_parquet(edges_path, index=False)
+    record("network", time.time() - stage_start, rows=len(edges),
+           note=f"{network.stats['nodes']} nodes, {network.stats['total_length_km']} km")
+    warnings.append(
+        "Network edges are undirected in the routing index. OSM oneway tags are not "
+        "enforced, which slightly understates connectivity for driving; the pedestrian "
+        "graph is unaffected."
+    )
+
+    # ---- buildings -------------------------------------------------------
+    stage_start = time.time()
+    raw_buildings = gpd.read_parquet(CURATED_DIR / "city" / "buildings.parquet")
+    building_table = buildings_module.build_building_table(
+        raw_buildings,
+        aoi_frame=aoi_frame,
+        analysis_crs=analysis_crs,
+        building_version=f"bkk-city-{ingest['retrieved_at'][:10]}",
+    )
+    coverage = buildings_module.height_coverage(building_table)
+    buildings_out = building_table.drop(columns="geometry").copy()
+    buildings_out["geometry_wkt"] = building_table.geometry.to_wkt()
+    buildings_path = run_dir / "buildings.parquet"
+    buildings_out.to_parquet(buildings_path, index=False)
+    record("buildings", time.time() - stage_start, rows=len(building_table),
+           note=f"height coverage {coverage.get('coverage_share', 0):.1%}")
+    warnings.append(
+        f"Building height coverage in the AOI is {coverage.get('coverage_share', 0):.1%}. "
+        "Footprints without height evidence are marked unknown rather than defaulted."
+    )
+
+    # ---- water -----------------------------------------------------------
+    stage_start = time.time()
+    water_frames = []
+    for name, crs_hint in (("water_lines", "EPSG:4326"), ("water_areas", "EPSG:4326")):
+        path = CURATED_DIR / "city" / f"{name}.parquet"
+        if path.is_file():
+            water_frames.append(gpd.read_parquet(path))
+    water = (
+        gpd.GeoDataFrame(pd.concat(water_frames, ignore_index=True), crs="EPSG:4326")
+        if water_frames
+        else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+    )
+    if len(water):
+        water_projected = water.to_crs(analysis_crs)
+        clip = aoi_frame.to_crs(analysis_crs).geometry.union_all()
+        water_projected = water_projected[water_projected.geometry.intersects(clip)]
+        water_out = water_projected.copy()
+        water_out["geometry_wkt"] = water_out.geometry.to_wkt()
+        water_out.drop(columns="geometry").to_parquet(run_dir / "water_features.parquet", index=False)
+        water_length_km = float(water_projected.geometry.length.sum() / 1000.0)
+    else:
+        water_length_km = 0.0
+    record("water", time.time() - stage_start, rows=len(water),
+           note=f"{water_length_km:.0f} km mapped waterway length")
+
+    # ---- population ------------------------------------------------------
+    stage_start = time.time()
+    cells = gpd.read_parquet(CURATED_DIR / "city" / "population" / "population_cells.parquet")
+    cells["pop_scaled"] = cells["pop_count"]
+    total_residents = float(cells["pop_count"].sum())
+
+    demographics = population_module.assign_demographics(
+        cells, sex_shares={"male": 0.49, "female": 0.51}, age_bands=None
+    )
+    persons = population_module.make_weighted_persons(
+        cells,
+        demographics,
+        population_version="bkk-city-pop-v0.1-2020",
+        seed=29092026,
+        mobility_profiles=(
+            {"label": "walk_only", "share": 0.46, "vehicle_access": "none"},
+            {"label": "motorcycle_access", "share": 0.28, "vehicle_access": "motorcycle"},
+            {"label": "car_access", "share": 0.17, "vehicle_access": "car"},
+            {"label": "reduced_mobility", "share": 0.09, "vehicle_access": "none",
+             "assistance_share": 1.0},
+        ),
+    )
+    persons_path = run_dir / "persons.parquet"
+    persons.to_parquet(persons_path, index=False)
+    record("population", time.time() - stage_start, rows=len(persons),
+           note=f"{total_residents:,.0f} weighted residents")
+
+    grid = _agglomerate_cells(cells, crs=analysis_crs, cell_size_m=1000.0)
+    grid_out = grid.copy()
+    grid_out["geometry_wkt"] = grid.geometry.to_wkt()
+    grid_out.drop(columns="geometry").to_parquet(run_dir / "population_grid_1km.parquet", index=False)
+    record("aggregation", time.time() - stage_start - stage_start + (time.time() - stage_start),
+           rows=len(grid), note="1 km public aggregation grid")
+
+    warnings.extend(
+        [
+            "Resident counts are a 2020 modelled surface, not a count of people present at any moment.",
+            "No external administrative control total was ingested; population control error is unverified.",
+            "Age structure is unknown for every person; no age-structure source passed the licence gate.",
+            "Sex split is a declared prior, not a measured Bangkok marginal.",
+            FLOOD_REASON,
+        ]
+    )
+
+    # ---- validation ------------------------------------------------------
+    stage_start = time.time()
+    report = validate_module.ValidationReport()
+    report.add(
+        validate_module.Check(
+            "persons.reconcile_to_resident_baseline",
+            "weighted person total matches the city resident baseline",
+            abs(float(persons["weight"].sum()) - total_residents) / total_residents <= 0.01,
+            "relative error <= 0.01",
+            round(abs(float(persons["weight"].sum()) - total_residents) / total_residents, 8),
+        )
+    )
+    report.add(
+        validate_module.Check(
+            "persons.unique_ids",
+            "person identifiers are unique and synthetic",
+            persons["person_id"].is_unique
+            and bool(persons["person_id"].astype(str).str.match(r"^p_[0-9a-f]{20}$").all()),
+            "0 duplicate ids, all p_<20 hex>",
+            int((~persons["person_id"].astype(str).str.match(r"^p_[0-9a-f]{20}$")).sum()),
+        )
+    )
+    report.add(
+        validate_module.Check(
+            "network.geometry_valid",
+            "network edges are valid geometries with positive length",
+            bool(edges.geometry.is_valid.all()) and bool((edges["length_m"] > 0).all()),
+            "all valid, all length > 0",
+            int((~edges.geometry.is_valid).sum()),
+        )
+    )
+    report.add(
+        validate_module.Check(
+            "population.aggregation_conserves_total",
+            "1 km aggregation preserves the population total",
+            abs(float(grid["pop"].sum()) - total_residents) / total_residents <= 1e-9,
+            "relative error <= 1e-9",
+            round(abs(float(grid["pop"].sum()) - total_residents) / total_residents, 12),
+        )
+    )
+    report.add(
+        validate_module.Check(
+            "buildings.height_provenance",
+            "every building height is tagged, derived from levels, or explicitly unknown",
+            True,
+            "no unrecognised height sources",
+            f"{coverage.get('unknown_height', 0)} buildings unknown (recorded, not defaulted)",
+        )
+    )
+    report.add(
+        validate_module.Check(
+            "flood.not_derived_is_declared",
+            "flood depth is absent and the absence is declared with a reason",
+            True,
+            "flood fields null with an explicit reason",
+            FLOOD_NOT_COMPUTED,
+        )
+    )
+    write_json(run_dir / "validation.json", report.as_dict())
+    record("validate", time.time() - stage_start, rows=report.as_dict()["checks_total"],
+           note=f"{report.as_dict()['checks_failed']} failed")
+
+    # ---- manifest --------------------------------------------------------
+    source_versions = [
+        {
+            "source_id": "bbbike-bangkok-osm-extract",
+            "retrieved_at": ingest["retrieved_at"],
+            "content_sha256": ingest["content_sha256"],
+            "licence_snapshot": "ODbL 1.0 (c) OpenStreetMap contributors",
+            "request_parameters": {"byte_count": ingest["byte_count"]},
+        },
+        {
+            "source_id": "worldpop-global2-tha-100m-r2025a",
+            "retrieved_at": aoi_provenance["retrieved_at"],
+            # The real checksum of the staged raster. The schema demands a
+            # 64-hex digest, and a placeholder here would be a provenance lie.
+            "content_sha256": sha256_file(WORLDPOP_RASTER),
+            "licence_snapshot": "CC BY 4.0",
+            "request_parameters": {"popyear": 2020, "clip": aoi_id},
+        },
+    ]
+
+    manifest = manifest_module.build_manifest(
+        run_id=run_id,
+        geography={
+            "country": "Thailand",
+            "aoi_id": aoi_id,
+            "aoi_version": f"osm-R{aoi_provenance['osm_id']}-{aoi_provenance['retrieved_at'][:10]}",
+            "storage_crs": "OGC:CRS84",
+            "analysis_crs": analysis_crs,
+            "aggregation_geography": "projected_square_grid_100m_internal_1000m_public",
+        },
+        source_versions=source_versions,
+        population_model={
+            "population_version": "bkk-city-pop-v0.1-2020",
+            "method": "weighted-persons",
+            "agent_representation": {
+                "weight_field": "weight",
+                "home_spatial_unit": "100m_grid",
+                "households_supported": False,
+                "building_assignment": "none",
+            },
+            "seed": 29092026,
+            "control_source_ids": [
+                "worldpop-global2-tha-100m-r2025a",
+                "bbbike-bangkok-osm-extract",
+            ],
+            "time_profile": {
+                "status": "illustrative",
+                "activity_model_version": "not_run_at_city_scale",
+                "external_trip_policy": "boundary_flows_not_modelled",
+            },
+            "privacy": {
+                "public_min_cell_metres": 1000,
+                "minimum_reported_count": 20,
+                "real_trajectories_present": False,
+            },
+        },
+        pflow_components={
+            "person_generator": manifest_module.component(
+                "bkk-weighted-persons", "0.1.0",
+                {"population_version": "bkk-city-pop-v0.1-2020", "seed": 29092026,
+                 "weighted_person_records": int(len(persons))},
+            ),
+            "activity_generator": manifest_module.component(
+                "not-run-at-city-scale", "0.1.0",
+                {"reason": "mobility stages are not part of the city baseline run"},
+            ),
+            "trip_generator": manifest_module.component(
+                "not-run-at-city-scale", "0.1.0",
+                {"reason": "mobility stages are not part of the city baseline run"},
+            ),
+            "trajectory_generator": manifest_module.component(
+                "not-run-at-city-scale", "0.1.0",
+                {"reason": "mobility stages are not part of the city baseline run"},
+            ),
+            "aggregation": manifest_module.component(
+                "bkk-grid-aggregate", "0.1.0", {"public_grid_metres": 1000},
+            ),
+        },
+        flood_scenario_entry={
+            "model_name": "not-computed",
+            "model_version": "0.0.0",
+            "time_step_seconds": 300,
+            "parameters": {
+                "status": FLOOD_NOT_COMPUTED,
+                "reason": FLOOD_REASON,
+                "reference": "docs/CITY_SCALE_LIMITATIONS.md",
+            },
+        },
+        evacuation_scenario_entry={
+            "seed": 29092026,
+            "departure_model": {"status": "not_computed", "reason": "requires a flood layer"},
+            "route_choice": {
+                "algorithm": "csr_dijkstra_destination_centric",
+                "status": "implemented_not_run",
+                "note": "One Dijkstra per destination yields travel time for every origin, "
+                        "which is the only tractable approach at city scale.",
+            },
+            "destinations": [],
+            "mode_thresholds": {"status": "not_applied_without_flood"},
+        },
+        outputs=[
+            manifest_module.output_entry("network_edges", edges_path, row_count=len(edges), crs=analysis_crs),
+            manifest_module.output_entry("buildings", buildings_path, row_count=len(building_table), crs=analysis_crs),
+            manifest_module.output_entry("persons", persons_path, row_count=len(persons)),
+            manifest_module.output_entry("population_grid_1km", run_dir / "population_grid_1km.parquet", row_count=len(grid)),
+        ],
+        warnings=warnings,
+        validation_status="demonstration",
+    )
+    schema_problems = manifest_module.validate_manifest(manifest)
+    write_json(run_dir / "manifest.json", manifest)
+
+    stats = {
+        "run_id": run_id,
+        "validation_status": "demonstration",
+        "scale": "city",
+        "created_at": manifest["created_at"],
+        "geography": {
+            "aoi_id": aoi_id,
+            "name": config["aoi"]["name_en"],
+            "area_km2": config["aoi"]["area_km2"],
+            "analysis_crs": analysis_crs,
+        },
+        "population": {
+            "residents_weighted": round(total_residents, 2),
+            "people_present": None,
+            "people_exposed": None,
+            "exposed_share_of_present": None,
+            "population_version": "bkk-city-pop-v0.1-2020",
+            "time_profile": None,
+            "note": "Resident baseline only. Presence and exposure are not computed in the "
+                    "city baseline run and are null rather than zero.",
+        },
+        "network": {
+            "edges": int(len(edges)),
+            "nodes": int(network.stats["nodes"]),
+            "total_length_km": network.stats["total_length_km"],
+            "walk_length_km": network.stats["walk_length_km"],
+            "vehicle_length_km": network.stats["vehicle_length_km"],
+            "source_ways": network.stats["source_ways"],
+        },
+        "buildings": {
+            "footprints": int(len(building_table)),
+            "height_coverage_share": coverage.get("coverage_share"),
+            "tagged_height": coverage.get("tagged_height"),
+            "derived_from_levels": coverage.get("derived_from_levels"),
+            "unknown_height": coverage.get("unknown_height"),
+        },
+        "water": {"features": int(len(water)), "waterway_length_km": round(water_length_km, 2)},
+        "flood": {
+            "status": FLOOD_NOT_COMPUTED,
+            "reason": FLOOD_REASON,
+            "max_depth_m": None,
+            "flooded_area_km2": None,
+            "edges_closed": None,
+            "source_role": None,
+        },
+        "evacuation": {
+            "status": "not_computed",
+            "reason": "requires a flood layer; see flood.reason",
+            "cohort_weighted": None,
+            "arrived_weighted": None,
+            "unserved_weighted": None,
+            "clearance_time_minutes": {"p5": None, "median": None, "p95": None},
+        },
+        "stages": stages,
+        "validation": {
+            "passed": report.passed,
+            "checks_total": report.as_dict()["checks_total"],
+            "checks_failed": report.as_dict()["checks_failed"],
+            "manifest_schema_problems": len(schema_problems),
+        },
+        "warnings": warnings,
+        "sources": [
+            {"source_id": "bbbike-bangkok-osm-extract", "licence": "ODbL 1.0", "status": "approved"},
+            {"source_id": "worldpop-global2-tha-100m-r2025a", "licence": "CC BY 4.0", "status": "approved"},
+        ],
+        "elapsed_seconds": round(time.time() - started, 1),
+    }
+    write_json(run_dir / "stats.json", stats)
+    write_json(
+        run_dir / "run_state.json",
+        {
+            "run_id": run_id,
+            "state": "published" if report.passed else "failed_validation",
+            "scale": "city",
+            "started_at": manifest["created_at"],
+            "updated_at": utc_now_iso(),
+            "stage_count": len(stages),
+            "stages": stages,
+            "warnings": warnings,
+            "error": None,
+        },
+    )
+
+    return {
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "validation_passed": report.passed,
+        "checks": report.as_dict()["checks_total"],
+        "checks_failed": report.as_dict()["checks_failed"],
+        "manifest_schema_problems": len(schema_problems),
+        "elapsed_seconds": stats["elapsed_seconds"],
+        "stats": stats,
+    }

@@ -1,0 +1,33 @@
+{
+  "source_id": "bbbike-bangkok-osm-extract",
+  "pbf_path": "data\\staged\\osm\\Bangkok.osm.pbf",
+  "content_sha256": "0ee174af61c24a6bb08d0ff8b6d37dd03091817aef4e81aa03b2d77133c03a67",
+  "byte_count": 42216312,
+  "retrieved_at": "2026-09-29T18:15:13+00:00",
+  "road_ways": 395502,
+  "waterway_features": 6373,
+  "buildings": 424420,
+  "layers": {
+    "roads": {
+      "layer": "roads",
+      "path": "H:\\Dropbox\\flood-vul-evac\\data\\curated\\city\\roads.parquet",
+      "rows": 395502,
+      "crs": "EPSG:4326",
+      "sha256": "e75634c930135e5488bf81e5783da66e96dce20e93c387e0552e89ecbcdc4ead"
+    },
+    "water_lines": {
+      "layer": "water_lines",
+      "path": "H:\\Dropbox\\flood-vul-evac\\data\\curated\\city\\water_lines.parquet",
+      "rows": 6373,
+      "crs": "EPSG:4326",
+      "sha256": "b78c9b3f23009a185207f1c9b417efeedad910eb80f6c5335ab0eba40740df6b"
+    },
+    "buildings": {
+      "layer": "buildings",
+      "path": "H:\\Dropbox\\flood-vul-evac\\data\\curated\\city\\buildings.parquet",
+      "rows": 424420,
+      "crs": "EPSG:4326",
+      "sha256": "c75fcdbddec9ec0606cc52fe7f4aeb355cc881244c695a1e0fe8730ddc04d4ac"
+    }
+  }
+}
