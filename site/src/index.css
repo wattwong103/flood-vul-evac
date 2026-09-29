@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: "Aptos", "Segoe UI", Arial, sans-serif;
+  color: #173b3a;
+  background: #f2efe6;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --ink: #173b3a;
+  --muted-ink: #617371;
+  --paper: #f7f3e9;
+  --paper-dark: #e7ebe5;
+  --teal: #116f64;
+  --orange: #ef9b43;
+  --coral: #e7654d;
+  --line: #c9d0c9;
+}
+
+* { box-sizing: border-box; }
+html { min-width: 320px; background: var(--paper); }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--paper); }
+button, input { font: inherit; }
+button { color: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid rgba(239, 155, 67, .65); outline-offset: 2px; }
+a { color: inherit; }

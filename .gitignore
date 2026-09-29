@@ -1,0 +1,25 @@
+# Downloaded and derived geospatial data stay outside source control.
+data/raw/
+data/staged/
+data/derived/
+data/cache/
+
+# Local run products and secrets.
+runs/
+.env
+.env.*
+!.env.example
+
+# Geospatial artifacts should be reproduced from manifests, not committed.
+*.gpkg
+*.fgb
+*.parquet
+*.tif
+*.tiff
+*.pbf
+*.pmtiles
+
+# Python tooling.
+.venv/
+__pycache__/
+*.py[cod]
