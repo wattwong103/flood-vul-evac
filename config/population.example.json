@@ -1,0 +1,56 @@
+{
+  "population_version": "bkk-pilot-pop-v0.1-demo",
+  "status": "illustrative",
+  "method": "weighted-persons",
+  "seed": 29092026,
+  "resident_baseline": {
+    "source_id": "worldpop-global2-tha-100m-r2025a",
+    "base_cell_metres": 100,
+    "meaning": "estimated usual residents; not time-of-day occupancy"
+  },
+  "controls": [
+    {
+      "source_id": "dopa-nha-subdistrict-population-houses-2568",
+      "dimensions": ["total_population", "sex", "houses"],
+      "geography": "subdistrict"
+    },
+    {
+      "source_id": "worldpop-tha-age-sex-2026-r2025a",
+      "dimensions": ["age_band", "sex"],
+      "geography": "100m_grid"
+    },
+    {
+      "source_id": "nso-dopa-population-district-sex-2564-2568",
+      "dimensions": ["year", "sex"],
+      "geography": "district",
+      "role": "trend_and_holdout"
+    }
+  ],
+  "agent_representation": {
+    "weight_field": "weight",
+    "home_spatial_unit": "100m_grid",
+    "households_supported": false,
+    "building_assignment": "partial",
+    "scenario_fields": ["vehicle_access", "assistance_need", "warning_reach"]
+  },
+  "time_profile": {
+    "status": "illustrative",
+    "activity_model_version": "pflow-bkk-activity-demo-v0.1",
+    "external_trip_policy": "explicit_boundary_flows_required_before_research_status",
+    "prototype_periods": {
+      "day": { "time": "12:00", "pilot_presence_factor": 1.42 },
+      "evening": { "time": "18:00", "pilot_presence_factor": 1.0 },
+      "night": { "time": "02:00", "pilot_presence_factor": 0.78 }
+    }
+  },
+  "privacy": {
+    "public_min_cell_metres": 1000,
+    "minimum_reported_count": 20,
+    "real_trajectories_present": false
+  },
+  "warnings": [
+    "Prototype population factors are illustrative, not calibrated Bangkok occupancy.",
+    "Household membership, vehicle access and assistance needs are scenarios, not observations.",
+    "Building height is not evidence that a building is residential or a safe refuge."
+  ]
+}

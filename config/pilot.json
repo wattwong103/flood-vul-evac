@@ -1,0 +1,40 @@
+{
+  "decision_status": "resolved_for_pilot",
+  "resolved_at": "2026-09-30",
+  "country": "Thailand",
+  "aoi": {
+    "aoi_id": "khlong-san-district",
+    "name": "เขตคลองสาน",
+    "name_en": "Khlong San",
+    "admin_level": "7",
+    "geometry_source": "OpenStreetMap relation R3147280 via Nominatim lookup",
+    "geometry_licence": "ODbL 1.0",
+    "attribution": "(c) OpenStreetMap contributors",
+    "area_km2": 5.9607,
+    "bbox_wgs84": [100.49214, 13.70515, 100.51276, 13.73931],
+    "rationale": "Chronically flooded west-bank district on the Chao Phraya with dense low-rise housing, mid-rise height variation, and multiple approved BMA flood-risk records. 5.96 km2 sits inside the plan's 5-10 km2 pilot corridor target."
+  },
+  "storage_crs": "OGC:CRS84",
+  "analysis_crs": "EPSG:32647",
+  "analysis_crs_decision": {
+    "chosen": "EPSG:32647",
+    "label": "WGS 84 / UTM zone 47N",
+    "justification": "Bangkok at 13.7N/100.5E falls in UTM zone 47. The pilot centroid is about 1.5 degrees from the 99E central meridian, giving a point scale factor near 1.000 with sub-0.1 percent length distortion. Metric distance, area, buffering and routing cost are therefore reliable at pilot scale. Selected explicitly rather than inferred from coordinate ranges.",
+    "rejected": [
+      "EPSG:4326 - degrees are not metric; area and distance results would be wrong.",
+      "EPSG:3857 - Web Mercator inflates area at this latitude; acceptable for display tiles only.",
+      "EPSG:32648 - wrong zone; Bangkok is west of the 102E boundary."
+    ]
+  },
+  "aggregation_grid": {
+    "internal_metres": 100,
+    "public_population_metres": 1000,
+    "public_mobility_metres": 1000,
+    "mesh_reporting_metres": 500,
+    "note": "Internal analysis uses the 100 m WorldPop base grid. Public products start at 1 km per the privacy rule, with 500 m mesh volumes available only as an internal artefact pending disclosure review."
+  },
+  "notes": [
+    "analysis_crs and aggregation_grid were resolved from staged-source inspection, not guessed from coordinate ranges.",
+    "Any change to aoi or analysis_crs creates a new aoi_version and invalidates cached runs."
+  ]
+}

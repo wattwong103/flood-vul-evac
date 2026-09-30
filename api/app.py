@@ -1,0 +1,2118 @@
+"""FastAPI application factory.
+
+Read-only service over immutable run artefacts. Every handler is defensive by
+design: a run directory being written concurrently, a truncated Parquet footer
+or a missing table produces a structured warning in the response body, never a
+500. A run that cannot be resolved at all produces the contract's 404 envelope.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Annotated, Any
+
+import pandas as pd
+from fastapi import Depends, FastAPI, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from api import CONTRACT_VERSION, __version__
+from api.errors import install_error_handlers
+from api.models import (
+    ApiWarning,
+    BuildingsMeta,
+    BuildingsResponse,
+    ClearanceTimes,
+    ConfigResponse,
+    EvacuationResponse,
+    EvacuationTotals,
+    ExportResponse,
+    ArtefactEntry,
+    HealthResponse,
+    LinksMeta,
+    LinksResponse,
+    MeshResponse,
+    RunDetailResponse,
+    RunListResponse,
+    RunSummary,
+    StateShare,
+    ValidationResponse,
+)
+from api.runs import (
+    STATS_CACHE,
+    RunRef,
+    discover_runs,
+    resolve_run,
+    stats_mtime,
+)
+from api.settings import (
+    DEFAULT_BUILDING_ROW_LIMIT,
+    DEFAULT_LINK_FEATURE_LIMIT,
+    DEFAULT_MESH_ROW_LIMIT,
+    MAX_ROW_LIMIT,
+    Settings,
+    get_settings,
+)
+from api.tables import (
+    EVACUATION_ARRIVED_STATE,
+    EVACUATION_NOT_ELIGIBLE_STATE,
+    EVACUATION_UNSERVED_STATES,
+    SENSITIVE_COLUMNS,
+    _clearance_times,
+    _SENSITIVE_SUBSTRINGS,
+    artefact_path,
+    assemble_stats,
+    feature,
+    jsonable,
+    jsonable_rows,
+    load_stats_file,
+    make_warning,
+    read_parquet,
+    resolve_mesh_coordinates,
+    wkt_to_geometry,
+)
+from api.models import AoiSummary
+
+LOGGER = logging.getLogger("bkkflow.api")
+
+MESH_ROW_COLUMNS = (
+    "gcode",
+    "lat",
+    "lon",
+    "time_s",
+    "stationary_pop",
+    "travelling_pop",
+    "total_pop",
+)
+FLOOD_CELL_COLUMNS = (
+    "cell_id",
+    "time_s",
+    "depth_m",
+    "peak_depth_m",
+    "distance_to_water_m",
+    "source_role",
+    "confidence",
+)
+EDGE_STATE_COLUMNS = (
+    "edge_id",
+    "time_s",
+    "mode",
+    "depth_m",
+    "speed_multiplier",
+    "capacity_multiplier",
+    "closed",
+    "threshold_set_version",
+    "reason_code",
+)
+EDGE_COLUMNS = (
+    "edge_id",
+    "u",
+    "v",
+    "length_m",
+    "highway",
+    "walk_allowed",
+    "vehicle_allowed",
+    "geometry_wkt",
+)
+LINK_VOLUME_COLUMNS = ("edge_id", "hour", "volume", "mode", "distance_m")
+EVACUATION_COLUMNS = ("person_id", "state", "event_time_s", "weight", "dest_id")
+
+#: PFLOW mode codes. The query accepts either the code or the name so the site
+#: does not have to translate.
+MODE_CODE_BY_NAME: dict[str, str] = {
+    "walk": "0",
+    "walking": "0",
+    "bicycle": "1",
+    "bike": "1",
+    "bus": "2",
+    "car": "3",
+    "train": "4",
+}
+
+_BUILDING_GEOMETRY_COLUMNS = ("geometry_wkt", "wkt", "geom_wkt")
+
+#: ``drainage_index.parquet`` in the order the cells table reads it. ``x``/``y``
+#: are EPSG:32647 metres; ``lon``/``lat`` are the same points in WGS84.
+DRAINAGE_CELL_COLUMNS = (
+    "cell_id",
+    "gx",
+    "gy",
+    "x",
+    "y",
+    "lon",
+    "lat",
+    "drainage_m",
+    "drainage_km_per_km2",
+    "distance_to_drainage_m",
+    "in_overflow_path",
+    "basin_id",
+    "basin_drainage_density",
+    "susceptible_village",
+    "index_components",
+    "risk_index",
+    "risk_band",
+    "index_inputs_complete",
+    "source_role",
+)
+
+#: The screening index is not a depth. Stated on the cells route as well as the
+#: summary so a client that only ever reads the map layer still carries it.
+DRAINAGE_CELL_MEASURES = (
+    "relative screening index of drainage-discharge susceptibility from mapped "
+    "infrastructure geometry. NOT a flood depth, NOT a hydraulic model"
+)
+
+#: The destination count is a modelling choice, not a property of the city, so it
+#: is stated at payload level where a client cannot omit it.
+CONNECTIVITY_DESTINATION_NOTE = (
+    "The destination count is a scenario choice, not a property of the city. "
+    "These are unverified OSM tags with no capacity, operator or inspection date, "
+    "so 'reachable' means reachable to a tagged place, not to usable shelter."
+)
+
+
+def get_ctx(request: Request) -> Settings:
+    """Request-scoped settings: pinned at app creation, else from the environment."""
+    pinned: Settings | None = getattr(request.app.state, "settings", None)
+    return pinned or get_settings()
+
+
+SettingsDep = Annotated[Settings, Depends(get_ctx)]
+
+
+def _analysis_crs(run: "RunRef") -> str | None:
+    """The CRS the run's stored geometry is in, from its own manifest.
+
+    GeoJSON must be emitted in WGS84, so every geometry-served endpoint needs
+    to know what the artefacts were written in.
+    """
+    geography = (run.manifest or {}).get("geography") or {}
+    value = geography.get("analysis_crs")
+    return str(value) if value else None
+
+
+def _read_json_object(path: Path) -> tuple[dict[str, Any] | None, list[ApiWarning]]:
+    name = path.name
+    if not path.exists():
+        return None, [
+            make_warning("missing_artefact", f"{name} does not exist", name)
+        ]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, [
+            make_warning("unreadable_artefact", f"{name} could not be read: {exc}", name)
+        ]
+    if not isinstance(payload, dict):
+        return None, [
+            make_warning("unreadable_artefact", f"{name} is not a JSON object", name)
+        ]
+    return payload, []
+
+
+def _sidecar_digest(
+    path: Path, manifest_hashes: dict[str, str]
+) -> tuple[str | None, str | None]:
+    """Resolve an artefact's sha256 from a sidecar file or the manifest.
+
+    Only these two sources are consulted. Hashing the artefact itself is
+    deliberately *not* an option here: ``persons.parquet`` and friends run to
+    hundreds of megabytes, and an export endpoint that computes a digest would
+    read every run directory in full. A run that needs a verified bundle
+    produces sidecars when it writes.
+    """
+    sidecar = path.with_name(path.name + ".sha256")
+    if sidecar.is_file():
+        try:
+            # Typical form is "<digest>  <filename>", as written by sha256sum.
+            token = sidecar.read_text(encoding="utf-8", errors="replace").split()
+            if token and re.fullmatch(r"[a-fA-F0-9]{64}", token[0]):
+                return token[0].lower(), "sidecar"
+        except OSError as exc:
+            LOGGER.warning("cannot read sidecar %s: %s", sidecar.name, exc)
+    digest = manifest_hashes.get(path.name)
+    if digest:
+        return digest, "manifest"
+    return None, None
+
+
+def _datetime_from_epoch(epoch: float) -> str | None:
+    try:
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat(
+            timespec="seconds"
+        )
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _filter_by_mode(frame: pd.DataFrame, mode: str) -> pd.DataFrame:
+    """Match a ``mode`` query against the stored code or its PFLOW name."""
+    if "mode" not in frame.columns:
+        return frame
+    tokens = {mode.lower()}
+    code = MODE_CODE_BY_NAME.get(mode.lower())
+    if code:
+        tokens.add(code)
+    normalised = frame["mode"].astype(str).str.lower()
+    return frame.loc[normalised.isin(tokens)]
+
+
+def _resolve_time(
+    frame: pd.DataFrame, time_s: int | None, column: str, prefer: str
+) -> tuple[int | None, bool, list[ApiWarning]]:
+    """Pick a time slice, defaulting to the first or last available one.
+
+    Defaulting rather than erroring keeps the site usable against a run whose
+    model clock does not start at midnight. The response says which time was
+    served and that it was chosen by the API.
+    """
+    if column not in frame.columns or frame.empty:
+        return time_s, False, []
+    available = pd.to_numeric(frame[column], errors="coerce").dropna()
+    if available.empty:
+        return time_s, False, []
+    if time_s is not None:
+        return time_s, False, []
+    chosen = float(available.min()) if prefer == "first" else float(available.max())
+    return int(chosen), True, []
+
+
+def _connectivity_years(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """The per-year connectivity screening records, oldest first.
+
+    The artefact keys them by year *string*, which would leave every client to
+    sort strings itself. Keys the artefact does not fix are carried through
+    untouched, because a field the pipeline adds before the contract is updated
+    still has to reach the client.
+    """
+    years = payload.get("years")
+    if not isinstance(years, dict):
+        return []
+    records: list[dict[str, Any]] = []
+    for key, value in years.items():
+        if not isinstance(value, dict):
+            continue
+        record = dict(value)
+        if record.get("year") is None:
+            try:
+                record["year"] = int(key)
+            except (TypeError, ValueError):
+                record["year"] = None
+        records.append(record)
+    records.sort(key=lambda record: (record.get("year") is None, record.get("year") or 0))
+    return records
+
+
+def _drainage_point(
+    record: dict[str, Any], source_crs: str | None
+) -> dict[str, Any] | None:
+    """A WGS84 point for one screening cell.
+
+    The stored ``lon``/``lat`` columns are preferred because the index was
+    computed in the analysis CRS and these are already the geographic
+    coordinates. The projected pair is reprojected only when they are absent;
+    nothing is invented when neither is present.
+    """
+    lon, lat = record.get("lon"), record.get("lat")
+    if isinstance(lon, (int, float)) and isinstance(lat, (int, float)):
+        return {"type": "Point", "coordinates": [float(lon), float(lat)]}
+    x, y = record.get("x"), record.get("y")
+    if source_crs and isinstance(x, (int, float)) and isinstance(y, (int, float)):
+        return wkt_to_geometry(f"POINT ({x} {y})", source_crs)
+    return None
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Build the application.
+
+    ``settings`` is optional; tests pass one to pin a synthetic runs directory.
+    """
+    resolved = settings or get_settings()
+    app = FastAPI(
+        title="BKK/FLOW run artefact API",
+        version=__version__,
+        description=(
+            "Read-only service for immutable BKK/FLOW run artefacts. "
+            f"Implements contract {CONTRACT_VERSION}."
+        ),
+    )
+    app.state.settings = settings
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(resolved.cors_origins),
+        allow_credentials=False,
+        allow_methods=["GET"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+    )
+    install_error_handlers(app)
+    STATS_CACHE.configure(
+        max_entries=resolved.stats_cache_size, ttl_seconds=resolved.stats_cache_ttl_seconds
+    )
+
+    # ---------------------------------------------------------------- health
+
+    @app.get("/v1/health", response_model=HealthResponse, tags=["service"])
+    def health(ctx: SettingsDep) -> HealthResponse:
+        runs, _ = discover_runs(ctx.runs_dir)
+        return HealthResponse(
+            status="ok",
+            version=__version__,
+            contract_version=CONTRACT_VERSION,
+            runs_dir=str(ctx.runs_dir),
+            runs_dir_exists=ctx.runs_dir.is_dir(),
+            run_count=len(runs),
+        )
+
+    # --------------------------------------------------------------- sources
+
+    @app.get("/v1/sources", tags=["provenance"])
+    def get_sources(ctx: SettingsDep) -> dict[str, Any]:
+        """Serve ``data/source-registry.json`` verbatim.
+
+        A pass-through artefact: the registry is the licence record of record and
+        this service does not reinterpret a licence.
+        """
+        payload, _ = _read_json_object(ctx.source_registry_path)
+        if payload is None:
+            return {
+                "registry_version": None,
+                "sources": [],
+                "warnings": [
+                    {
+                        "code": "missing_artefact",
+                        "message": (
+                            f"source registry is unavailable at {ctx.source_registry_path}"
+                        ),
+                        "artefact": "source-registry.json",
+                    }
+                ],
+            }
+        payload.setdefault("sources", [])
+        return payload
+
+    # ----------------------------------------------------------------- runs
+
+    @app.get("/v1/runs", response_model=RunListResponse, tags=["runs"])
+    def list_runs(ctx: SettingsDep) -> RunListResponse:
+        runs, skipped = discover_runs(ctx.runs_dir)
+        summaries = [
+            RunSummary(
+                run_id=run.run_id,
+                created_at=run.created_at,
+                validation_status=run.validation_status,
+                stage=run.stage,
+                state=run.state,
+                population_version=run.population_version,
+                warnings_count=run.warnings_count,
+            )
+            for run in runs
+        ]
+        warnings = [
+            make_warning(
+                "skipped_run",
+                f"run '{run_id}' was skipped because its manifest could not be read",
+                "manifest.json",
+            )
+            for run_id in skipped
+        ]
+        return RunListResponse(
+            count=len(summaries), runs=summaries, skipped=skipped, warnings=warnings
+        )
+
+    @app.get("/v1/runs/{run_id}", response_model=RunDetailResponse, tags=["runs"])
+    def get_run(run_id: str, ctx: SettingsDep) -> RunDetailResponse:
+        run = resolve_run(run_id)
+        return RunDetailResponse(
+            run_id=run.run_id,
+            run_state=jsonable(run.run_state),
+            manifest=jsonable(run.manifest),
+            manifest_available=run.has_manifest,
+            warnings=list(run.warnings),
+        )
+
+    @app.get("/v1/runs/{run_id}/stats", tags=["runs"])
+    def get_stats(run_id: str, ctx: SettingsDep) -> dict[str, Any]:
+        """The contract section 4 payload.
+
+        Returned as a documented ``dict`` rather than a response model: when
+        ``stats.json`` exists it is served verbatim, and a model would silently
+        drop any field the pipeline adds before the contract is updated.
+        """
+        run = resolve_run(run_id)
+        cache_key = (run.run_id, stats_mtime(run.path))
+        cached = STATS_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
+        payload, _ = load_stats_file(run)
+        if payload is None:
+            pilot, _ = _read_json_object(ctx.pilot_config_path)
+            registry, _ = _read_json_object(ctx.source_registry_path)
+            payload = assemble_stats(run, pilot, registry)
+        STATS_CACHE.put(cache_key, payload)
+        return payload
+
+    # ----------------------------------------------------------------- mesh
+
+    @app.get("/v1/runs/{run_id}/mesh", response_model=MeshResponse, tags=["geometry"])
+    def get_mesh(
+        run_id: str,
+        ctx: SettingsDep,
+        time: Annotated[int | None, Query(ge=0, le=2_592_000)] = None,
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_MESH_ROW_LIMIT,
+    ) -> MeshResponse:
+        """One time slice of ``mesh_volume.parquet`` as GeoJSON-ready rows."""
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+
+        frame, read_warnings = read_parquet(artefact_path(run, "mesh_volume.parquet"))
+        warnings.extend(read_warnings)
+        if frame is None:
+            return MeshResponse(
+                run_id=run.run_id, limit=limit, rows=[], features=[], warnings=warnings
+            )
+
+        available_time_values = (
+            pd.to_numeric(frame["time_s"], errors="coerce").dropna().unique().tolist()
+            if "time_s" in frame.columns
+            else []
+        )
+        available_times = sorted({int(value) for value in available_time_values})
+
+        time_s, defaulted, time_warnings = _resolve_time(
+            frame, time, "time_s", prefer="first"
+        )
+        warnings.extend(time_warnings)
+        if time_s is not None and "time_s" in frame.columns:
+            frame = frame.loc[
+                pd.to_numeric(frame["time_s"], errors="coerce") == float(time_s)
+            ]
+        if time is not None and frame.empty and defaulted is False:
+            warnings.append(
+                make_warning(
+                    "no_rows",
+                    f"mesh_volume.parquet has no rows at time {time}s",
+                    "mesh_volume.parquet",
+                )
+            )
+
+        gcode_column = "gcode" if "gcode" in frame.columns else None
+        if gcode_column is None:
+            warnings.append(
+                make_warning(
+                    "schema_mismatch",
+                    "mesh_volume.parquet has no gcode column; rows are returned "
+                    "without a cell identifier",
+                    "mesh_volume.parquet",
+                )
+            )
+            lat = pd.Series([None] * len(frame), index=frame.index, dtype="object")
+            lon = pd.Series([None] * len(frame), index=frame.index, dtype="object")
+        else:
+            lat, lon, coord_warnings = resolve_mesh_coordinates(run, frame, gcode_column)
+            warnings.extend(coord_warnings)
+
+        selected = pd.DataFrame(index=frame.index)
+        for column in MESH_ROW_COLUMNS:
+            if column in ("lat", "lon"):
+                selected[column] = lat if column == "lat" else lon
+            elif column in frame.columns:
+                selected[column] = frame[column]
+
+        matched = len(selected)
+        truncated = matched > limit
+        if truncated:
+            selected = selected.head(limit)
+            warnings.append(
+                make_warning(
+                    "truncated",
+                    f"{matched - limit} mesh rows were dropped by the limit of {limit}",
+                    "mesh_volume.parquet",
+                )
+            )
+
+        rows = jsonable_rows(selected)
+        features = [
+            feature(
+                {"type": "Point", "coordinates": [row["lon"], row["lat"]]},
+                {**row, "population_quantity": "people_present"},
+            )
+            for row in rows
+            if isinstance(row.get("lon"), (int, float))
+            and isinstance(row.get("lat"), (int, float))
+        ]
+        return MeshResponse(
+            run_id=run.run_id,
+            time_s=time_s,
+            time_defaulted=defaulted,
+            available_times=available_times,
+            columns=[column for column in MESH_ROW_COLUMNS if column in selected.columns],
+            matched_rows=matched,
+            returned=len(selected),
+            truncated=truncated,
+            limit=limit,
+            rows=rows,
+            features=features,
+            warnings=warnings,
+        )
+
+    # ---------------------------------------------------------------- flood
+
+    @app.get("/v1/runs/{run_id}/flood", tags=["geometry"])
+    def get_flood(
+        run_id: str,
+        ctx: SettingsDep,
+        time: Annotated[int | None, Query(ge=0, le=2_592_000)] = None,
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_MESH_ROW_LIMIT,
+    ) -> dict[str, Any]:
+        """One positive-depth slice of ``flood_slices.parquet`` as WGS84 GeoJSON.
+
+        Flood cells are deliberately separate from population mesh features:
+        they represent a different quantity and may have a different grid.
+        When a slice exceeds the response cap, evenly spaced cells in stable
+        spatial order preserve coverage instead of ranking only deep cells.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        frame, read_warnings = read_parquet(artefact_path(run, "flood_slices.parquet"))
+        warnings.extend(read_warnings)
+        if frame is None:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "run_id": run.run_id,
+                "available": False,
+                "time_s": time,
+                "time_defaulted": False,
+                "available_times": [],
+                "peak_time_s": None,
+                "matched_rows": 0,
+                "returned": 0,
+                "truncated": False,
+                "limit": limit,
+                "sample_is_spatial_subset": False,
+                "warnings": warnings,
+            }
+
+        available_time_values = (
+            pd.to_numeric(frame["time_s"], errors="coerce").dropna().unique().tolist()
+            if "time_s" in frame.columns
+            else []
+        )
+        available_times = sorted({int(value) for value in available_time_values})
+        peak_time_s: int | None = None
+        if "time_s" in frame.columns and "depth_m" in frame.columns and not frame.empty:
+            numeric_depth = pd.to_numeric(frame["depth_m"], errors="coerce")
+            if numeric_depth.notna().any():
+                peak_time_s = int(frame.loc[numeric_depth.idxmax(), "time_s"])
+
+        time_s, defaulted, time_warnings = _resolve_time(
+            frame, time, "time_s", prefer="first"
+        )
+        warnings.extend(time_warnings)
+        if time_s is not None and "time_s" in frame.columns:
+            frame = frame.loc[
+                pd.to_numeric(frame["time_s"], errors="coerce") == float(time_s)
+            ]
+        if "depth_m" in frame.columns:
+            frame = frame.loc[pd.to_numeric(frame["depth_m"], errors="coerce") > 0]
+        else:
+            warnings.append(
+                make_warning(
+                    "schema_mismatch",
+                    "flood_slices.parquet has no depth_m column; no flood extent can be served",
+                    "flood_slices.parquet",
+                )
+            )
+            frame = frame.iloc[0:0]
+
+        coordinate_columns = {"x", "y"}
+        if not coordinate_columns.issubset(frame.columns):
+            warnings.append(
+                make_warning(
+                    "missing_geometry",
+                    "flood_slices.parquet has no x/y coordinates; no flood geometry can be served",
+                    "flood_slices.parquet",
+                )
+            )
+            frame = frame.iloc[0:0]
+
+        sort_columns = [column for column in ("y", "x", "cell_id") if column in frame.columns]
+        if sort_columns:
+            frame = frame.sort_values(sort_columns, kind="stable")
+        matched = len(frame)
+        truncated = matched > limit
+        if truncated:
+            if limit == 1:
+                positions = [matched // 2]
+            else:
+                positions = [
+                    round(index * (matched - 1) / (limit - 1)) for index in range(limit)
+                ]
+            frame = frame.iloc[positions]
+            warnings.append(
+                make_warning(
+                    "truncated",
+                    f"{matched - limit} flood cells were omitted by spatial coverage sampling",
+                    "flood_slices.parquet",
+                )
+            )
+
+        source_crs = _analysis_crs(run)
+        features: list[dict[str, Any]] = []
+        for record in jsonable_rows(frame):
+            x, y = record.get("x"), record.get("y")
+            if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                continue
+            geometry = wkt_to_geometry(f"POINT ({x} {y})", source_crs)
+            if geometry is None:
+                continue
+            properties = {
+                column: record.get(column)
+                for column in FLOOD_CELL_COLUMNS
+                if column in record
+            }
+            features.append(feature(geometry, properties))
+
+        if len(features) < len(frame):
+            warnings.append(
+                make_warning(
+                    "missing_geometry",
+                    f"{len(frame) - len(features)} flood cells had unusable coordinates",
+                    "flood_slices.parquet",
+                )
+            )
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "run_id": run.run_id,
+            "available": True,
+            "time_s": time_s,
+            "time_defaulted": defaulted,
+            "available_times": available_times,
+            "peak_time_s": peak_time_s,
+            "matched_rows": matched,
+            "returned": len(features),
+            "truncated": truncated,
+            "limit": limit,
+            "sample_is_spatial_subset": truncated,
+            "warnings": warnings,
+        }
+
+    # ---------------------------------------------------------------- links
+
+    @app.get("/v1/runs/{run_id}/links", response_model=LinksResponse, tags=["geometry"])
+    def get_links(
+        run_id: str,
+        ctx: SettingsDep,
+        time: Annotated[int | None, Query(ge=0, le=2_592_000)] = None,
+        mode: Annotated[str | None, Query(max_length=32)] = None,
+        limit: Annotated[
+            int, Query(ge=1, le=MAX_ROW_LIMIT)
+        ] = DEFAULT_LINK_FEATURE_LIMIT,
+    ) -> LinksResponse:
+        """Edge states joined to network geometry as a GeoJSON FeatureCollection."""
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+
+        states, read_warnings = read_parquet(
+            artefact_path(run, "edge_states.parquet"), columns=list(EDGE_STATE_COLUMNS)
+        )
+        warnings.extend(read_warnings)
+        if states is None or states.empty:
+            return LinksResponse(
+                features=[],
+                meta=LinksMeta(
+                    run_id=run.run_id,
+                    time_s=time,
+                    mode=mode,
+                    limit=limit,
+                    geometry_available=False,
+                    warnings=warnings,
+                ),
+            )
+
+        if mode:
+            states = _filter_by_mode(states, mode)
+
+        time_s, defaulted, time_warnings = _resolve_time(
+            states, time, "time_s", prefer="last"
+        )
+        warnings.extend(time_warnings)
+        if time_s is not None and "time_s" in states.columns:
+            states = states.loc[
+                pd.to_numeric(states["time_s"], errors="coerce") == float(time_s)
+            ]
+        if time is not None and states.empty and not defaulted:
+            # A model clock does not necessarily start at midnight, so an
+            # explicit time outside the run's range must be reported, not
+            # silently answered with an empty map.
+            warnings.append(
+                make_warning(
+                    "no_rows",
+                    f"edge_states.parquet has no rows at time {time}s",
+                    "edge_states.parquet",
+                )
+            )
+
+        # link_volume is keyed on hour, not seconds, so it joins to the slice's
+        # whole hour. A null hour column is left absent rather than guessed.
+        volumes, volume_warnings = read_parquet(
+            artefact_path(run, "link_volume.parquet"), columns=list(LINK_VOLUME_COLUMNS)
+        )
+        warnings.extend(volume_warnings)
+        if volumes is not None and not volumes.empty and time_s is not None:
+            if "hour" in volumes.columns and "edge_id" in volumes.columns:
+                hour = time_s // 3600
+                volumes = volumes.loc[
+                    pd.to_numeric(volumes["hour"], errors="coerce") == float(hour)
+                ]
+                if mode and "mode" in volumes.columns:
+                    volumes = _filter_by_mode(volumes, mode)
+                join_on = ["edge_id"] + (["mode"] if "mode" in states.columns and "mode" in volumes.columns else [])
+                states = states.merge(volumes, on=join_on, how="left")
+            else:
+                warnings.append(
+                    make_warning(
+                        "schema_mismatch",
+                        "link_volume.parquet has no edge_id/hour pair; volume was not joined",
+                        "link_volume.parquet",
+                    )
+                )
+
+        edges, edge_warnings = read_parquet(
+            artefact_path(run, "network_edges.parquet"), columns=list(EDGE_COLUMNS)
+        )
+        warnings.extend(edge_warnings)
+        geometry_available = False
+        if edges is not None and not edges.empty and "edge_id" in edges.columns:
+            states = states.merge(edges, on="edge_id", how="left")
+            geometry_available = bool(states.get("geometry_wkt").notna().any())
+        else:
+            warnings.append(
+                make_warning(
+                    "missing_artefact",
+                    "network_edges.parquet is unavailable; features are returned with "
+                    "null geometry",
+                    "network_edges.parquet",
+                )
+            )
+
+        matched = len(states)
+        truncated = matched > limit
+        if truncated:
+            states = states.head(limit)
+            warnings.append(
+                make_warning(
+                    "truncated",
+                    f"{matched - limit} edge features were dropped by the limit of {limit}",
+                    "edge_states.parquet",
+                )
+            )
+
+        features: list[dict[str, Any]] = []
+        for record in states.to_dict(orient="records"):
+            geometry = wkt_to_geometry(record.get("geometry_wkt"), _analysis_crs(run))
+            properties = {
+                key: value
+                for key, value in record.items()
+                if key not in ("geometry_wkt", "u", "v")
+            }
+            features.append(feature(geometry, properties))
+
+        return LinksResponse(
+            features=features,
+            meta=LinksMeta(
+                run_id=run.run_id,
+                time_s=time_s,
+                time_defaulted=defaulted,
+                mode=mode,
+                matched_features=matched,
+                returned=len(features),
+                truncated=truncated,
+                limit=limit,
+                geometry_available=geometry_available,
+                warnings=warnings,
+            ),
+        )
+
+    # ------------------------------------------------------------ buildings
+
+    @app.get(
+        "/v1/runs/{run_id}/buildings", response_model=BuildingsResponse, tags=["exposure"]
+    )
+    def get_buildings(
+        run_id: str,
+        ctx: SettingsDep,
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_BUILDING_ROW_LIMIT,
+    ) -> BuildingsResponse:
+        """Aggregated building exposure.
+
+        The contract has no frozen column list for buildings.parquet, so the
+        handler drops anything that looks person-level and reports what it
+        dropped. No person-level field leaves the service from any endpoint.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+
+        frame, read_warnings = read_parquet(artefact_path(run, "buildings.parquet"))
+        warnings.extend(read_warnings)
+        if frame is None:
+            return BuildingsResponse(
+                meta=BuildingsMeta(run_id=run.run_id, limit=limit, warnings=warnings)
+            )
+
+        columns = [str(column) for column in frame.columns]
+        dropped = sorted(
+            column
+            for column in columns
+            if column.lower() in SENSITIVE_COLUMNS
+            or any(token in column.lower() for token in _SENSITIVE_SUBSTRINGS)
+        )
+        if dropped:
+            frame = frame.drop(columns=[column for column in dropped if column in frame.columns])
+            warnings.append(
+                make_warning(
+                    "columns_omitted",
+                    f"person-level or protected columns were omitted: {dropped}",
+                    "buildings.parquet",
+                )
+            )
+
+        geometry_column = next(
+            (column for column in _BUILDING_GEOMETRY_COLUMNS if column in frame.columns),
+            None,
+        )
+        has_lon_lat = "lon" in frame.columns and "lat" in frame.columns
+        geometry_available = bool(geometry_column) or has_lon_lat
+
+        matched = len(frame)
+        truncated = matched > limit
+        if truncated:
+            frame = frame.head(limit)
+            warnings.append(
+                make_warning(
+                    "truncated",
+                    f"{matched - limit} building rows were dropped by the limit of {limit}",
+                    "buildings.parquet",
+                )
+            )
+
+        features: list[dict[str, Any]] = []
+        if geometry_available:
+            for record in frame.to_dict(orient="records"):
+                geometry = None
+                if geometry_column:
+                    geometry = wkt_to_geometry(record.get(geometry_column), _analysis_crs(run))
+                elif has_lon_lat:
+                    lon = record.get("lon")
+                    lat = record.get("lat")
+                    if lon is not None and lat is not None:
+                        geometry = {
+                            "type": "Point",
+                            "coordinates": [jsonable(lon), jsonable(lat)],
+                        }
+                properties = {
+                    key: value
+                    for key, value in record.items()
+                    if key not in _BUILDING_GEOMETRY_COLUMNS
+                }
+                features.append(feature(geometry, properties))
+        else:
+            warnings.append(
+                make_warning(
+                    "missing_geometry",
+                    "buildings.parquet carries no geometry column; rows are returned "
+                    "without a map layer",
+                    "buildings.parquet",
+                )
+            )
+
+        return BuildingsResponse(
+            features=features,
+            rows=[] if geometry_available else jsonable_rows(frame),
+            meta=BuildingsMeta(
+                run_id=run.run_id,
+                matched_rows=matched,
+                returned=len(features) if geometry_available else len(frame),
+                truncated=truncated,
+                limit=limit,
+                geometry_available=geometry_available,
+                columns=[str(column) for column in frame.columns],
+                omitted_columns=dropped,
+                warnings=warnings,
+            ),
+        )
+
+    # ----------------------------------------------------------- evacuation
+
+    @app.get(
+        "/v1/runs/{run_id}/evacuation", response_model=EvacuationResponse, tags=["exposure"]
+    )
+    def get_evacuation(run_id: str, ctx: SettingsDep) -> EvacuationResponse:
+        """State distribution, clearance percentiles and unserved/stranded totals."""
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+
+        states, read_warnings = read_parquet(
+            artefact_path(run, "evacuation_states.parquet"),
+            columns=list(EVACUATION_COLUMNS),
+        )
+        warnings.extend(read_warnings)
+        if states is None or states.empty or "state" not in states.columns:
+            if states is not None and states.empty:
+                # The table exists and is readable but holds no records. That is
+                # a different finding from a missing table, and the site must not
+                # render the two identically.
+                warnings.append(
+                    make_warning(
+                        "empty_table",
+                        "evacuation_states.parquet exists but contains no records; "
+                        "no evacuation result was produced by this run",
+                        "evacuation_states.parquet",
+                    )
+                )
+            elif states is not None:
+                warnings.append(
+                    make_warning(
+                        "schema_mismatch",
+                        "evacuation_states.parquet has no state column",
+                        "evacuation_states.parquet",
+                    )
+                )
+            return EvacuationResponse(
+                run_id=run.run_id, available=False, warnings=warnings
+            )
+
+        weights = (
+            pd.to_numeric(states["weight"], errors="coerce")
+            if "weight" in states.columns
+            else None
+        )
+        total_weight = (
+            float(weights.sum())
+            if weights is not None and float(weights.sum()) > 0
+            else None
+        )
+
+        distribution: list[StateShare] = []
+        for state, group in states.groupby("state", dropna=True, sort=True):
+            group_weights = (
+                pd.to_numeric(group["weight"], errors="coerce")
+                if "weight" in group.columns
+                else None
+            )
+            weight = (
+                float(group_weights.sum())
+                if group_weights is not None and group_weights.notna().any()
+                else None
+            )
+            share = (
+                weight / total_weight
+                if weight is not None and total_weight not in (None, 0.0)
+                else None
+            )
+            distribution.append(
+                StateShare(
+                    state=str(state),
+                    count=int(len(group)),
+                    weight=weight,
+                    share=share,
+                )
+            )
+
+        cohort = arrived = unserved = stranded = None
+        if total_weight is not None:
+
+            def _sum(mask: pd.Series) -> float | None:
+                subset = weights[mask]
+                return float(subset.sum()) if subset.notna().any() else None
+
+            cohort = _sum(states["state"] != EVACUATION_NOT_ELIGIBLE_STATE)
+            arrived = _sum(states["state"] == EVACUATION_ARRIVED_STATE)
+            unserved = _sum(states["state"].isin(EVACUATION_UNSERVED_STATES))
+            stranded = _sum(states["state"] == "stranded")
+
+        clearance = ClearanceTimes()
+        if "event_time_s" in states.columns:
+            times = _clearance_times(states, warnings)
+            clearance = ClearanceTimes(**times)
+        else:
+            warnings.append(
+                make_warning(
+                    "schema_mismatch",
+                    "evacuation_states.parquet has no event_time_s column; clearance "
+                    "percentiles are null",
+                    "evacuation_states.parquet",
+                )
+            )
+
+        return EvacuationResponse(
+            run_id=run.run_id,
+            available=True,
+            state_distribution=distribution,
+            clearance_time_minutes=clearance,
+            totals=EvacuationTotals(
+                cohort_weighted=cohort,
+                arrived_weighted=arrived,
+                unserved_weighted=unserved,
+                stranded_weighted=stranded,
+            ),
+            warnings=warnings,
+        )
+
+    # --------------------------------------------------------------- routes
+
+    @app.get("/v1/runs/{run_id}/routes", tags=["geometry"])
+    def get_routes(run_id: str, ctx: SettingsDep) -> dict[str, Any]:
+        """Aggregate evacuation bottleneck edges as GeoJSON.
+
+        The privacy contract forbids publishing full person trajectories. The
+        run's already-aggregated top bottlenecks are safe to join to network
+        geometry and are the finest evacuation route layer this API exposes.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        stats, stats_warnings = load_stats_file(run)
+        warnings.extend(stats_warnings)
+        if stats is None:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "run_id": run.run_id,
+                "available": False,
+                "returned": 0,
+                "quantity": "aggregate_evacuation_bottleneck",
+                "warnings": warnings,
+            }
+
+        evacuation = stats.get("evacuation")
+        records = (
+            evacuation.get("top_bottleneck_edges", [])
+            if isinstance(evacuation, dict)
+            else []
+        )
+        bottlenecks = [record for record in records if isinstance(record, dict)]
+        edge_ids = [str(record["edge_id"]) for record in bottlenecks if record.get("edge_id")]
+        if not edge_ids:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "run_id": run.run_id,
+                "available": False,
+                "returned": 0,
+                "quantity": "aggregate_evacuation_bottleneck",
+                "warnings": warnings,
+            }
+
+        edges, edge_warnings = read_parquet(
+            artefact_path(run, "network_edges.parquet"), columns=list(EDGE_COLUMNS)
+        )
+        warnings.extend(edge_warnings)
+        if edges is None or "edge_id" not in edges.columns:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "run_id": run.run_id,
+                "available": False,
+                "returned": 0,
+                "quantity": "aggregate_evacuation_bottleneck",
+                "warnings": warnings,
+            }
+
+        by_id = {str(record["edge_id"]): record for record in bottlenecks}
+        rank = {edge_id: index for index, edge_id in enumerate(edge_ids)}
+        selected = edges.loc[edges["edge_id"].astype(str).isin(edge_ids)].copy()
+        selected["_rank"] = selected["edge_id"].astype(str).map(rank)
+        selected = selected.sort_values("_rank", kind="stable")
+
+        features: list[dict[str, Any]] = []
+        for record in selected.to_dict(orient="records"):
+            edge_id = str(record["edge_id"])
+            geometry = wkt_to_geometry(record.get("geometry_wkt"), _analysis_crs(run))
+            if geometry is None:
+                continue
+            summary = by_id[edge_id]
+            properties = {
+                "edge_id": edge_id,
+                "traversal_weight": jsonable(summary.get("traversal_weight")),
+                "route_quantity": "aggregate_evacuation_bottleneck",
+            }
+            features.append(feature(geometry, properties))
+
+        if len(features) < len(edge_ids):
+            warnings.append(
+                make_warning(
+                    "missing_geometry",
+                    f"{len(edge_ids) - len(features)} bottleneck edges had no usable geometry",
+                    "network_edges.parquet",
+                )
+            )
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "run_id": run.run_id,
+            "available": bool(features),
+            "returned": len(features),
+            "quantity": "aggregate_evacuation_bottleneck",
+            "warnings": warnings,
+        }
+
+    # ----------------------------------------------------------- validation
+
+    @app.get(
+        "/v1/runs/{run_id}/validation", response_model=ValidationResponse, tags=["runs"]
+    )
+    def get_validation(run_id: str, ctx: SettingsDep) -> ValidationResponse:
+        """Serve ``validation.json`` verbatim: checks, thresholds and results."""
+        run = resolve_run(run_id)
+        payload, warnings = _read_json_object(artefact_path(run, "validation.json"))
+        if payload is None:
+            return ValidationResponse(
+                run_id=run.run_id, available=False, validation=None, warnings=warnings
+            )
+        return ValidationResponse(
+            run_id=run.run_id, available=True, validation=payload, warnings=[]
+        )
+
+    # --------------------------------------------------------------- export
+
+    @app.get("/v1/runs/{run_id}/export", response_model=ExportResponse, tags=["runs"])
+    def get_export(
+        run_id: str,
+        ctx: SettingsDep,
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = MAX_ROW_LIMIT,
+    ) -> ExportResponse:
+        """Manifest plus an inventory of the run directory.
+
+        Only metadata is listed. Contents are never streamed: a run can hold
+        hundreds of megabytes of Parquet, and this endpoint describes the bundle
+        rather than shipping it. sha256 values are only reported when a sidecar
+        file or the manifest already records one, so no large file is read here.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+
+        manifest_hashes: dict[str, str] = {}
+        for output in run.manifest.get("outputs", []) or []:
+            if not isinstance(output, dict):
+                continue
+            uri = output.get("uri")
+            digest = output.get("content_sha256")
+            if isinstance(uri, str) and isinstance(digest, str):
+                manifest_hashes[Path(uri).name] = digest
+
+        artefacts: list[ArtefactEntry] = []
+        total_bytes = 0
+        truncated = False
+        try:
+            found = sorted(
+                (path for path in run.path.rglob("*") if path.is_file()),
+                key=lambda path: path.relative_to(run.path).as_posix(),
+            )
+        except OSError as exc:
+            LOGGER.warning("run %s: cannot list artefacts: %s", run.run_id, exc)
+            found = []
+            warnings.append(
+                make_warning(
+                    "unreadable_artefact",
+                    f"the run directory could not be listed: {exc}",
+                )
+            )
+
+        for path in found:
+            relative = path.relative_to(run.path).as_posix()
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            total_bytes += stat.st_size
+            if len(artefacts) >= limit:
+                truncated = True
+                continue
+
+            digest, source = _sidecar_digest(path, manifest_hashes)
+            artefacts.append(
+                ArtefactEntry(
+                    path=relative,
+                    size_bytes=int(stat.st_size),
+                    modified_at=_datetime_from_epoch(stat.st_mtime),
+                    sha256=digest,
+                    sha256_source=source,
+                )
+            )
+
+        if truncated:
+            warnings.append(
+                make_warning(
+                    "truncated",
+                    f"the artefact list was capped at {limit} entries",
+                )
+            )
+
+        return ExportResponse(
+            run_id=run.run_id,
+            validation_status=run.validation_status,
+            created_at=run.created_at,
+            manifest=jsonable(run.manifest),
+            artefact_count=len(found),
+            total_bytes=total_bytes,
+            truncated=truncated,
+            limit=limit,
+            artefacts=artefacts,
+            warnings=warnings,
+        )
+
+    # --------------------------------------------------------------- config
+
+    @app.get("/v1/config", response_model=ConfigResponse, tags=["service"])
+    def get_config(ctx: SettingsDep) -> ConfigResponse:
+        """Pilot AOI, CRS, aggregation grid and the declared scenario status."""
+        pilot, warnings = _read_json_object(ctx.pilot_config_path)
+        if pilot is None:
+            return ConfigResponse(warnings=warnings)
+
+        aoi_raw = pilot.get("aoi") if isinstance(pilot.get("aoi"), dict) else {}
+        grid = pilot.get("aggregation_grid")
+        runs, _ = discover_runs(ctx.runs_dir)
+
+        scenario: dict[str, Any] = {
+            "declared": False,
+            "pilot_decision_status": pilot.get("decision_status"),
+            "model_name": None,
+            "model_version": None,
+            "time_step_seconds": None,
+            "runs_declaring_scenario": 0,
+            "latest_run_id": None,
+        }
+        declaring = 0
+        for run in runs:
+            scenario_block = run.manifest.get("flood_scenario")
+            if not isinstance(scenario_block, dict):
+                continue
+            declaring += 1
+            scenario.update(
+                {
+                    "model_name": scenario_block.get("model_name"),
+                    "model_version": scenario_block.get("model_version"),
+                    "time_step_seconds": scenario_block.get("time_step_seconds"),
+                    "latest_run_id": run.run_id,
+                }
+            )
+        scenario["declared"] = declaring > 0
+        scenario["runs_declaring_scenario"] = declaring
+        if not declaring:
+            warnings.append(
+                make_warning(
+                    "no_scenario_declared",
+                    "no run in this runs directory declares a flood scenario",
+                )
+            )
+
+        return ConfigResponse(
+            aoi=AoiSummary(
+                aoi_id=aoi_raw.get("aoi_id"),
+                name=aoi_raw.get("name"),
+                name_en=aoi_raw.get("name_en"),
+                area_km2=(
+                    float(aoi_raw["area_km2"])
+                    if isinstance(aoi_raw.get("area_km2"), (int, float))
+                    and not isinstance(aoi_raw.get("area_km2"), bool)
+                    else None
+                ),
+                **{k: v for k, v in aoi_raw.items() if k not in {"aoi_id", "name", "name_en", "area_km2"}},
+            ),
+            analysis_crs=pilot.get("analysis_crs"),
+            storage_crs=pilot.get("storage_crs"),
+            aggregation_grid=jsonable(grid) if isinstance(grid, dict) else {},
+            decision_status=pilot.get("decision_status"),
+            resolved_at=pilot.get("resolved_at"),
+            scenario=scenario,
+            warnings=warnings,
+        )
+
+    @app.get("/v1/areas/bangkok", tags=["geometry"])
+    def get_bangkok_study_area(ctx: SettingsDep) -> dict[str, Any]:
+        """The full Bangkok Metropolitan Administration boundary in WGS84.
+
+        This reference layer is independent of the selected run. Pilot output
+        remains pilot output, but every client can retain the full-city study
+        area as its map frame and avoid presenting a district as all Bangkok.
+        """
+        boundary, warnings = _read_json_object(ctx.bangkok_aoi_path)
+        city_config, config_warnings = _read_json_object(ctx.city_config_path)
+        warnings.extend(config_warnings)
+
+        aoi = (
+            city_config.get("aoi", {})
+            if isinstance(city_config, dict) and isinstance(city_config.get("aoi"), dict)
+            else {}
+        )
+        features: list[dict[str, Any]] = []
+        if boundary is not None and boundary.get("type") == "FeatureCollection":
+            raw_features = boundary.get("features")
+            if isinstance(raw_features, list):
+                for raw_feature in raw_features:
+                    if not isinstance(raw_feature, dict):
+                        continue
+                    item = dict(raw_feature)
+                    raw_properties = item.get("properties")
+                    properties = (
+                        dict(raw_properties) if isinstance(raw_properties, dict) else {}
+                    )
+                    properties.update(
+                        {
+                            "scope": "study_area",
+                            "area_name": aoi.get("name_en", "Bangkok"),
+                            "area_km2": aoi.get("area_km2"),
+                            "geometry_source": aoi.get("geometry_source"),
+                            "attribution": aoi.get("attribution"),
+                        }
+                    )
+                    item["properties"] = properties
+                    features.append(item)
+        elif boundary is not None:
+            warnings.append(
+                make_warning(
+                    "invalid_geometry",
+                    "bangkok-bma.geojson is not a GeoJSON FeatureCollection",
+                    ctx.bangkok_aoi_path.name,
+                )
+            )
+
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "area_id": aoi.get("aoi_id", "bangkok-bma"),
+            "area_name": aoi.get("name_en", "Bangkok"),
+            "area_km2": aoi.get("area_km2"),
+            "bbox_wgs84": aoi.get("bbox_wgs84"),
+            "coverage": "full_bangkok_metropolitan_administration",
+            "warnings": [warning.model_dump(mode="json") for warning in warnings],
+        }
+
+    @app.get("/v1/runs/{run_id}/population-grid")
+    def get_population_grid(
+        run_id: str,
+        ctx: SettingsDep,
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_MESH_ROW_LIMIT,
+    ) -> dict[str, Any]:
+        """The aggregated resident baseline on its public reporting grid.
+
+        City runs publish a 1 km grid rather than a 100 m mesh, so this is a
+        distinct artefact from the pilot's ``mesh_volume.parquet``. The
+        aggregation conserves the population total exactly, which the run's own
+        validation report checks.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        frame, read_warnings = read_parquet(artefact_path(run, "population_grid_1km.parquet"))
+        warnings.extend(read_warnings)
+        if frame is None:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "run_id": run.run_id,
+                "available": False,
+                "rows": [],
+                "matched_rows": 0,
+                "returned": 0,
+                "truncated": False,
+                "limit": limit,
+                "warnings": [
+                    make_warning(
+                        "artefact_missing",
+                        "this run has no population_grid_1km.parquet; pilot runs publish "
+                        "mesh_volume.parquet instead, served by /mesh",
+                        "population_grid_1km.parquet",
+                    )
+                ],
+            }
+
+        matched = len(frame)
+        truncated = matched > limit
+        if truncated:
+            frame = frame.head(limit)
+            warnings.append(
+                make_warning(
+                    "truncated",
+                    f"{matched - limit} grid cells were dropped by the limit of {limit}",
+                    "population_grid_1km.parquet",
+                )
+            )
+        rows = jsonable_rows(frame)
+        features = []
+        for row in rows:
+            geometry = wkt_to_geometry(row.get("geometry_wkt"), None)
+            if geometry is None:
+                continue
+            properties = {
+                key: value for key, value in row.items() if key != "geometry_wkt"
+            }
+            properties["total_pop"] = row.get("pop")
+            properties["population_quantity"] = "resident_baseline"
+            features.append(feature(geometry, properties))
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "run_id": run.run_id,
+            "available": True,
+            "grid_size_m": 1000,
+            "quantity": "resident_baseline",
+            "quantity_note": (
+                "Residents per cell. This is a resident baseline, not a time-of-day "
+                "population, and it is never summed with exposed or cohort figures."
+            ),
+            "columns": [str(column) for column in frame.columns],
+            "matched_rows": matched,
+            "returned": int(len(frame)),
+            "truncated": truncated,
+            "limit": limit,
+            "rows": rows,
+            "warnings": warnings,
+        }
+
+    @app.get("/v1/runs/{run_id}/observed-water")
+    def get_observed_water(run_id: str, ctx: SettingsDep) -> dict[str, Any]:
+        """Observed surface-water extent, when the run carries an observation.
+
+        This is the only hazard layer in the project that is measured rather
+        than modelled or declared. It reports **extent**, never depth, and a
+        yearly composite cannot resolve within-year timing. Both facts are
+        repeated in the payload so a client cannot present it as a forecast.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        payload, json_warnings = _read_json_object(artefact_path(run, "observed_water.json"))
+        warnings.extend(json_warnings)
+        if payload is None:
+            return {
+                "run_id": run.run_id,
+                "available": False,
+                "is_observation": False,
+                "years": [],
+                "warnings": [
+                    make_warning(
+                        "artefact_missing",
+                        "this run has no observed_water.json; it carries no observed hazard layer",
+                        "observed_water.json",
+                    )
+                ],
+            }
+        return {
+            "run_id": run.run_id,
+            "available": payload.get("status") == "ok",
+            "status": payload.get("status"),
+            "is_observation": True,
+            "source_id": payload.get("source_id"),
+            "licence": payload.get("licence"),
+            "product": payload.get("product"),
+            "measures": payload.get("measures"),
+            "baseline_year": payload.get("baseline_year"),
+            "years": jsonable(payload.get("years", [])),
+            "unavailable_years": jsonable(payload.get("unavailable_years", [])),
+            "interpretation_notes": payload.get("interpretation_notes", []),
+            "note": payload.get("note"),
+            "warnings": warnings,
+        }
+
+    @app.get("/v1/runs/{run_id}/observed-water/cells")
+    def get_observed_water_cells(
+        run_id: str,
+        ctx: SettingsDep,
+        year: int | None = Query(default=None),
+        min_share: float = Query(default=0.05, ge=0.0, le=1.0),
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_MESH_ROW_LIMIT,
+    ) -> dict[str, Any]:
+        """Observed water as 1 km cells, ready for the map.
+
+        Aggregated to the same fixed 1 km public grid as the population layer,
+        because the source 30 m classification would otherwise mean hundreds of
+        thousands of points. `min_share` filters the long tail of cells with a
+        handful of water pixels, which otherwise hides the real pattern.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        frame, read_warnings = read_parquet(
+            ctx.data_dir / "curated" / "city" / "observed_water_cells.parquet"
+        )
+        warnings.extend(read_warnings)
+        if frame is None:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "available": False,
+                "warnings": [
+                    make_warning(
+                        "artefact_missing",
+                        "no observed_water_cells.parquet has been staged; run "
+                        "pipeline/build_observed_cells.py to build it from the cached tiles",
+                        "observed_water_cells.parquet",
+                    )
+                ],
+            }
+
+        years = sorted(int(value) for value in frame["year"].unique())
+        available_years = years
+        if year is not None:
+            if year not in years:
+                warnings.append(
+                    make_warning(
+                        "year_not_available",
+                        f"{year} is not among the staged years {years}; the wettest staged year is used",
+                        "observed_water_cells.parquet",
+                    )
+                )
+            else:
+                frame = frame[frame["year"] == year]
+        if frame.empty:
+            frame = pd.read_parquet(ctx.data_dir / "curated" / "city" / "observed_water_cells.parquet")
+            frame = frame[frame["year"] == max(years)]
+
+        filtered = frame[frame["water_share"] >= min_share]
+        if filtered.empty:
+            filtered = frame
+
+        matched = len(filtered)
+        truncated = matched > limit
+        if truncated:
+            filtered = filtered.sort_values("water_km2", ascending=False).head(limit)
+            warnings.append(
+                make_warning(
+                    "truncated",
+                    f"{matched - limit} cells were dropped by the limit of {limit}, keeping the wettest",
+                    "observed_water_cells.parquet",
+                )
+            )
+
+        features = [
+            feature(
+                {"type": "Point", "coordinates": [float(row.lon), float(row.lat)]},
+                {
+                    "cell_id": row.cell_id,
+                    "year": int(row.year),
+                    "water_share": float(row.water_share),
+                    "water_km2": float(row.water_km2),
+                    "source_role": "observed",
+                    "measures": "extent_only",
+                },
+            )
+            for row in filtered.itertuples()
+        ]
+        return {
+            "type": "FeatureCollection",
+            "available": True,
+            "run_id": run.run_id,
+            "grid_size_m": 1000,
+            "is_observation": True,
+            "measures": "water extent, NOT depth, duration or direction",
+            "available_years": available_years,
+            "year": int(filtered["year"].iloc[0]) if len(filtered) else None,
+            "min_share": min_share,
+            "matched_rows": matched,
+            "returned": len(features),
+            "truncated": truncated,
+            "features": features,
+            "warnings": warnings,
+        }
+
+    # -------------------------------------------------------- Connectivity
+
+    @app.get("/v1/runs/{run_id}/connectivity")
+    def get_connectivity(
+        run_id: str,
+        ctx: SettingsDep,
+        year: Annotated[int | None, Query(ge=1900, le=2100)] = None,
+    ) -> dict[str, Any]:
+        """Network connectivity under observed water presence, per year.
+
+        This is a **screening index**, not an evacuation simulation. The hazard is
+        a yearly Landsat water classification, so it carries no depth, duration,
+        flow direction or timing, and water is treated as impassable at any
+        depth. ``is_evacuation_simulation`` and ``severity_note`` are therefore
+        served at payload level, where a client cannot keep the number and drop
+        the framing that makes it mean something.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        payload, json_warnings = _read_json_object(
+            artefact_path(run, "connectivity_screening.json")
+        )
+        warnings.extend(json_warnings)
+        if payload is None:
+            return {
+                "run_id": run.run_id,
+                "available": False,
+                "is_evacuation_simulation": False,
+                "is_simulation": False,
+                "source_role": "screening_index",
+                "hazard_role": None,
+                "measures": None,
+                "severity_note": None,
+                "destination_note": CONNECTIVITY_DESTINATION_NOTE,
+                "year": year,
+                "available_years": [],
+                "years": [],
+                "warnings": [
+                    make_warning(
+                        "artefact_missing",
+                        "this run has no connectivity_screening.json; it carries no "
+                        "connectivity screening layer",
+                        "connectivity_screening.json",
+                    )
+                ],
+            }
+
+        records = _connectivity_years(payload)
+        for record in records:
+            # A year that dropped the flag is served with it, not without it.
+            record.setdefault("is_evacuation_simulation", False)
+        available_years = [
+            record["year"] for record in records if isinstance(record.get("year"), int)
+        ]
+
+        selected = records
+        if year is not None:
+            selected = [record for record in records if record.get("year") == year]
+            if not selected:
+                # No substitution: a different year under the cursor would be a
+                # different event, and the year label is what makes the number
+                # readable at all.
+                warnings.append(
+                    make_warning(
+                        "year_not_available",
+                        f"{year} was not screened; the screened years are "
+                        f"{available_years} and none is substituted",
+                        "connectivity_screening.json",
+                    )
+                )
+
+        severity_note = next(
+            (
+                record.get("severity_note")
+                for record in selected + records
+                if record.get("severity_note")
+            ),
+            None,
+        )
+        # Read off the records rather than assumed: the hazard is observed, but
+        # that is the artefact's claim to make, not this route's.
+        hazard_role = payload.get("hazard_role") or next(
+            (
+                record.get("hazard_role")
+                for record in records
+                if record.get("hazard_role")
+            ),
+            None,
+        )
+        return {
+            "run_id": run.run_id,
+            "available": bool(records),
+            "is_evacuation_simulation": False,
+            "is_simulation": False,
+            "source_role": "screening_index",
+            "hazard_role": hazard_role,
+            "measures": payload.get("measures"),
+            # Verbatim from the artefact, never reworded: a paraphrased
+            # severity note is a severity note nobody chose.
+            "severity_note": severity_note,
+            "destination_note": CONNECTIVITY_DESTINATION_NOTE,
+            "year": year,
+            "available_years": available_years,
+            "years": jsonable(selected),
+            "warnings": warnings,
+        }
+
+    # ----------------------------------------------------------- Drainage
+
+    @app.get("/v1/runs/{run_id}/drainage")
+    def get_drainage(run_id: str, ctx: SettingsDep) -> dict[str, Any]:
+        """The drainage-discharge screening index, as a summary.
+
+        A relative index of *susceptibility* derived from mapped infrastructure
+        geometry. It is not a hydraulic model and it is not a flood depth, and it
+        is blind to rainfall, river stage, tide, pumping and gate operation --
+        the factors that dominate real Bangkok flooding. The artefact's own
+        ``limitations`` list is served verbatim rather than summarised, because
+        a summarised limitation is no longer the one the analyst wrote.
+        """
+        run = resolve_run(run_id)
+        payload, warnings = _read_json_object(artefact_path(run, "drainage_index.json"))
+        if payload is None:
+            return {
+                "run_id": run.run_id,
+                "available": False,
+                "is_simulation": False,
+                "is_observation": False,
+                "is_flood_depth": False,
+                "source_role": "screening_index",
+                "measures": None,
+                "component_weights": None,
+                "bands": None,
+                "limitations": [],
+                "summary": None,
+                "warnings": [
+                    make_warning(
+                        "artefact_missing",
+                        "this run has no drainage_index.json; it carries no "
+                        "drainage-discharge screening index",
+                        "drainage_index.json",
+                    ),
+                    *warnings,
+                ],
+            }
+
+        if payload.get("is_flood_depth") is not False:
+            # This route only ever serves a screening index, so the flag is
+            # asserted here rather than trusted from the file. A file claiming
+            # otherwise is a schema problem, and it is reported as one.
+            warnings.append(
+                make_warning(
+                    "schema_mismatch",
+                    "drainage_index.json does not declare is_flood_depth: false; "
+                    "this route serves a screening index and reports it as such",
+                    "drainage_index.json",
+                )
+            )
+
+        return {
+            "run_id": run.run_id,
+            "available": payload.get("status") == "ok",
+            "index_version": payload.get("index_version"),
+            "status": payload.get("status"),
+            "source_role": "screening_index",
+            "measures": payload.get("measures"),
+            "is_simulation": False,
+            "is_observation": False,
+            "is_flood_depth": False,
+            "grid_size_m": payload.get("grid_size_m"),
+            "distance_cutoff_m": payload.get("distance_cutoff_m"),
+            "component_weights": jsonable(payload.get("component_weights")),
+            "bands": jsonable(payload.get("bands")),
+            "rows": payload.get("rows"),
+            "inputs": jsonable(payload.get("inputs")),
+            "summary": jsonable(payload.get("summary")),
+            "limitations": jsonable(payload.get("limitations", [])),
+            "warnings": warnings,
+        }
+
+    @app.get("/v1/runs/{run_id}/drainage/cells")
+    def get_drainage_cells(
+        run_id: str,
+        ctx: SettingsDep,
+        band: str | None = Query(default=None, max_length=32),
+        min_risk: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_MESH_ROW_LIMIT,
+    ) -> dict[str, Any]:
+        """Screening-index cells as GeoJSON Features, highest risk first.
+
+        The stored ``x``/``y`` are EPSG:32647 metres, which is what the index was
+        computed in, so the WGS84 ``lon``/``lat`` columns are preferred for the
+        geometry and the projected pair is reprojected only when they are absent.
+        Every feature carries ``is_flood_depth: false`` so a single dropped
+        client-side field cannot turn a susceptibility index into a depth.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        frame, read_warnings = read_parquet(
+            artefact_path(run, "drainage_index.parquet"),
+            columns=list(DRAINAGE_CELL_COLUMNS),
+        )
+        warnings.extend(read_warnings)
+        if frame is None:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "available": False,
+                "run_id": run.run_id,
+                "is_flood_depth": False,
+                "source_role": "screening_index",
+                "matched_rows": 0,
+                "returned": 0,
+                "truncated": False,
+                "warnings": [
+                    make_warning(
+                        "artefact_missing",
+                        "this run has no drainage_index.parquet; run the drainage "
+                        "index stage to build the cells",
+                        "drainage_index.parquet",
+                    )
+                ],
+            }
+
+        available_bands = sorted(
+            str(value) for value in frame.get("risk_band", pd.Series(dtype="object")).dropna().unique()
+        )
+        if band is not None:
+            if band not in available_bands:
+                warnings.append(
+                    make_warning(
+                        "band_not_available",
+                        f"band '{band}' is not among the served bands {available_bands}; "
+                        "no band is substituted",
+                        "drainage_index.parquet",
+                    )
+                )
+                return {
+                    "type": "FeatureCollection",
+                    "features": [],
+                    "available": True,
+                    "run_id": run.run_id,
+                    "is_flood_depth": False,
+                    "source_role": "screening_index",
+                    "measures": DRAINAGE_CELL_MEASURES,
+                    "available_bands": available_bands,
+                    "band": band,
+                    "min_risk": min_risk,
+                    "sorted_by": "risk_index_desc",
+                    "matched_rows": 0,
+                    "returned": 0,
+                    "truncated": False,
+                    "limit": limit,
+                    "warnings": warnings,
+                }
+            frame = frame[frame["risk_band"].astype(str) == band]
+        if min_risk is not None and "risk_index" in frame.columns:
+            frame = frame[pd.to_numeric(frame["risk_index"], errors="coerce") >= min_risk]
+
+        # Highest risk first, then cell id, so repeated calls and the truncation
+        # cut are the same cells every time.
+        sort_columns = [
+            column for column in ("risk_index", "cell_id") if column in frame.columns
+        ]
+        if sort_columns:
+            frame = frame.sort_values(
+                sort_columns, ascending=[False] + [True] * (len(sort_columns) - 1)
+            )
+
+        matched = len(frame)
+        truncated = matched > limit
+        if truncated:
+            frame = frame.head(limit)
+            warnings.append(
+                make_warning(
+                    "truncated",
+                    f"{matched - limit} screening cells were dropped by the limit of "
+                    f"{limit}, keeping the highest risk",
+                    "drainage_index.parquet",
+                )
+            )
+
+        source_crs = _analysis_crs(run)
+        without_geometry = 0
+        features: list[dict[str, Any]] = []
+        for record in frame.to_dict(orient="records"):
+            geometry = _drainage_point(record, source_crs)
+            if geometry is None:
+                without_geometry += 1
+            features.append(
+                feature(
+                    geometry,
+                    {
+                        "cell_id": record.get("cell_id"),
+                        "gx": record.get("gx"),
+                        "gy": record.get("gy"),
+                        "lon": record.get("lon"),
+                        "lat": record.get("lat"),
+                        "drainage_m": record.get("drainage_m"),
+                        "drainage_km_per_km2": record.get("drainage_km_per_km2"),
+                        "distance_to_drainage_m": record.get("distance_to_drainage_m"),
+                        "in_overflow_path": record.get("in_overflow_path"),
+                        "basin_id": record.get("basin_id"),
+                        "susceptible_village": record.get("susceptible_village"),
+                        "index_components": record.get("index_components"),
+                        "risk_index": record.get("risk_index"),
+                        "risk_band": record.get("risk_band"),
+                        "index_inputs_complete": record.get("index_inputs_complete"),
+                        "source_role": "screening_index",
+                        "is_flood_depth": False,
+                    },
+                )
+            )
+        if without_geometry:
+            warnings.append(
+                make_warning(
+                    "missing_geometry",
+                    f"{without_geometry} screening cells have no WGS84 or projected "
+                    "position; their geometry is null rather than estimated",
+                    "drainage_index.parquet",
+                )
+            )
+
+        return {
+            "type": "FeatureCollection",
+            "available": True,
+            "run_id": run.run_id,
+            "source_role": "screening_index",
+            "is_flood_depth": False,
+            "measures": DRAINAGE_CELL_MEASURES,
+            "available_bands": available_bands,
+            "band": band,
+            "min_risk": min_risk,
+            "sorted_by": "risk_index_desc",
+            "matched_rows": matched,
+            "returned": len(features),
+            "truncated": truncated,
+            "limit": limit,
+            "features": features,
+            "warnings": warnings,
+        }
+
+    @app.get("/v1/runs/{run_id}/destinations")
+    def get_destinations(
+        run_id: str,
+        ctx: SettingsDep,
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_BUILDING_ROW_LIMIT,
+        destination_class: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        """Destination candidates recovered from OSM tags.
+
+        Every record is unverified. ``verified_count`` is reported prominently so
+        a client cannot present an ``amenity=shelter`` tag as a refuge by
+        omission.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        frame, read_warnings = read_parquet(
+            ctx.data_dir / "curated" / "city" / "destinations.parquet"
+        )
+        warnings.extend(read_warnings)
+        if frame is None:
+            return {
+                "run_id": run.run_id,
+                "available": False,
+                "rows": [],
+                "matched_rows": 0,
+                "returned": 0,
+                "truncated": False,
+                "verified_count": 0,
+                "warnings": [
+                    make_warning(
+                        "artefact_missing",
+                        "destination candidates are staged in data/curated/city/destinations.parquet "
+                        "and were not produced for this run",
+                        "destinations.parquet",
+                    )
+                ],
+            }
+
+        if destination_class:
+            frame = frame[frame["destination_class"] == destination_class]
+        matched = len(frame)
+        truncated = matched > limit
+        if truncated:
+            frame = frame.head(limit)
+            warnings.append(
+                make_warning(
+                    "truncated",
+                    f"{matched - limit} destination rows were dropped by the limit of {limit}",
+                    "destinations.parquet",
+                )
+            )
+        return {
+            "run_id": run.run_id,
+            "available": True,
+            "matched_rows": matched,
+            "returned": int(len(frame)),
+            "truncated": truncated,
+            "limit": limit,
+            "verified_count": 0,
+            "verified_note": (
+                "Zero records are verified. An OSM tag is a mapping decision, not an "
+                "operational guarantee: none carries an operator, a capacity or an "
+                "inspection date, and none may be presented as a refuge."
+            ),
+            "by_class": {
+                str(key): int(value)
+                for key, value in frame["destination_class"].value_counts().items()
+            },
+            "rows": jsonable_rows(frame),
+            "warnings": warnings,
+        }
+
+    @app.get("/v1/runs/{run_id}/network")
+    def get_network(
+        run_id: str,
+        ctx: SettingsDep,
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_MESH_ROW_LIMIT,
+    ) -> dict[str, Any]:
+        """Network summary, plus a bounded, evenly spaced sample of edges.
+
+        A city run holds close to a million edges, so full geometry is not
+        served. The sample is deterministic rather than random, so repeated
+        calls return the same edges and the map does not shimmer.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        stats_payload, stats_warnings = load_stats_file(run)
+        warnings.extend(stats_warnings)
+        network_block = (stats_payload or {}).get("network", {})
+
+        frame, read_warnings = read_parquet(artefact_path(run, "network_edges.parquet"))
+        warnings.extend(read_warnings)
+        sampled_rows: list[dict[str, Any]] = []
+        matched = 0
+        if frame is not None and "geometry_wkt" in frame.columns:
+            matched = len(frame)
+            step = max(matched // max(limit, 1), 1)
+            sample = frame.iloc[::step].head(limit)
+            for record in sample.to_dict(orient="records"):
+                geometry = wkt_to_geometry(record.get("geometry_wkt"), _analysis_crs(run))
+                if geometry is None:
+                    continue
+                sampled_rows.append(
+                    feature(
+                        geometry,
+                        {
+                            "edge_id": record.get("edge_id"),
+                            "length_m": record.get("length_m"),
+                            "highway": record.get("highway"),
+                            "walk_allowed": record.get("walk_allowed"),
+                            "vehicle_allowed": record.get("vehicle_allowed"),
+                        },
+                    )
+                )
+            if matched > len(sampled_rows):
+                warnings.append(
+                    make_warning(
+                        "sampled",
+                        f"{matched:,} edges exist; {len(sampled_rows):,} evenly spaced edges are "
+                        "returned for display. City-scale edge geometry is not served in full.",
+                        "network_edges.parquet",
+                    )
+                )
+        return {
+            "type": "FeatureCollection",
+            "run_id": run.run_id,
+            "available": bool(network_block) or frame is not None,
+            "summary": jsonable(network_block),
+            "matched_rows": matched,
+            "returned": len(sampled_rows),
+            "sample_is_spatial_subset": True,
+            "features": sampled_rows,
+            "warnings": warnings,
+        }
+
+    @app.get("/", include_in_schema=False)
+    def root() -> JSONResponse:
+        return JSONResponse(
+            {
+                "service": "bkk-flow-api",
+                "version": __version__,
+                "contract_version": CONTRACT_VERSION,
+                "docs": "/docs",
+                "health": "/v1/health",
+            }
+        )
+
+    return app
+
+
+#: Module-level app for ``uvicorn api.app:app``.
+app = create_app()

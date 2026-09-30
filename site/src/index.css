@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: "Aptos", "Segoe UI", Arial, sans-serif;
+  color: #173b3a;
+  background: #f2efe6;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --ink: #173b3a;
+  --muted-ink: #617371;
+  --paper: #f7f3e9;
+  --paper-dark: #e7ebe5;
+  --teal: #116f64;
+  --orange: #ef9b43;
+  --coral: #e7654d;
+  --line: #c9d0c9;
+}
+
+* { box-sizing: border-box; }
+html { min-width: 320px; background: var(--paper); }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--paper); }
+button, input { font: inherit; }
+button { color: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible, [role='slider']:focus-visible { outline: 3px solid rgba(239, 155, 67, .75); outline-offset: 2px; }
+a { color: inherit; }
+
+/* Component-library tokens. The library under src/components/ui resolves its
+   colours through these variables, so they follow the same palette as App.css. */
+:root {
+  --background: 45 33% 94%;
+  --foreground: 178 44% 16%;
+  --card: 44 44% 96%;
+  --card-foreground: 178 44% 16%;
+  --popover: 44 44% 96%;
+  --popover-foreground: 178 44% 16%;
+  --primary: 176 76% 25%;
+  --primary-foreground: 45 33% 96%;
+  --secondary: 120 12% 89%;
+  --secondary-foreground: 178 44% 16%;
+  --muted: 120 12% 89%;
+  --muted-foreground: 172 12% 42%;
+  --accent: 32 84% 60%;
+  --accent-foreground: 178 44% 14%;
+  --destructive: 6 62% 55%;
+  --destructive-foreground: 45 33% 97%;
+  --border: 150 10% 79%;
+  --input: 150 10% 79%;
+  --ring: 32 84% 60%;
+  --radius: 0.6rem;
+}
+
+/* Accessibility helpers used across the screens. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.skip-link {
+  position: absolute; left: 8px; top: -48px; z-index: 60;
+  background: var(--ink); color: var(--paper); padding: 10px 16px;
+  font-size: 12px; font-weight: 700; text-decoration: none;
+  transition: top .15s ease;
+}
+.skip-link:focus { top: 8px; }
+
+/* Reduced motion: honour the OS preference and the in-app switch. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+html[data-reduced-motion='true'] *,
+html[data-reduced-motion='true'] *::before,
+html[data-reduced-motion='true'] *::after {
+  animation-duration: .001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: .001ms !important;
+  scroll-behavior: auto !important;
+}

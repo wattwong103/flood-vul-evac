@@ -1,0 +1,13 @@
+{
+  "aoi_id": "khlong-san-district",
+  "name": "เขตคลองสาน",
+  "name_en": "Khlong San",
+  "admin_level": "7",
+  "osm_type": "relation",
+  "osm_id": 3147280,
+  "attribution": "(c) OpenStreetMap contributors, ODbL 1.0",
+  "content_sha256": "4582fca06aea9d378852f802c752678e2108f86607eb21ffae7b5cf6953d21e3",
+  "retrieved_at": "2026-09-29T17:03:36+00:00",
+  "area_km2": 5.9607,
+  "analysis_crs": "EPSG:32647"
+}

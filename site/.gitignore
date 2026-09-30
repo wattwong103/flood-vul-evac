@@ -1,0 +1,32 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+.parcel-cache
+*.local
+
+# Genuinely unused files created by the artifact scaffold. Everything else
+# under src/ is imported by the application and MUST stay tracked: lib/ holds
+# the API client, components/ui/ the design-system primitives, and hooks/ the
+# data hooks. Ignoring them produced a repository whose site could not build.
+components.json
+src/assets/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
