@@ -56,7 +56,7 @@ def build() -> dict:
             continue
         with rasterio.open(path) as dataset:
             data, transform = rio_mask(
-                dataset, [aoi_wgs84], crop=True, filled=True, nodata=gsw.CODE_NO_DATA_LAND
+                dataset, [aoi_wgs84], crop=True, filled=True, nodata=gsw.CODE_NO_OBSERVATIONS
             )
         array = data[0]
         rows, cols = array.shape
@@ -75,7 +75,7 @@ def build() -> dict:
         gx = (np.floor(px / GRID_M) * GRID_M).astype("int64")
         gy = (np.floor(py / GRID_M) * GRID_M).astype("int64")
 
-        water = (array == gsw.CODE_WATER).ravel()
+        water = gsw.is_water(array).ravel()
         land = (~np.isin(array.ravel(), gsw.CODE_NODATA)).ravel()
 
         paired = pd.DataFrame({"gx": gx, "gy": gy, "w": water.astype("int64"), "c": land.astype("int64")})

@@ -1,9 +1,7 @@
 """Tests for the observed-extent and destination-candidate modules.
 
-The two properties that matter here are semantic. The JRC yearly
-classification uses 0 for *dry land*, not no-data, and an inverted code table
-silently turns a water fraction into its complement. And an OSM tag must never
-emerge from this code path as a verified refuge.
+Source-coded raster fixtures independently check the JRC waterClass contract.
+An OSM tag must never emerge from this code path as a verified refuge.
 """
 
 from __future__ import annotations
@@ -24,16 +22,66 @@ from bkkflow.sources import destinations, gsw  # noqa: E402
 # --------------------------------------------------------------------------
 
 
-def test_zero_means_land_not_nodata() -> None:
-    """The single most damaging possible misreading of this product."""
-    assert gsw.CODE_LAND == 0
-    assert gsw.CODE_WATER == 1
-    assert 0 not in gsw.CODE_NODATA
-    assert gsw.CODE_CODES[0] == "land"
+def raster_fixture(tmp_path, values):
+    import rasterio
+    from rasterio.transform import from_origin
+    path = tmp_path / "water.tif"
+    with rasterio.open(path, "w", driver="GTiff", width=len(values), height=1,
+                       count=1, dtype="uint8", crs="EPSG:4326",
+                       transform=from_origin(100.5, 13.7, 0.00025, 0.00025)) as dst:
+        dst.write(np.array([values], dtype="uint8"), 1)
+    return path, (100.5, 13.69975, 100.5 + len(values) * 0.00025, 13.7)
 
 
-def test_only_the_two_nodata_codes_are_masked() -> None:
-    assert gsw.CODE_NODATA == (2, 3)
+@pytest.mark.parametrize("clip", [False, True])
+def test_source_coded_raster_preserves_water_classes(tmp_path, clip):
+    # JRC Data Users Guide v4 p15: no observations, non-water, seasonal, permanent.
+    from shapely.geometry import box
+    path, bounds = raster_fixture(tmp_path, [0, 1, 2, 3])
+    result = gsw.measure_year(2020, path.name, path, bounds,
+                              aoi_geometry=box(*bounds) if clip else None)
+    assert result.aoi_water_pixels == 2
+    assert result.aoi_total_pixels == 3
+    assert result.aoi_water_share == pytest.approx(2 / 3)
+    assert result.aoi_seasonal_pixels == result.aoi_permanent_pixels == 1
+    mask, _ = gsw.observed_water_mask(path, box(*bounds))
+    assert mask.tolist() == [[False, False, True, True]]
+
+
+def test_unobserved_area_is_not_reported_as_zero_flooding(tmp_path):
+    path, bounds = raster_fixture(tmp_path, [0, 0])
+    result = gsw.measure_year(2020, path.name, path, bounds)
+    assert result.aoi_water_share is None
+    assert result.as_dict()["aoi_water_share"] is None
+
+
+def test_unknown_source_code_is_rejected():
+    with pytest.raises(ValueError, match="waterClass"):
+        gsw.is_water(np.array([0, 1, 255], dtype="uint8"))
+
+
+def test_water_outside_aoi_is_excluded(tmp_path):
+    from shapely.geometry import box
+    path, bounds = raster_fixture(tmp_path, [0, 1, 2, 3])
+    aoi = box(bounds[0], bounds[1], bounds[2] - 0.00025, bounds[3])
+    result = gsw.measure_year(2020, path.name, path, bounds, aoi_geometry=aoi)
+    assert result.aoi_water_pixels == 1
+    assert result.aoi_total_pixels == 2
+
+
+@pytest.mark.parametrize("wet_column", [1, 6, 11])
+def test_road_samples_cover_each_entire_edge_without_mixing_edges(monkeypatch, wet_column):
+    import geopandas as gpd
+    from rasterio.transform import from_origin
+    from shapely.geometry import LineString
+    from bkkflow import observed_evac
+    wet = np.zeros((3, 20), dtype=bool)
+    wet[0, wet_column] = True
+    monkeypatch.setattr(observed_evac, "water_mask", lambda year:
+        (wet, from_origin(0, 3, 1, 1), "EPSG:32647"))
+    edges = gpd.GeoDataFrame(geometry=[LineString([(1, 2.5), (11, 2.5)]),
+        LineString([(1, 1.5), (11, 1.5)])], crs="EPSG:32647")
+    assert observed_evac.edges_in_water(edges, 2020).tolist() == [True, False]
 
 
 # --------------------------------------------------------------------------
@@ -81,32 +129,6 @@ def test_tile_name_refuses_to_straddle_a_tile_edge() -> None:
 # --------------------------------------------------------------------------
 # summary statistics
 # --------------------------------------------------------------------------
-
-
-class _FakeDataset:
-    """Minimal rasterio-like dataset for the area arithmetic."""
-
-    def __init__(self, array):
-        self._array = array
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-def test_water_share_uses_classified_area_not_total_pixels() -> None:
-    """Land pixels belong in the denominator; masking them inverts the ratio."""
-    # 100 land, 10 water, 5 masked.
-    array = np.array([0] * 100 + [1] * 10 + [2] * 5, dtype="uint8")
-    land = int((array == gsw.CODE_LAND).sum())
-    water = int((array == gsw.CODE_WATER).sum())
-    classified = int((~np.isin(array, gsw.CODE_NODATA)).sum())
-    assert (land, water, classified) == (100, 10, 110)
-    assert water / classified == pytest.approx(0.0909, abs=1e-4)
-    # The wrong denominator (dropping land) would give 10/15.
-    assert water / (water + 5) == pytest.approx(0.6667, abs=1e-4)
 
 
 def test_observed_payload_declares_it_is_not_depth() -> None:
