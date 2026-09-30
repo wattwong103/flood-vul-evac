@@ -14,6 +14,7 @@ says "this quantity was not computed, and here is why".
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from pathlib import Path
@@ -29,6 +30,8 @@ from . import city_network as city_network_module
 from . import manifest as manifest_module
 from . import population as population_module
 from . import validate as validate_module
+from . import drainage as drainage_module
+from . import observed_evac as observed_evac_module
 from .sources import city_osm, destinations as destinations_source, gsw, mitrearth
 from .util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
 
@@ -303,6 +306,74 @@ def execute_city_run(
         ]
     )
 
+    # ---- observed-hazard connectivity screening --------------------------
+    stage_start = time.time()
+    screening = observed_evac_module.compare_years((2010, 2011, 2012, 2020))
+    worst = min(
+        screening.values(), key=lambda entry: entry["reachable_share_of_exposed"]
+    )
+    warnings.append(
+        "Connectivity screening under OBSERVED water presence is computed for 2010, 2011, "
+        "2012 and 2020. This is NOT an evacuation simulation: a yearly Landsat classification "
+        "carries no depth, duration, flow direction or timing, and water is treated as "
+        "impassable at any depth. Destinations are unverified OSM tags with no capacity."
+    )
+    warnings.append(
+        f"The worst observed year is {worst['year']} at "
+        f"{worst['reachable_share_of_exposed']:.1%} of exposed population able to reach a "
+        "designated destination. Treat this as a relative screening comparison between years, "
+        "not as an evacuation time."
+    )
+    record(
+        "connectivity_screening",
+        time.time() - stage_start,
+        rows=len(screening),
+        note="; ".join(
+            f"{year}: {entry['closed_edge_share']:.2%} ways closed, "
+            f"{entry['reachable_share_of_exposed']:.1%} reachable"
+            for year, entry in screening.items()
+        ),
+    )
+    write_json(run_dir / "connectivity_screening.json", {
+        "measures": "network connectivity under observed water presence",
+        "is_evacuation_simulation": False,
+        "years": screening,
+    })
+
+    # ---- drainage-discharge screening index -------------------------------
+    extra_outputs: list[dict[str, Any]] = []
+    stage_start = time.time()
+    drainage_result = drainage_module.build_drainage_index()
+    drainage = drainage_result.as_dict() if hasattr(drainage_result, "as_dict") else dict(drainage_result)
+    if drainage.get("status") == "ok":
+        warnings.append(
+            "A drainage-discharge screening index is derived from the mapped drainage network, "
+            "basins and overflow paths. It is a relative index of drainage-discharge "
+            "susceptibility from infrastructure geometry only: not a hydraulic model, not a "
+            "flood depth, and it ignores rainfall, river stage, tide, pumping and gate "
+            "operations, all of which dominate real Bangkok flooding."
+        )
+    else:
+        warnings.append(f"drainage index unavailable: {drainage.get('reason')}")
+    if drainage.get("status") == "ok":
+        drainage_path = run_dir / "drainage_index.parquet"
+        drainage_result.frame.to_parquet(drainage_path, index=False)
+        extra_outputs.append(
+            manifest_module.output_entry(
+                "drainage_index",
+                drainage_path,
+                row_count=int(drainage["rows"]),
+                crs=analysis_crs,
+            )
+        )
+    write_json(run_dir / "drainage_index.json", drainage)
+    record(
+        "drainage_index",
+        time.time() - stage_start,
+        rows=int(drainage.get("rows", 0)),
+        note=json.dumps(drainage.get("statistics", {}).get("band_counts", {})),
+    )
+
     # ---- validation ------------------------------------------------------
     stage_start = time.time()
     report = validate_module.ValidationReport()
@@ -492,6 +563,7 @@ def execute_city_run(
             "mode_thresholds": {"status": "not_applied_without_flood"},
         },
         outputs=[
+            *extra_outputs,
             manifest_module.output_entry("network_edges", edges_path, row_count=len(edges), crs=analysis_crs),
             manifest_module.output_entry("buildings", buildings_path, row_count=len(building_table), crs=analysis_crs),
             manifest_module.output_entry("persons", persons_path, row_count=len(persons)),

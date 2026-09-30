@@ -309,12 +309,20 @@ class CityRoutingIndex:
         self.indices = dst
         self.edge_costs = cost
         self.edge_ref = edge
-        self.coords = np.column_stack(
-            [
-                (nodes // NODE_BIAS) / COORD_SCALE,
-                (nodes % NODE_BIAS) / COORD_SCALE - NODE_BIAS / COORD_SCALE,
-            ]
+        # Node coordinates come from the edge geometry, never from unpacking the
+        # node id. The packed id is millimetre-precision in the analysis CRS, so
+        # recovering coordinates from it needs a modulus larger than the
+        # coordinate range, which overflows int64 for full UTM. Deriving the
+        # coordinates directly is exact and costs nothing.
+        coordinates = np.zeros((len(nodes), 2), dtype="float64")
+        starts = np.asarray(
+            [shapely.get_coordinates(geometry) for geometry in np.asarray(subset.geometry.values, dtype=object)],
+            dtype=object,
         )
+        for edge_position, coordinates_pair in enumerate(starts):
+            coordinates[source[edge_position]] = coordinates_pair[0]
+            coordinates[target[edge_position]] = coordinates_pair[-1]
+        self.coords = coordinates
         # Endpoints in index space, so a traced path can be walked back.
         self.edge_source = source
         self.edge_target = target

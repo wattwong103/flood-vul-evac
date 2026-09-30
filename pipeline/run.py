@@ -153,7 +153,11 @@ def cmd_city(args: argparse.Namespace) -> int:
     print(json.dumps({k: v for k, v in summary.items() if k != "stats"}, indent=2))
     print(json.dumps(summary["stats"]["network"], indent=2))
     print(json.dumps(summary["stats"]["buildings"], indent=2))
-    print(f"flood: {summary['stats']['flood']['status']}")
+    flood = summary["stats"]["flood"]
+    print(f"flood depth: {flood.get('depth_status')}")
+    observed = flood.get("observed_extent") or {}
+    print(f"observed extent: {observed.get('status')} ({len(observed.get('years', []))} years)")
+    print(f"drainage index rows: {(summary['stats'].get('drainage') or {}).get('rows')}")
     return 0 if summary["validation_passed"] else 2
 
 
