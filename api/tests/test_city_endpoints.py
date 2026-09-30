@@ -1,14 +1,17 @@
 """Tests for the city-layer endpoints.
 
 These cover the four data layers a city run produces that a pilot run does not,
-plus the honesty invariants a client is entitled to rely on: an observed layer
-must be flagged as an observation and must state it is not depth, and no
-destination may emerge verified.
+plus the two screening indices layered on top of them, plus the honesty
+invariants a client is entitled to rely on: an observed layer must be flagged as
+an observation and must state it is not depth, no destination may emerge
+verified, connectivity screening is not an evacuation simulation, and the
+drainage index is not a flood depth.
 """
 
 from __future__ import annotations
 
 import glob
+import json
 import os
 import sys
 from pathlib import Path
@@ -32,6 +35,18 @@ def _city_run_id() -> str | None:
 
 RUN_ID = _city_run_id()
 needs_run = pytest.mark.skipif(RUN_ID is None, reason="no city run with an observed layer")
+
+#: The two screening layers are separate artefacts, so a run that carries the
+#: observation is not automatically one that was screened.
+needs_screening = pytest.mark.skipif(
+    RUN_ID is None
+    or not (
+        (REPO_ROOT / "runs" / str(RUN_ID) / "connectivity_screening.json").is_file()
+        and (REPO_ROOT / "runs" / str(RUN_ID) / "drainage_index.json").is_file()
+        and (REPO_ROOT / "runs" / str(RUN_ID) / "drainage_index.parquet").is_file()
+    ),
+    reason="no city run carrying the connectivity and drainage screening artefacts",
+)
 
 
 @pytest.fixture(scope="module")
@@ -183,6 +198,7 @@ def _iter_coords(geometry: dict, depth: int = 0):
         "/observed-water/cells?limit=5",
         "/network?limit=5",
         "/buildings?limit=5",
+        "/drainage/cells?limit=5",
     ],
 )
 def test_served_geojson_is_wgs84_not_projected(client: TestClient, path: str) -> None:
@@ -201,4 +217,206 @@ def test_served_geojson_is_wgs84_not_projected(client: TestClient, path: str) ->
             # Bangkok and its metropolitan area.
             assert 100.2 < lon < 101.1, f"{path}: longitude {lon} is not Bangkok WGS84"
             assert 13.1 < lat < 14.1, f"{path}: latitude {lat} is not Bangkok WGS84"
+
+
+# -------------------------------------------------------------------------- #
+# Connectivity screening under observed water
+# -------------------------------------------------------------------------- #
+
+
+@needs_screening
+def test_connectivity_states_that_it_is_not_an_evacuation_simulation(
+    client: TestClient,
+) -> None:
+    """The headline number is a screening index; the flag must reach the client.
+
+    An annual Landsat classification carries no depth, duration, direction or
+    timing, so "71% of the exposed population can get out" would be a claim the
+    artefact cannot support. The flag and the note are payload-level so a client
+    cannot keep the number and drop the framing.
+    """
+    response = client.get(f"/v1/runs/{RUN_ID}/connectivity")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is True
+    assert body["is_evacuation_simulation"] is False
+    assert body["is_simulation"] is False
+    assert body["source_role"] == "screening_index"
+    # Verbatim, not paraphrased.
+    note = body["severity_note"]
+    assert isinstance(note, str) and "Not an evacuation simulation" in note
+    assert "no depth, duration, flow direction or timing" in note
+    # The destination count is a modelling choice, not a fact about the city.
+    assert "scenario choice" in body["destination_note"]
+
+
+@needs_screening
+def test_connectivity_carries_the_flag_on_every_screened_year(client: TestClient) -> None:
+    body = client.get(f"/v1/runs/{RUN_ID}/connectivity").json()
+    years = body["years"]
+    assert len(years) >= 2, "expected the screening to cover more than one year"
+    assert [entry["year"] for entry in years] == sorted(entry["year"] for entry in years)
+    for entry in years:
+        assert entry["is_evacuation_simulation"] is False
+        assert entry["severity_note"]
+        assert entry["source_role"] == "screening_index"
+        assert entry["hazard_role"] == "observed"
+        # Water is impassable at any depth, so the closed share is a property of
+        # the rule and not of a depth the run does not have.
+        assert 0.0 <= entry["closed_edge_share"] <= 1.0
+        assert 0.0 <= entry["reachable_share_of_exposed"] <= 1.0
+        assert entry["designated_destinations"] > 0
+
+
+@needs_screening
+def test_connectivity_can_be_read_for_a_single_year(client: TestClient) -> None:
+    body = client.get(f"/v1/runs/{RUN_ID}/connectivity", params={"year": 2012}).json()
+    assert body["year"] == 2012
+    assert [entry["year"] for entry in body["years"]] == [2012]
+    assert body["years"][0]["is_evacuation_simulation"] is False
+
+
+@needs_screening
+def test_connectivity_does_not_substitute_a_year_that_was_never_screened(
+    client: TestClient,
+) -> None:
+    """A different year under the cursor is a different event, not a fallback."""
+    body = client.get(f"/v1/runs/{RUN_ID}/connectivity", params={"year": 1999}).json()
+    assert body["years"] == []
+    assert any(warning.get("code") == "year_not_available" for warning in body["warnings"])
+
+
+# -------------------------------------------------------------------------- #
+# Drainage-discharge screening index
+# -------------------------------------------------------------------------- #
+
+
+@needs_screening
+def test_drainage_reports_a_screening_index_and_not_a_flood_depth(
+    client: TestClient,
+) -> None:
+    """The index is a relative susceptibility score, so no client may read it as
+    metres of water. ``is_flood_depth`` and the limitations list are the guard."""
+    response = client.get(f"/v1/runs/{RUN_ID}/drainage")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is True
+    assert body["is_flood_depth"] is False
+    assert body["is_simulation"] is False
+    assert body["is_observation"] is False
+    assert body["source_role"] == "screening_index"
+    assert "screening index" in body["measures"]
+    # Surfaced, not summarised away: the artefacts the index ignores are the
+    # ones that dominate real Bangkok flooding.
+    limitations = " ".join(body["limitations"]).lower()
+    assert "not a hydraulic model" in limitations
+    assert "not a flood depth" in limitations
+    for ignored in ("rainfall", "river stage", "tides", "pump and gate"):
+        assert ignored in limitations
+    assert body["component_weights"]
+    assert body["bands"]
+    assert body["summary"]["bands"]
+
+
+@needs_screening
+def test_drainage_cells_flag_every_feature_as_an_index_and_not_a_depth(
+    client: TestClient,
+) -> None:
+    body = client.get(
+        f"/v1/runs/{RUN_ID}/drainage/cells", params={"limit": 50}
+    ).json()
+    assert body["type"] == "FeatureCollection"
+    assert body["is_flood_depth"] is False
+    assert body["source_role"] == "screening_index"
+    features = body["features"]
+    assert features, "expected screening cells"
+    risks = []
+    for item in features:
+        properties = item["properties"]
+        assert properties["source_role"] == "screening_index"
+        assert properties["is_flood_depth"] is False
+        # A field named depth must not exist at all on this layer.
+        assert "depth" not in properties
+        assert properties["risk_band"] in body["available_bands"]
+        risks.append(properties["risk_index"])
+    # Highest risk first, so the row cap keeps the cells that matter.
+    assert risks == sorted(risks, reverse=True)
+
+
+@needs_screening
+def test_drainage_cells_can_be_narrowed_by_band_and_risk(client: TestClient) -> None:
+    summary = client.get(f"/v1/runs/{RUN_ID}/drainage").json()["summary"]["bands"]
+    body = client.get(
+        f"/v1/runs/{RUN_ID}/drainage/cells", params={"band": "very_high", "limit": 500}
+    ).json()
+    assert body["band"] == "very_high"
+    # The cells route and the summary must count the same cells.
+    assert body["matched_rows"] == summary["very_high"]
+    for item in body["features"]:
+        assert item["properties"]["risk_band"] == "very_high"
+        assert 0.0 <= item["properties"]["risk_index"] <= 1.0
+
+    missing = client.get(
+        f"/v1/runs/{RUN_ID}/drainage/cells", params={"band": "extreme"}
+    ).json()
+    assert missing["features"] == []
+    assert any(warning.get("code") == "band_not_available" for warning in missing["warnings"])
+
+
+@needs_screening
+def test_drainage_cells_report_truncation_rather_than_silently_shortening(
+    client: TestClient,
+) -> None:
+    body = client.get(f"/v1/runs/{RUN_ID}/drainage/cells", params={"limit": 5}).json()
+    assert body["truncated"] is True
+    assert body["returned"] == 5
+    assert body["matched_rows"] > 5
+    assert any(warning.get("code") == "truncated" for warning in body["warnings"])
+
+
+@pytest.mark.parametrize(
+    "path", ["/connectivity", "/connectivity?year=2012", "/drainage", "/drainage/cells"]
+)
+def test_a_run_without_the_screening_artefacts_reports_an_absence_not_an_error(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """A pilot run carries neither screening index. The routes must say so and
+    return 200 with a warning, never raise and never answer with a zero."""
+    runs = tmp_path / "runs"
+    run_dir = runs / "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_dir.name,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "validation_status": "demonstration",
+                "geography": {"aoi_id": "khlong-san", "analysis_crs": "EPSG:32647"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BKKFLOW_RUNS_DIR", str(runs))
+
+    response = client.get(f"/v1/runs/{run_dir.name}{path}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is False
+    assert body["warnings"], "an absent layer must carry a warning saying so"
+    assert any(
+        warning.get("artefact", "").startswith(("connectivity_", "drainage_"))
+        for warning in body["warnings"]
+    )
+    if path == "/connectivity":
+        # The framing survives the absence: an absent index is still not a
+        # simulation, and no year is invented.
+        assert body["is_evacuation_simulation"] is False
+        assert body["years"] == []
+    if path == "/drainage":
+        assert body["is_flood_depth"] is False
+        assert body["limitations"] == []
+    if path == "/drainage/cells":
+        assert body["is_flood_depth"] is False
+        assert body["features"] == []
+        assert body["matched_rows"] == 0
 

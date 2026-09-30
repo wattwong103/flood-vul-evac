@@ -126,6 +126,45 @@ MODE_CODE_BY_NAME: dict[str, str] = {
 
 _BUILDING_GEOMETRY_COLUMNS = ("geometry_wkt", "wkt", "geom_wkt")
 
+#: ``drainage_index.parquet`` in the order the cells table reads it. ``x``/``y``
+#: are EPSG:32647 metres; ``lon``/``lat`` are the same points in WGS84.
+DRAINAGE_CELL_COLUMNS = (
+    "cell_id",
+    "gx",
+    "gy",
+    "x",
+    "y",
+    "lon",
+    "lat",
+    "drainage_m",
+    "drainage_km_per_km2",
+    "distance_to_drainage_m",
+    "in_overflow_path",
+    "basin_id",
+    "basin_drainage_density",
+    "susceptible_village",
+    "index_components",
+    "risk_index",
+    "risk_band",
+    "index_inputs_complete",
+    "source_role",
+)
+
+#: The screening index is not a depth. Stated on the cells route as well as the
+#: summary so a client that only ever reads the map layer still carries it.
+DRAINAGE_CELL_MEASURES = (
+    "relative screening index of drainage-discharge susceptibility from mapped "
+    "infrastructure geometry. NOT a flood depth, NOT a hydraulic model"
+)
+
+#: The destination count is a modelling choice, not a property of the city, so it
+#: is stated at payload level where a client cannot omit it.
+CONNECTIVITY_DESTINATION_NOTE = (
+    "The destination count is a scenario choice, not a property of the city. "
+    "These are unverified OSM tags with no capacity, operator or inspection date, "
+    "so 'reachable' means reachable to a tagged place, not to usable shelter."
+)
+
 
 def get_ctx(request: Request) -> Settings:
     """Request-scoped settings: pinned at app creation, else from the environment."""
@@ -231,6 +270,51 @@ def _resolve_time(
         return time_s, False, []
     chosen = float(available.min()) if prefer == "first" else float(available.max())
     return int(chosen), True, []
+
+
+def _connectivity_years(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """The per-year connectivity screening records, oldest first.
+
+    The artefact keys them by year *string*, which would leave every client to
+    sort strings itself. Keys the artefact does not fix are carried through
+    untouched, because a field the pipeline adds before the contract is updated
+    still has to reach the client.
+    """
+    years = payload.get("years")
+    if not isinstance(years, dict):
+        return []
+    records: list[dict[str, Any]] = []
+    for key, value in years.items():
+        if not isinstance(value, dict):
+            continue
+        record = dict(value)
+        if record.get("year") is None:
+            try:
+                record["year"] = int(key)
+            except (TypeError, ValueError):
+                record["year"] = None
+        records.append(record)
+    records.sort(key=lambda record: (record.get("year") is None, record.get("year") or 0))
+    return records
+
+
+def _drainage_point(
+    record: dict[str, Any], source_crs: str | None
+) -> dict[str, Any] | None:
+    """A WGS84 point for one screening cell.
+
+    The stored ``lon``/``lat`` columns are preferred because the index was
+    computed in the analysis CRS and these are already the geographic
+    coordinates. The projected pair is reprojected only when they are absent;
+    nothing is invented when neither is present.
+    """
+    lon, lat = record.get("lon"), record.get("lat")
+    if isinstance(lon, (int, float)) and isinstance(lat, (int, float)):
+        return {"type": "Point", "coordinates": [float(lon), float(lat)]}
+    x, y = record.get("x"), record.get("y")
+    if source_crs and isinstance(x, (int, float)) and isinstance(y, (int, float)):
+        return wkt_to_geometry(f"POINT ({x} {y})", source_crs)
+    return None
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -1190,6 +1274,348 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "matched_rows": matched,
             "returned": len(features),
             "truncated": truncated,
+            "features": features,
+            "warnings": warnings,
+        }
+
+    # -------------------------------------------------------- Connectivity
+
+    @app.get("/v1/runs/{run_id}/connectivity")
+    def get_connectivity(
+        run_id: str,
+        ctx: SettingsDep,
+        year: Annotated[int | None, Query(ge=1900, le=2100)] = None,
+    ) -> dict[str, Any]:
+        """Network connectivity under observed water presence, per year.
+
+        This is a **screening index**, not an evacuation simulation. The hazard is
+        a yearly Landsat water classification, so it carries no depth, duration,
+        flow direction or timing, and water is treated as impassable at any
+        depth. ``is_evacuation_simulation`` and ``severity_note`` are therefore
+        served at payload level, where a client cannot keep the number and drop
+        the framing that makes it mean something.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        payload, json_warnings = _read_json_object(
+            artefact_path(run, "connectivity_screening.json")
+        )
+        warnings.extend(json_warnings)
+        if payload is None:
+            return {
+                "run_id": run.run_id,
+                "available": False,
+                "is_evacuation_simulation": False,
+                "is_simulation": False,
+                "source_role": "screening_index",
+                "hazard_role": None,
+                "measures": None,
+                "severity_note": None,
+                "destination_note": CONNECTIVITY_DESTINATION_NOTE,
+                "year": year,
+                "available_years": [],
+                "years": [],
+                "warnings": [
+                    make_warning(
+                        "artefact_missing",
+                        "this run has no connectivity_screening.json; it carries no "
+                        "connectivity screening layer",
+                        "connectivity_screening.json",
+                    )
+                ],
+            }
+
+        records = _connectivity_years(payload)
+        for record in records:
+            # A year that dropped the flag is served with it, not without it.
+            record.setdefault("is_evacuation_simulation", False)
+        available_years = [
+            record["year"] for record in records if isinstance(record.get("year"), int)
+        ]
+
+        selected = records
+        if year is not None:
+            selected = [record for record in records if record.get("year") == year]
+            if not selected:
+                # No substitution: a different year under the cursor would be a
+                # different event, and the year label is what makes the number
+                # readable at all.
+                warnings.append(
+                    make_warning(
+                        "year_not_available",
+                        f"{year} was not screened; the screened years are "
+                        f"{available_years} and none is substituted",
+                        "connectivity_screening.json",
+                    )
+                )
+
+        severity_note = next(
+            (
+                record.get("severity_note")
+                for record in selected + records
+                if record.get("severity_note")
+            ),
+            None,
+        )
+        # Read off the records rather than assumed: the hazard is observed, but
+        # that is the artefact's claim to make, not this route's.
+        hazard_role = payload.get("hazard_role") or next(
+            (
+                record.get("hazard_role")
+                for record in records
+                if record.get("hazard_role")
+            ),
+            None,
+        )
+        return {
+            "run_id": run.run_id,
+            "available": bool(records),
+            "is_evacuation_simulation": False,
+            "is_simulation": False,
+            "source_role": "screening_index",
+            "hazard_role": hazard_role,
+            "measures": payload.get("measures"),
+            # Verbatim from the artefact, never reworded: a paraphrased
+            # severity note is a severity note nobody chose.
+            "severity_note": severity_note,
+            "destination_note": CONNECTIVITY_DESTINATION_NOTE,
+            "year": year,
+            "available_years": available_years,
+            "years": jsonable(selected),
+            "warnings": warnings,
+        }
+
+    # ----------------------------------------------------------- Drainage
+
+    @app.get("/v1/runs/{run_id}/drainage")
+    def get_drainage(run_id: str, ctx: SettingsDep) -> dict[str, Any]:
+        """The drainage-discharge screening index, as a summary.
+
+        A relative index of *susceptibility* derived from mapped infrastructure
+        geometry. It is not a hydraulic model and it is not a flood depth, and it
+        is blind to rainfall, river stage, tide, pumping and gate operation --
+        the factors that dominate real Bangkok flooding. The artefact's own
+        ``limitations`` list is served verbatim rather than summarised, because
+        a summarised limitation is no longer the one the analyst wrote.
+        """
+        run = resolve_run(run_id)
+        payload, warnings = _read_json_object(artefact_path(run, "drainage_index.json"))
+        if payload is None:
+            return {
+                "run_id": run.run_id,
+                "available": False,
+                "is_simulation": False,
+                "is_observation": False,
+                "is_flood_depth": False,
+                "source_role": "screening_index",
+                "measures": None,
+                "component_weights": None,
+                "bands": None,
+                "limitations": [],
+                "summary": None,
+                "warnings": [
+                    make_warning(
+                        "artefact_missing",
+                        "this run has no drainage_index.json; it carries no "
+                        "drainage-discharge screening index",
+                        "drainage_index.json",
+                    ),
+                    *warnings,
+                ],
+            }
+
+        if payload.get("is_flood_depth") is not False:
+            # This route only ever serves a screening index, so the flag is
+            # asserted here rather than trusted from the file. A file claiming
+            # otherwise is a schema problem, and it is reported as one.
+            warnings.append(
+                make_warning(
+                    "schema_mismatch",
+                    "drainage_index.json does not declare is_flood_depth: false; "
+                    "this route serves a screening index and reports it as such",
+                    "drainage_index.json",
+                )
+            )
+
+        return {
+            "run_id": run.run_id,
+            "available": payload.get("status") == "ok",
+            "index_version": payload.get("index_version"),
+            "status": payload.get("status"),
+            "source_role": "screening_index",
+            "measures": payload.get("measures"),
+            "is_simulation": False,
+            "is_observation": False,
+            "is_flood_depth": False,
+            "grid_size_m": payload.get("grid_size_m"),
+            "distance_cutoff_m": payload.get("distance_cutoff_m"),
+            "component_weights": jsonable(payload.get("component_weights")),
+            "bands": jsonable(payload.get("bands")),
+            "rows": payload.get("rows"),
+            "inputs": jsonable(payload.get("inputs")),
+            "summary": jsonable(payload.get("summary")),
+            "limitations": jsonable(payload.get("limitations", [])),
+            "warnings": warnings,
+        }
+
+    @app.get("/v1/runs/{run_id}/drainage/cells")
+    def get_drainage_cells(
+        run_id: str,
+        ctx: SettingsDep,
+        band: str | None = Query(default=None, max_length=32),
+        min_risk: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_MESH_ROW_LIMIT,
+    ) -> dict[str, Any]:
+        """Screening-index cells as GeoJSON Features, highest risk first.
+
+        The stored ``x``/``y`` are EPSG:32647 metres, which is what the index was
+        computed in, so the WGS84 ``lon``/``lat`` columns are preferred for the
+        geometry and the projected pair is reprojected only when they are absent.
+        Every feature carries ``is_flood_depth: false`` so a single dropped
+        client-side field cannot turn a susceptibility index into a depth.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        frame, read_warnings = read_parquet(
+            artefact_path(run, "drainage_index.parquet"),
+            columns=list(DRAINAGE_CELL_COLUMNS),
+        )
+        warnings.extend(read_warnings)
+        if frame is None:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "available": False,
+                "run_id": run.run_id,
+                "is_flood_depth": False,
+                "source_role": "screening_index",
+                "matched_rows": 0,
+                "returned": 0,
+                "truncated": False,
+                "warnings": [
+                    make_warning(
+                        "artefact_missing",
+                        "this run has no drainage_index.parquet; run the drainage "
+                        "index stage to build the cells",
+                        "drainage_index.parquet",
+                    )
+                ],
+            }
+
+        available_bands = sorted(
+            str(value) for value in frame.get("risk_band", pd.Series(dtype="object")).dropna().unique()
+        )
+        if band is not None:
+            if band not in available_bands:
+                warnings.append(
+                    make_warning(
+                        "band_not_available",
+                        f"band '{band}' is not among the served bands {available_bands}; "
+                        "no band is substituted",
+                        "drainage_index.parquet",
+                    )
+                )
+                return {
+                    "type": "FeatureCollection",
+                    "features": [],
+                    "available": True,
+                    "run_id": run.run_id,
+                    "is_flood_depth": False,
+                    "source_role": "screening_index",
+                    "measures": DRAINAGE_CELL_MEASURES,
+                    "available_bands": available_bands,
+                    "band": band,
+                    "min_risk": min_risk,
+                    "sorted_by": "risk_index_desc",
+                    "matched_rows": 0,
+                    "returned": 0,
+                    "truncated": False,
+                    "limit": limit,
+                    "warnings": warnings,
+                }
+            frame = frame[frame["risk_band"].astype(str) == band]
+        if min_risk is not None and "risk_index" in frame.columns:
+            frame = frame[pd.to_numeric(frame["risk_index"], errors="coerce") >= min_risk]
+
+        # Highest risk first, then cell id, so repeated calls and the truncation
+        # cut are the same cells every time.
+        sort_columns = [
+            column for column in ("risk_index", "cell_id") if column in frame.columns
+        ]
+        if sort_columns:
+            frame = frame.sort_values(
+                sort_columns, ascending=[False] + [True] * (len(sort_columns) - 1)
+            )
+
+        matched = len(frame)
+        truncated = matched > limit
+        if truncated:
+            frame = frame.head(limit)
+            warnings.append(
+                make_warning(
+                    "truncated",
+                    f"{matched - limit} screening cells were dropped by the limit of "
+                    f"{limit}, keeping the highest risk",
+                    "drainage_index.parquet",
+                )
+            )
+
+        source_crs = _analysis_crs(run)
+        without_geometry = 0
+        features: list[dict[str, Any]] = []
+        for record in frame.to_dict(orient="records"):
+            geometry = _drainage_point(record, source_crs)
+            if geometry is None:
+                without_geometry += 1
+            features.append(
+                feature(
+                    geometry,
+                    {
+                        "cell_id": record.get("cell_id"),
+                        "gx": record.get("gx"),
+                        "gy": record.get("gy"),
+                        "lon": record.get("lon"),
+                        "lat": record.get("lat"),
+                        "drainage_m": record.get("drainage_m"),
+                        "drainage_km_per_km2": record.get("drainage_km_per_km2"),
+                        "distance_to_drainage_m": record.get("distance_to_drainage_m"),
+                        "in_overflow_path": record.get("in_overflow_path"),
+                        "basin_id": record.get("basin_id"),
+                        "susceptible_village": record.get("susceptible_village"),
+                        "index_components": record.get("index_components"),
+                        "risk_index": record.get("risk_index"),
+                        "risk_band": record.get("risk_band"),
+                        "index_inputs_complete": record.get("index_inputs_complete"),
+                        "source_role": "screening_index",
+                        "is_flood_depth": False,
+                    },
+                )
+            )
+        if without_geometry:
+            warnings.append(
+                make_warning(
+                    "missing_geometry",
+                    f"{without_geometry} screening cells have no WGS84 or projected "
+                    "position; their geometry is null rather than estimated",
+                    "drainage_index.parquet",
+                )
+            )
+
+        return {
+            "type": "FeatureCollection",
+            "available": True,
+            "run_id": run.run_id,
+            "source_role": "screening_index",
+            "is_flood_depth": False,
+            "measures": DRAINAGE_CELL_MEASURES,
+            "available_bands": available_bands,
+            "band": band,
+            "min_risk": min_risk,
+            "sorted_by": "risk_index_desc",
+            "matched_rows": matched,
+            "returned": len(features),
+            "truncated": truncated,
+            "limit": limit,
             "features": features,
             "warnings": warnings,
         }

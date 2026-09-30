@@ -496,10 +496,16 @@ def band_for(score: float) -> str:
 
 def _band_series(scores: np.ndarray) -> np.ndarray:
     labels = np.array([label for label, _, _ in BANDS], dtype=object)
-    # searchsorted on the lower edges gives [low, high) for every band; a score
-    # of exactly 1.0 lands past the last edge and is held in the final band.
-    index = np.searchsorted(np.array([low for _, low, _ in BANDS]), scores, side="left")
-    return labels[np.minimum(index, len(labels) - 1)]
+    # Bands are [low, high), so a score sitting exactly on an edge belongs to
+    # the band that starts there. searchsorted with side="left" returns the
+    # first edge >= the score, which puts every value inside a band into the
+    # NEXT band up: a score of 0.05 would be labelled 'moderate' when the
+    # declared moderate band starts at 0.25. Using side="right" and stepping
+    # back one gives [low, high) at the edges as well as between them.
+    edges = np.array([low for _, low, _ in BANDS], dtype="float64")
+    index = np.searchsorted(edges, scores, side="right") - 1
+    index = np.clip(index, 0, len(labels) - 1)
+    return labels[index]
 
 
 def combine_components(components: dict[str, np.ndarray]) -> np.ndarray:

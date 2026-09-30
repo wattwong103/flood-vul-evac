@@ -13,13 +13,12 @@ dist-ssr
 .parcel-cache
 *.local
 
-# Unused files created by the artifact scaffold; not part of BKK/FLOW.
+# Genuinely unused files created by the artifact scaffold. Everything else
+# under src/ is imported by the application and MUST stay tracked: lib/ holds
+# the API client, components/ui/ the design-system primitives, and hooks/ the
+# data hooks. Ignoring them produced a repository whose site could not build.
 components.json
-public/
 src/assets/
-src/components/ui/
-src/hooks/
-src/lib/
 
 # Editor directories and files
 .vscode/*
