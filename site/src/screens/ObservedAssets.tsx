@@ -6,8 +6,7 @@
  * *extent*: a cell is classified as water or not, for one year, with no depth,
  * no duration and no direction. The four rules at the top of this screen are
  * not disclaimers bolted on afterwards; they are the reading instructions for
- * every figure below, and they are also what makes the absence of 2011 and the
- * absence of any verified destination legible rather than invisible.
+ * every figure below, including observation gaps and unverified destinations.
  *
  * A pilot run has none of the city layers. Each of the five routes then answers
  * `available: false` with a `warnings` array, and this screen says so instead of
@@ -309,21 +308,20 @@ export function ObservedAssets({ reducedMotion }: { reducedMotion: boolean }) {
             </p>
           </li>
           <li>
-            <h3>Every year is a lower bound</h3>
+            <h3>Observation coverage varies</h3>
             <p>
-              Water under cloud, shadow or dense vegetation is not classified. Each
-              area below is a floor for its year, and the series is not a trend. The
-              API&rsquo;s own note on 2011 is printed in full in the panel below.
+              Unobserved pixels are not evidence of dry land. Compare classified area
+              alongside water area; a share of classified pixels is not a share
+              of the whole city. The API interpretation notes appear below.
             </p>
           </li>
           <li>
-            <h3>2011 is classified, not resolved</h3>
+            <h3>Annual classes do not resolve an event</h3>
             <p>
-              The 2011 Bangkok flood is in the annual record, but an annual Landsat
-              composite barely captures it. The 2011 row is a floor on extent, not a
-              measurement of the flood peak, and it must not be read as one. The
-              API&rsquo;s own interpretation notes are printed verbatim in the panel
-              below.
+              The annual record includes seasonal and permanent water. It cannot
+              establish flood-event timing, peak extent or whether a particular
+              event was absent. Differences between years are not event-flood
+              estimates.
             </p>
           </li>
           <li>
@@ -979,7 +977,7 @@ function YearTable({
       ]}
       rows={rows}
       empty="The API published no annual water record for this run."
-      note="Water area is a lower bound for its year: unclassified water is not counted. The state column carries a glyph as well as a colour, and the baseline year is named."
+      note="Water share uses classified pixels only; unobserved pixels are excluded. Annual area is not an event-flood footprint. The baseline year is named."
     />
   );
 }
