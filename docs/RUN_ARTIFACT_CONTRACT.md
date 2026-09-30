@@ -176,3 +176,25 @@ The site reads only from this API. It must:
 4. show the PFLOW stage rail with per-stage row counts;
 5. offer a non-map table view for every map result;
 6. never describe the product as a warning or routing service.
+
+## 7. City-run additions
+
+City runs publish layers a pilot run does not have. Each is optional: a client
+must render a clean empty state, never a fabricated zero.
+
+- **population_grid_1km.parquet** - the resident baseline on the fixed 1 km
+  public grid. Aggregated by summing, so the total is preserved exactly. The
+  population field is pop, not 	otal_pop.
+- **observed_water.json** and **observed_water_cells.parquet** - the only
+  observational hazard layer in the project. **Extent, never depth.** A yearly
+  Landsat composite cannot resolve within-year timing and under-detects
+  short-lived flooding, so every year is a lower bound. The 2011 Bangkok flood
+  is absent from the record; that absence is the product behaving as documented.
+- **destinations.parquet** - destination candidates recovered from OSM tags.
+  Every record is erified=false with no operator, capacity or inspection
+  date. erified_count is reported at payload level so a client cannot
+  present a shelter tag as a refuge by omission.
+
+For city runs stats.flood splits into depth_status / depth_reason (with
+max_depth_m and edges_closed **null**) and observed_extent. Pilot runs
+still carry the earlier flat shape, so clients must read both.

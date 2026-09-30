@@ -1,0 +1,36 @@
+{
+  "path": "H:\\Dropbox\\flood-vul-evac\\data\\curated\\city\\observed_water_cells.parquet",
+  "rows": 5805,
+  "years": [
+    2010,
+    2011,
+    2012,
+    2020
+  ],
+  "per_year": {
+    "2010": {
+      "status": "ok",
+      "cells_with_water": 1464,
+      "water_km2": 113.35984178843518
+    },
+    "2011": {
+      "status": "ok",
+      "cells_with_water": 1446,
+      "water_km2": 113.20661847162964
+    },
+    "2012": {
+      "status": "ok",
+      "cells_with_water": 1456,
+      "water_km2": 136.8493499701315
+    },
+    "2020": {
+      "status": "ok",
+      "cells_with_water": 1439,
+      "water_km2": 113.4779358569975
+    }
+  },
+  "grid_size_m": 1000.0,
+  "sha256": "7dcd62d7131c2b7d31d0d95669e208b58fbe735dc27238d89b5e79e31ea4dca6",
+  "written_at": "2026-09-30T08:39:01+00:00",
+  "note": "Aggregated to the 1 km public grid to match the population layer. Extent only: no depth, no duration, no direction. Every year is a lower bound because an annual Landsat composite under-detects short-lived flooding."
+}
