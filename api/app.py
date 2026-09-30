@@ -88,6 +88,15 @@ MESH_ROW_COLUMNS = (
     "travelling_pop",
     "total_pop",
 )
+FLOOD_CELL_COLUMNS = (
+    "cell_id",
+    "time_s",
+    "depth_m",
+    "peak_depth_m",
+    "distance_to_water_m",
+    "source_role",
+    "confidence",
+)
 EDGE_STATE_COLUMNS = (
     "edge_id",
     "time_s",
@@ -466,8 +475,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         warnings.extend(read_warnings)
         if frame is None:
             return MeshResponse(
-                run_id=run.run_id, limit=limit, rows=[], warnings=warnings
+                run_id=run.run_id, limit=limit, rows=[], features=[], warnings=warnings
             )
+
+        available_time_values = (
+            pd.to_numeric(frame["time_s"], errors="coerce").dropna().unique().tolist()
+            if "time_s" in frame.columns
+            else []
+        )
+        available_times = sorted({int(value) for value in available_time_values})
 
         time_s, defaulted, time_warnings = _resolve_time(
             frame, time, "time_s", prefer="first"
@@ -521,18 +537,173 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             )
 
+        rows = jsonable_rows(selected)
+        features = [
+            feature(
+                {"type": "Point", "coordinates": [row["lon"], row["lat"]]},
+                {**row, "population_quantity": "people_present"},
+            )
+            for row in rows
+            if isinstance(row.get("lon"), (int, float))
+            and isinstance(row.get("lat"), (int, float))
+        ]
         return MeshResponse(
             run_id=run.run_id,
             time_s=time_s,
             time_defaulted=defaulted,
+            available_times=available_times,
             columns=[column for column in MESH_ROW_COLUMNS if column in selected.columns],
             matched_rows=matched,
             returned=len(selected),
             truncated=truncated,
             limit=limit,
-            rows=jsonable_rows(selected),
+            rows=rows,
+            features=features,
             warnings=warnings,
         )
+
+    # ---------------------------------------------------------------- flood
+
+    @app.get("/v1/runs/{run_id}/flood", tags=["geometry"])
+    def get_flood(
+        run_id: str,
+        ctx: SettingsDep,
+        time: Annotated[int | None, Query(ge=0, le=2_592_000)] = None,
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_MESH_ROW_LIMIT,
+    ) -> dict[str, Any]:
+        """One positive-depth slice of ``flood_slices.parquet`` as WGS84 GeoJSON.
+
+        Flood cells are deliberately separate from population mesh features:
+        they represent a different quantity and may have a different grid.
+        When a slice exceeds the response cap, evenly spaced cells in stable
+        spatial order preserve coverage instead of ranking only deep cells.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        frame, read_warnings = read_parquet(artefact_path(run, "flood_slices.parquet"))
+        warnings.extend(read_warnings)
+        if frame is None:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "run_id": run.run_id,
+                "available": False,
+                "time_s": time,
+                "time_defaulted": False,
+                "available_times": [],
+                "peak_time_s": None,
+                "matched_rows": 0,
+                "returned": 0,
+                "truncated": False,
+                "limit": limit,
+                "sample_is_spatial_subset": False,
+                "warnings": warnings,
+            }
+
+        available_time_values = (
+            pd.to_numeric(frame["time_s"], errors="coerce").dropna().unique().tolist()
+            if "time_s" in frame.columns
+            else []
+        )
+        available_times = sorted({int(value) for value in available_time_values})
+        peak_time_s: int | None = None
+        if "time_s" in frame.columns and "depth_m" in frame.columns and not frame.empty:
+            numeric_depth = pd.to_numeric(frame["depth_m"], errors="coerce")
+            if numeric_depth.notna().any():
+                peak_time_s = int(frame.loc[numeric_depth.idxmax(), "time_s"])
+
+        time_s, defaulted, time_warnings = _resolve_time(
+            frame, time, "time_s", prefer="first"
+        )
+        warnings.extend(time_warnings)
+        if time_s is not None and "time_s" in frame.columns:
+            frame = frame.loc[
+                pd.to_numeric(frame["time_s"], errors="coerce") == float(time_s)
+            ]
+        if "depth_m" in frame.columns:
+            frame = frame.loc[pd.to_numeric(frame["depth_m"], errors="coerce") > 0]
+        else:
+            warnings.append(
+                make_warning(
+                    "schema_mismatch",
+                    "flood_slices.parquet has no depth_m column; no flood extent can be served",
+                    "flood_slices.parquet",
+                )
+            )
+            frame = frame.iloc[0:0]
+
+        coordinate_columns = {"x", "y"}
+        if not coordinate_columns.issubset(frame.columns):
+            warnings.append(
+                make_warning(
+                    "missing_geometry",
+                    "flood_slices.parquet has no x/y coordinates; no flood geometry can be served",
+                    "flood_slices.parquet",
+                )
+            )
+            frame = frame.iloc[0:0]
+
+        sort_columns = [column for column in ("y", "x", "cell_id") if column in frame.columns]
+        if sort_columns:
+            frame = frame.sort_values(sort_columns, kind="stable")
+        matched = len(frame)
+        truncated = matched > limit
+        if truncated:
+            if limit == 1:
+                positions = [matched // 2]
+            else:
+                positions = [
+                    round(index * (matched - 1) / (limit - 1)) for index in range(limit)
+                ]
+            frame = frame.iloc[positions]
+            warnings.append(
+                make_warning(
+                    "truncated",
+                    f"{matched - limit} flood cells were omitted by spatial coverage sampling",
+                    "flood_slices.parquet",
+                )
+            )
+
+        source_crs = _analysis_crs(run)
+        features: list[dict[str, Any]] = []
+        for record in jsonable_rows(frame):
+            x, y = record.get("x"), record.get("y")
+            if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                continue
+            geometry = wkt_to_geometry(f"POINT ({x} {y})", source_crs)
+            if geometry is None:
+                continue
+            properties = {
+                column: record.get(column)
+                for column in FLOOD_CELL_COLUMNS
+                if column in record
+            }
+            features.append(feature(geometry, properties))
+
+        if len(features) < len(frame):
+            warnings.append(
+                make_warning(
+                    "missing_geometry",
+                    f"{len(frame) - len(features)} flood cells had unusable coordinates",
+                    "flood_slices.parquet",
+                )
+            )
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "run_id": run.run_id,
+            "available": True,
+            "time_s": time_s,
+            "time_defaulted": defaulted,
+            "available_times": available_times,
+            "peak_time_s": peak_time_s,
+            "matched_rows": matched,
+            "returned": len(features),
+            "truncated": truncated,
+            "limit": limit,
+            "sample_is_spatial_subset": truncated,
+            "warnings": warnings,
+        }
 
     # ---------------------------------------------------------------- links
 
@@ -896,6 +1067,103 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             warnings=warnings,
         )
 
+    # --------------------------------------------------------------- routes
+
+    @app.get("/v1/runs/{run_id}/routes", tags=["geometry"])
+    def get_routes(run_id: str, ctx: SettingsDep) -> dict[str, Any]:
+        """Aggregate evacuation bottleneck edges as GeoJSON.
+
+        The privacy contract forbids publishing full person trajectories. The
+        run's already-aggregated top bottlenecks are safe to join to network
+        geometry and are the finest evacuation route layer this API exposes.
+        """
+        run = resolve_run(run_id)
+        warnings: list[ApiWarning] = []
+        stats, stats_warnings = load_stats_file(run)
+        warnings.extend(stats_warnings)
+        if stats is None:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "run_id": run.run_id,
+                "available": False,
+                "returned": 0,
+                "quantity": "aggregate_evacuation_bottleneck",
+                "warnings": warnings,
+            }
+
+        evacuation = stats.get("evacuation")
+        records = (
+            evacuation.get("top_bottleneck_edges", [])
+            if isinstance(evacuation, dict)
+            else []
+        )
+        bottlenecks = [record for record in records if isinstance(record, dict)]
+        edge_ids = [str(record["edge_id"]) for record in bottlenecks if record.get("edge_id")]
+        if not edge_ids:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "run_id": run.run_id,
+                "available": False,
+                "returned": 0,
+                "quantity": "aggregate_evacuation_bottleneck",
+                "warnings": warnings,
+            }
+
+        edges, edge_warnings = read_parquet(
+            artefact_path(run, "network_edges.parquet"), columns=list(EDGE_COLUMNS)
+        )
+        warnings.extend(edge_warnings)
+        if edges is None or "edge_id" not in edges.columns:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "run_id": run.run_id,
+                "available": False,
+                "returned": 0,
+                "quantity": "aggregate_evacuation_bottleneck",
+                "warnings": warnings,
+            }
+
+        by_id = {str(record["edge_id"]): record for record in bottlenecks}
+        rank = {edge_id: index for index, edge_id in enumerate(edge_ids)}
+        selected = edges.loc[edges["edge_id"].astype(str).isin(edge_ids)].copy()
+        selected["_rank"] = selected["edge_id"].astype(str).map(rank)
+        selected = selected.sort_values("_rank", kind="stable")
+
+        features: list[dict[str, Any]] = []
+        for record in selected.to_dict(orient="records"):
+            edge_id = str(record["edge_id"])
+            geometry = wkt_to_geometry(record.get("geometry_wkt"), _analysis_crs(run))
+            if geometry is None:
+                continue
+            summary = by_id[edge_id]
+            properties = {
+                "edge_id": edge_id,
+                "traversal_weight": jsonable(summary.get("traversal_weight")),
+                "route_quantity": "aggregate_evacuation_bottleneck",
+            }
+            features.append(feature(geometry, properties))
+
+        if len(features) < len(edge_ids):
+            warnings.append(
+                make_warning(
+                    "missing_geometry",
+                    f"{len(edge_ids) - len(features)} bottleneck edges had no usable geometry",
+                    "network_edges.parquet",
+                )
+            )
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "run_id": run.run_id,
+            "available": bool(features),
+            "returned": len(features),
+            "quantity": "aggregate_evacuation_bottleneck",
+            "warnings": warnings,
+        }
+
     # ----------------------------------------------------------- validation
 
     @app.get(
@@ -1069,6 +1337,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             warnings=warnings,
         )
 
+    @app.get("/v1/areas/bangkok", tags=["geometry"])
+    def get_bangkok_study_area(ctx: SettingsDep) -> dict[str, Any]:
+        """The full Bangkok Metropolitan Administration boundary in WGS84.
+
+        This reference layer is independent of the selected run. Pilot output
+        remains pilot output, but every client can retain the full-city study
+        area as its map frame and avoid presenting a district as all Bangkok.
+        """
+        boundary, warnings = _read_json_object(ctx.bangkok_aoi_path)
+        city_config, config_warnings = _read_json_object(ctx.city_config_path)
+        warnings.extend(config_warnings)
+
+        aoi = (
+            city_config.get("aoi", {})
+            if isinstance(city_config, dict) and isinstance(city_config.get("aoi"), dict)
+            else {}
+        )
+        features: list[dict[str, Any]] = []
+        if boundary is not None and boundary.get("type") == "FeatureCollection":
+            raw_features = boundary.get("features")
+            if isinstance(raw_features, list):
+                for raw_feature in raw_features:
+                    if not isinstance(raw_feature, dict):
+                        continue
+                    item = dict(raw_feature)
+                    raw_properties = item.get("properties")
+                    properties = (
+                        dict(raw_properties) if isinstance(raw_properties, dict) else {}
+                    )
+                    properties.update(
+                        {
+                            "scope": "study_area",
+                            "area_name": aoi.get("name_en", "Bangkok"),
+                            "area_km2": aoi.get("area_km2"),
+                            "geometry_source": aoi.get("geometry_source"),
+                            "attribution": aoi.get("attribution"),
+                        }
+                    )
+                    item["properties"] = properties
+                    features.append(item)
+        elif boundary is not None:
+            warnings.append(
+                make_warning(
+                    "invalid_geometry",
+                    "bangkok-bma.geojson is not a GeoJSON FeatureCollection",
+                    ctx.bangkok_aoi_path.name,
+                )
+            )
+
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "area_id": aoi.get("aoi_id", "bangkok-bma"),
+            "area_name": aoi.get("name_en", "Bangkok"),
+            "area_km2": aoi.get("area_km2"),
+            "bbox_wgs84": aoi.get("bbox_wgs84"),
+            "coverage": "full_bangkok_metropolitan_administration",
+            "warnings": [warning.model_dump(mode="json") for warning in warnings],
+        }
+
     @app.get("/v1/runs/{run_id}/population-grid")
     def get_population_grid(
         run_id: str,
@@ -1088,6 +1416,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         warnings.extend(read_warnings)
         if frame is None:
             return {
+                "type": "FeatureCollection",
+                "features": [],
                 "run_id": run.run_id,
                 "available": False,
                 "rows": [],
@@ -1116,7 +1446,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "population_grid_1km.parquet",
                 )
             )
+        rows = jsonable_rows(frame)
+        features = []
+        for row in rows:
+            geometry = wkt_to_geometry(row.get("geometry_wkt"), None)
+            if geometry is None:
+                continue
+            properties = {
+                key: value for key, value in row.items() if key != "geometry_wkt"
+            }
+            properties["total_pop"] = row.get("pop")
+            properties["population_quantity"] = "resident_baseline"
+            features.append(feature(geometry, properties))
         return {
+            "type": "FeatureCollection",
+            "features": features,
             "run_id": run.run_id,
             "available": True,
             "grid_size_m": 1000,
@@ -1130,7 +1474,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "returned": int(len(frame)),
             "truncated": truncated,
             "limit": limit,
-            "rows": jsonable_rows(frame),
+            "rows": rows,
             "warnings": warnings,
         }
 
@@ -1744,6 +2088,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
                 )
         return {
+            "type": "FeatureCollection",
             "run_id": run.run_id,
             "available": bool(network_block) or frame is not None,
             "summary": jsonable(network_block),

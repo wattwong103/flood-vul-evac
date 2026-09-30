@@ -73,6 +73,14 @@ class Settings:
     def pilot_config_path(self) -> Path:
         return self.config_dir / "pilot.json"
 
+    @property
+    def city_config_path(self) -> Path:
+        return self.config_dir / "pilot.city.json"
+
+    @property
+    def bangkok_aoi_path(self) -> Path:
+        return self.data_dir / "curated" / "aoi" / "bangkok-bma.geojson"
+
 
 def _cors_origins() -> tuple[str, ...]:
     raw = os.environ.get("BKKFLOW_CORS_ORIGINS", "").strip()

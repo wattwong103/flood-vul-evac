@@ -78,9 +78,12 @@ class RunDetailResponse(BaseModel):
 
 
 class MeshResponse(BaseModel):
+    type: str = "FeatureCollection"
+    features: list[dict[str, Any]] = Field(default_factory=list)
     run_id: str
     time_s: int | None = None
     time_defaulted: bool = False
+    available_times: list[int] = Field(default_factory=list)
     columns: list[str] = Field(default_factory=list)
     matched_rows: int = 0
     returned: int = 0

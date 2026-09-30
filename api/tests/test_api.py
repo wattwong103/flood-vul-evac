@@ -178,6 +178,21 @@ def test_config_reports_pilot_area(client: TestClient) -> None:
     assert "scenario" in body
 
 
+def test_bangkok_study_area_serves_the_full_city_boundary(client: TestClient) -> None:
+    response = client.get("/v1/areas/bangkok")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["type"] == "FeatureCollection"
+    assert body["area_id"] == "bangkok-bma"
+    assert body["area_name"] == "Bangkok"
+    assert body["area_km2"] == pytest.approx(1643.5357)
+    assert body["bbox_wgs84"] == pytest.approx([100.3279, 13.2191, 100.9386, 13.9552])
+    assert body["features"]
+    assert body["features"][0]["geometry"]["type"] in {"Polygon", "MultiPolygon"}
+    assert body["features"][0]["properties"]["scope"] == "study_area"
+
+
 # ---------------------------------------------------------------------------
 # Run lookup errors
 # ---------------------------------------------------------------------------
@@ -200,9 +215,11 @@ def test_unknown_run_404_on_every_run_scoped_endpoint(
         "/v1/runs/nope",
         "/v1/runs/nope/stats",
         "/v1/runs/nope/mesh",
+        "/v1/runs/nope/flood",
         "/v1/runs/nope/links",
         "/v1/runs/nope/buildings",
         "/v1/runs/nope/evacuation",
+        "/v1/runs/nope/routes",
         "/v1/runs/nope/validation",
         "/v1/runs/nope/export",
     ):
@@ -408,6 +425,53 @@ def test_stats_json_is_served_verbatim_when_present(
     assert body["field_added_after_contract_freeze"] == "kept"
 
 
+def test_routes_serves_aggregate_evacuation_bottlenecks_not_person_paths(
+    client: TestClient, runs_dir: Path
+) -> None:
+    stats = {
+        "run_id": "route-map",
+        "validation_status": "demonstration",
+        "evacuation": {
+            "top_bottleneck_edges": [
+                {"edge_id": "edge-2", "traversal_weight": 42.5},
+                {"edge_id": "edge-1", "traversal_weight": 20.0},
+            ]
+        },
+    }
+    edges = pd.DataFrame(
+        {
+            "edge_id": ["edge-1", "edge-2"],
+            "u": [1, 2],
+            "v": [2, 3],
+            "length_m": [100.0, 150.0],
+            "geometry_wkt": [
+                "LINESTRING (662000 1520000, 662100 1520000)",
+                "LINESTRING (662100 1520000, 662250 1520000)",
+            ],
+        }
+    )
+    _write_run(
+        runs_dir,
+        "route-map",
+        manifest=_manifest("route-map"),
+        tables={"network_edges": edges},
+        json_files={"stats": stats},
+    )
+
+    body = client.get("/v1/runs/route-map/routes").json()
+
+    assert body["type"] == "FeatureCollection"
+    assert body["available"] is True
+    assert body["returned"] == 2
+    assert body["features"][0]["properties"] == {
+        "edge_id": "edge-2",
+        "traversal_weight": 42.5,
+        "route_quantity": "aggregate_evacuation_bottleneck",
+    }
+    assert body["features"][0]["geometry"]["type"] == "LineString"
+    assert "person_id" not in body["features"][0]["properties"]
+
+
 def test_people_present_and_people_exposed_stay_separate(
     client: TestClient, runs_dir: Path
 ) -> None:
@@ -509,6 +573,8 @@ def test_mesh_returns_rows_for_a_time_slice(
     assert {"gcode", "lat", "lon", "time_s", "stationary_pop", "travelling_pop", "total_pop"} == set(row)
     # No cell-centre artefact exists, so coordinates are null rather than invented.
     assert row["lat"] is None and row["lon"] is None
+    assert body["type"] == "FeatureCollection"
+    assert body["features"] == []
     assert any(warning["code"] == "missing_geometry" for warning in body["warnings"])
 
 
@@ -519,6 +585,7 @@ def test_mesh_filters_to_the_requested_time(client: TestClient, runs_dir: Path) 
 
     body = client.get("/v1/runs/sliced/mesh?time=7200").json()
     assert body["returned"] == 3
+    assert body["available_times"] == [3600, 7200]
     assert {row["time_s"] for row in body["rows"]} == {7200}
 
 
@@ -549,6 +616,136 @@ def test_mesh_uses_coordinates_when_a_centre_table_exists(
     body = client.get("/v1/runs/geo/mesh?time=3600").json()
     assert body["rows"][0]["lat"] == 13.71
     assert body["rows"][0]["lon"] == 100.50
+    assert body["features"][0]["geometry"]["coordinates"] == [100.50, 13.71]
+    assert body["features"][0]["properties"]["total_pop"] == 0.5
+    assert body["features"][0]["properties"]["population_quantity"] == "people_present"
+
+
+def test_population_grid_is_geojson_with_a_resident_quantity(
+    client: TestClient, runs_dir: Path
+) -> None:
+    grid = pd.DataFrame(
+        {
+            "gx": [1],
+            "gy": [2],
+            "pop": [1234.5],
+            "x": [662000.0],
+            "y": [1520000.0],
+            "geometry_wkt": ["POINT (100.5 13.7)"],
+        }
+    )
+    _write_run(
+        runs_dir,
+        "city-grid",
+        manifest=_manifest("city-grid"),
+        tables={"population_grid_1km": grid},
+    )
+
+    body = client.get("/v1/runs/city-grid/population-grid").json()
+
+    assert body["type"] == "FeatureCollection"
+    assert body["quantity"] == "resident_baseline"
+    assert body["features"][0]["geometry"]["coordinates"] == [100.5, 13.7]
+    assert body["features"][0]["properties"]["total_pop"] == 1234.5
+
+
+def test_network_is_a_geojson_feature_collection(
+    client: TestClient, runs_dir: Path
+) -> None:
+    edges = pd.DataFrame(
+        {
+            "edge_id": ["e1"],
+            "length_m": [10.0],
+            "highway": ["residential"],
+            "walk_allowed": [True],
+            "vehicle_allowed": [True],
+            "geometry_wkt": ["LINESTRING (100.5 13.7, 100.6 13.8)"],
+        }
+    )
+    _write_run(
+        runs_dir,
+        "city-network",
+        manifest=_manifest("city-network"),
+        tables={"network_edges": edges},
+    )
+
+    body = client.get("/v1/runs/city-network/network").json()
+
+    assert body["type"] == "FeatureCollection"
+    assert body["features"][0]["geometry"]["type"] == "LineString"
+
+
+def test_flood_serves_one_time_slice_as_wgs84_points(
+    client: TestClient, runs_dir: Path
+) -> None:
+    slices = pd.DataFrame(
+        {
+            "cell_id": ["a", "b", "a", "b"],
+            "x": [662000.0, 663000.0, 662000.0, 663000.0],
+            "y": [1520000.0, 1520000.0, 1520000.0, 1520000.0],
+            "time_s": [0, 0, 300, 300],
+            "depth_m": [0.1, 0.2, 0.3, 0.4],
+            "peak_depth_m": [0.3, 0.4, 0.3, 0.4],
+            "source_role": ["scenario"] * 4,
+            "confidence": ["illustrative"] * 4,
+        }
+    )
+    _write_run(
+        runs_dir,
+        "flood-run",
+        manifest=_manifest("flood-run"),
+        tables={"flood_slices": slices},
+    )
+
+    body = client.get("/v1/runs/flood-run/flood?time=300").json()
+
+    assert body["type"] == "FeatureCollection"
+    assert body["time_s"] == 300
+    assert body["available_times"] == [0, 300]
+    assert body["peak_time_s"] == 300
+    assert body["matched_rows"] == 2
+    assert body["returned"] == 2
+    assert {feature["properties"]["depth_m"] for feature in body["features"]} == {
+        0.3,
+        0.4,
+    }
+    lon, lat = body["features"][0]["geometry"]["coordinates"]
+    assert 99.0 < lon < 102.0
+    assert 12.0 < lat < 15.0
+
+
+def test_flood_sampling_preserves_spatial_coverage(
+    client: TestClient, runs_dir: Path
+) -> None:
+    slices = pd.DataFrame(
+        {
+            "cell_id": [str(index) for index in range(10)],
+            "x": [662000.0 + index * 100.0 for index in range(10)],
+            "y": [1520000.0] * 10,
+            "time_s": [0] * 10,
+            "depth_m": [0.05 + float(index) / 10 for index in range(10)],
+            "source_role": ["scenario"] * 10,
+        }
+    )
+    _write_run(
+        runs_dir,
+        "sampled-flood",
+        manifest=_manifest("sampled-flood"),
+        tables={"flood_slices": slices},
+    )
+
+    body = client.get("/v1/runs/sampled-flood/flood?limit=3").json()
+
+    assert body["matched_rows"] == 10
+    assert body["returned"] == 3
+    assert body["truncated"] is True
+    assert body["sample_is_spatial_subset"] is True
+    # Coverage sampling spans the ordered cells; it is not a deepest-only ranking.
+    assert [feature["properties"]["cell_id"] for feature in body["features"]] == [
+        "0",
+        "4",
+        "9",
+    ]
 
 
 def test_mesh_without_the_table_warns(client: TestClient, runs_dir: Path) -> None:
