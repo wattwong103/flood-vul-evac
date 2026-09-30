@@ -70,6 +70,41 @@ layer — 343 shelter tags, 296 health care, 296 education, 58 emergency service
 312 community facilities, 95 commerce. **Zero are verified.** A shelter tag is
 someone's mapping decision, not an operator, a capacity or an inspection.
 
+### Hazard screening (new)
+
+Two city-scale screening layers, both driven by real data and both labelled as
+screening rather than simulation.
+
+**Connectivity under observed water.** The ways that held water in each observed
+year are removed from the network, measured at the source 30 m classification,
+and the question becomes whether exposed population can still reach a
+destination on foot.
+
+| year | ways closed | reachable | p50 |
+|---|---:|---:|---:|
+| 2010 | 57,836 (6.16%) | 71.5% | 42.9 min |
+| 2011 | 56,545 (6.02%) | 72.8% | 43.8 min |
+| 2012 | 61,743 (6.58%) | 68.7% | 41.9 min |
+| 2020 | 57,532 (6.13%) | 71.5% | 43.8 min |
+
+This is **not** an evacuation simulation: a yearly Landsat classification has
+no depth, duration, flow direction or timing, and water is treated as
+impassable at any depth.
+
+**How much of that is the assumption?** Closing every water-affected way is a
+choice. Re-running at 25% and 50% closure swings the absolute reachable share
+across **20 percentage points**, and the year ranking does not survive: 2012 is
+the worse year at 100% and 50% closure but marginally the better one at 25%. The
+code reports year_ranking_stable_across_assumptions: false rather than
+asserting a winner.
+
+**Drainage-discharge index.** A relative index over the 1,693 grid cells built
+from the mapped drainage network, basins and overflow paths. Monotonicity is
+verified on real data (rho of drainage density against risk −0.78, distance
+against risk +0.64). It is a screening index from infrastructure geometry only:
+not a hydraulic model, not a depth, and blind to rainfall, river stage, tide,
+pumping and gate operations.
+
 **This run has no flood *depth* layer and no evacuation outcomes.** That is a decision
 on the record, not an omission: the only reachable open terrain source carries
 roughly 5–10 m of vertical error across a floodplain whose flood-relevant
@@ -176,10 +211,12 @@ This distinction is the point of the project, so it is stated everywhere.
 
 ## Known limitations of this build
 
-- **No terrain model.** Without elevation, the flood surface is
-  distance-to-water only, so flooding is confined to a canal-and-river corridor
-  and low-lying basins away from water cannot be represented. This is the
-  plan's drainage-blindness risk and is the highest-value next acquisition.
+- **No usable terrain model, at any scale.** Two independent DEMs were measured
+  and both fail: the AWS terrarium tiles read +5 m in central Bangkok where
+  ground is 1-2 m, and the MitrEarth 30 m DEM reads +13.8 m at Khlong San with
+  adjacent samples swinging 5-31 m. Bangkok's flood-relevant topography is the
+  0-2 m band, so any DEM with larger error cannot support a depth model. This
+  is the single blocker on city-scale depth and evacuation.
 - **No rainfall forcing and no observed extent**, for licence and reachability
   reasons.
 - **No calibrated mobility.** No licensable Bangkok travel diary was available,

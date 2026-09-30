@@ -32,10 +32,11 @@
         "within_120min": 6784775.37
       },
       "designated_destinations": 97,
-      "elapsed_seconds": 45.4,
+      "closure_fraction": 1.0,
+      "elapsed_seconds": 54.5,
       "warnings": [
         "only 97 designated destinations could be placed for a population of 9,710,328; travel times depend on that choice",
-        "run: 0e0f8cf6-03c3-436d-90cd-a5d2a1a4273a"
+        "run: 784ffce7-7ee0-4af8-8a49-2e9844dd487a"
       ]
     },
     "2011": {
@@ -67,10 +68,11 @@
         "within_120min": 6955743.81
       },
       "designated_destinations": 97,
-      "elapsed_seconds": 44.9,
+      "closure_fraction": 1.0,
+      "elapsed_seconds": 47.8,
       "warnings": [
         "only 97 designated destinations could be placed for a population of 9,644,151; travel times depend on that choice",
-        "run: 0e0f8cf6-03c3-436d-90cd-a5d2a1a4273a"
+        "run: 784ffce7-7ee0-4af8-8a49-2e9844dd487a"
       ]
     },
     "2012": {
@@ -102,10 +104,11 @@
         "within_120min": 6508306.7
       },
       "designated_destinations": 97,
-      "elapsed_seconds": 43.7,
+      "closure_fraction": 1.0,
+      "elapsed_seconds": 49.0,
       "warnings": [
         "only 97 designated destinations could be placed for a population of 9,575,741; travel times depend on that choice",
-        "run: 0e0f8cf6-03c3-436d-90cd-a5d2a1a4273a"
+        "run: 784ffce7-7ee0-4af8-8a49-2e9844dd487a"
       ]
     },
     "2020": {
@@ -137,12 +140,13 @@
         "within_120min": 6575145.27
       },
       "designated_destinations": 97,
-      "elapsed_seconds": 43.9,
+      "closure_fraction": 1.0,
+      "elapsed_seconds": 44.3,
       "warnings": [
         "only 97 designated destinations could be placed for a population of 9,382,560; travel times depend on that choice",
-        "run: 0e0f8cf6-03c3-436d-90cd-a5d2a1a4273a"
+        "run: 784ffce7-7ee0-4af8-8a49-2e9844dd487a"
       ]
     }
   },
-  "written_at": "2026-09-30T11:25:54+00:00"
+  "written_at": "2026-09-30T13:23:58+00:00"
 }
