@@ -65,6 +65,7 @@ import {
   observedWaterCellsPath,
   observedWaterPath,
   populationGridPath,
+  studyAreaPath,
   type ApiError,
 } from "@/lib/client";
 import {
@@ -84,6 +85,8 @@ import {
   type ObservedWaterResponse,
   type ObservedWaterYear,
   type PopulationGridResponse,
+  type StudyAreaProperties,
+  type StudyAreaResponse,
 } from "@/lib/api";
 import {
   formatCount,
@@ -118,6 +121,7 @@ export function ObservedAssets({ reducedMotion }: { reducedMotion: boolean }) {
   const [destinationClass, setDestinationClass] = useState<string>(ALL_CLASSES);
   const [connectivityYear, setConnectivityYear] = useState<number | null>(null);
   const [drainageBand, setDrainageBand] = useState<string>(ALL_BANDS);
+  const studyArea = useApi<StudyAreaResponse>(studyAreaPath, []);
 
   // One path per route, composed through the shared builders in `lib/client`
   // so the route is defined once. A null path skips the request entirely.
@@ -239,11 +243,12 @@ export function ObservedAssets({ reducedMotion }: { reducedMotion: boolean }) {
   const bundle = useMemo<MapBundle>(
     () => ({
       ...EMPTY_BUNDLE,
+      studyArea: asFeatureCollection<StudyAreaProperties>(studyArea.data),
       observedWater: asFeatureCollection<ObservedWaterCellProperties>(
         cells.phase === "ready" ? cells.data : null,
       ),
     }),
-    [cells.phase, cells.data],
+    [studyArea.data, cells.phase, cells.data],
   );
 
   return (

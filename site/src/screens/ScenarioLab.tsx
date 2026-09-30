@@ -52,8 +52,29 @@ import {
 } from "@/components/primitives";
 import { useApi } from "@/hooks/useApi";
 import { useRuns } from "@/lib/run-context";
-import { asFeatureCollection } from "@/lib/client";
-import { isFloodSourceRole, evacuationReason, floodReason, floodStatus, type RunStats } from "@/lib/api";
+import { availableModelTimes, shouldLoadStaticFallback } from "@/lib/map-copy";
+import {
+  API_BASE_URL,
+  asFeatureCollection,
+  floodPath,
+  networkPath,
+  populationGridPath,
+  routesPath,
+  studyAreaPath,
+} from "@/lib/client";
+import {
+  isFloodSourceRole,
+  evacuationReason,
+  floodReason,
+  floodStatus,
+  type FloodResult,
+  type MeshResult,
+  type NetworkResult,
+  type PopulationGridResponse,
+  type RunStats,
+  type StudyAreaProperties,
+  type StudyAreaResponse,
+} from "@/lib/api";
 import {
   formatCount,
   formatModelClock,
@@ -78,6 +99,7 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
   const [layers, setLayers] = useState<LayerState>(DEFAULT_LAYERS);
   const [selectedTime, setSelectedTime] = useState<number | null>(null);
   const [profile, setProfile] = useState<string>("reported");
+  const studyArea = useApi<StudyAreaResponse>(studyAreaPath, []);
 
   // --- Local, unsubmitted scenario composition -------------------------
   const [rainfall, setRainfall] = useState(150);
@@ -89,24 +111,37 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
 
   // The unfiltered mesh response is the only place the run's own model times
   // are discoverable, so it drives the timeline.
-  const meshAll = useApi<unknown>(encoded ? `/v1/runs/${encoded}/mesh` : null, [runId]);
+  const meshAll = useApi<MeshResult>(encoded ? `/v1/runs/${encoded}/mesh` : null, [runId]);
+  const floodIndex = useApi<FloodResult>(
+    runId ? floodPath(runId, null, 1) : null,
+    [runId],
+  );
 
   const times = useMemo(() => {
-    if (meshAll.phase !== "ready") return [] as number[];
+    if (Array.isArray(meshAll.data?.available_times)) {
+      return availableModelTimes(
+        meshAll.data.available_times,
+        floodIndex.data?.available_times,
+      );
+    }
     const collection = asFeatureCollection<{ time_s?: number | null }>(meshAll.data);
     const set = new Set<number>();
     for (const feature of collection.features) {
       const value = propNumber(feature.properties, "time_s");
       if (value !== null) set.add(value);
     }
-    return [...set].sort((a, b) => a - b);
-  }, [meshAll.phase, meshAll.data]);
+    return availableModelTimes([...set], floodIndex.data?.available_times);
+  }, [meshAll.data, floodIndex.data]);
 
   const activeTime = useMemo(() => {
     if (times.length === 0) return null;
     if (selectedTime !== null && times.includes(selectedTime)) return selectedTime;
+    const peakFloodTime = floodIndex.data?.peak_time_s;
+    if (typeof peakFloodTime === "number" && times.includes(peakFloodTime)) {
+      return peakFloodTime;
+    }
     return times[times.length - 1];
-  }, [times, selectedTime]);
+  }, [times, selectedTime, floodIndex.data]);
 
   useEffect(() => {
     if (selectedTime !== null && times.length > 0 && !times.includes(selectedTime)) {
@@ -115,12 +150,10 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
   }, [times, selectedTime]);
 
   const slicedMesh = useApi<unknown>(
-    encoded && activeTime !== null && times.length > 1
+    encoded && activeTime !== null
       ? `/v1/runs/${encoded}/mesh?time=${encodeURIComponent(String(activeTime))}`
-      : encoded
-        ? `/v1/runs/${encoded}/mesh`
-        : null,
-    [runId, activeTime, times.length > 1],
+      : null,
+    [runId, activeTime],
   );
 
   const links = useApi<unknown>(
@@ -132,8 +165,33 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
 
   const buildings = useApi<unknown>(encoded ? `/v1/runs/${encoded}/buildings` : null, [runId]);
 
-  const evacuation = useApi<unknown>(
-    encoded ? `/v1/runs/${encoded}/evacuation` : null,
+  // City runs publish a resident grid and a bounded network sample through
+  // dedicated endpoints. Fetch those large fallbacks only after the primary
+  // PFLOW layer is known to be empty.
+  const primaryMeshData = activeTime !== null ? slicedMesh.data : meshAll.data;
+  const primaryMeshPhase = activeTime !== null ? slicedMesh.phase : meshAll.phase;
+  const primaryMeshCount = asFeatureCollection(primaryMeshData).features.length;
+  const primaryLinkCount = asFeatureCollection(links.data).features.length;
+  const cityPopulation = useApi<PopulationGridResponse>(
+    runId && shouldLoadStaticFallback(primaryMeshPhase, primaryMeshCount)
+      ? populationGridPath(runId)
+      : null,
+    [runId, primaryMeshPhase, primaryMeshCount],
+  );
+  const cityNetwork = useApi<NetworkResult>(
+    runId && shouldLoadStaticFallback(links.phase, primaryLinkCount)
+      ? networkPath(runId, 5000)
+      : null,
+    [runId, links.phase, primaryLinkCount],
+  );
+
+  const flood = useApi<FloodResult>(
+    runId ? floodPath(runId, activeTime, 5000) : null,
+    [runId, activeTime],
+  );
+
+  const evacuationRoutes = useApi<unknown>(
+    runId ? routesPath(runId) : null,
     [runId],
   );
 
@@ -153,11 +211,26 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
       buildings.data,
     );
     const routeCollection = asFeatureCollection<Record<string, unknown>>(
-      evacuation.data,
+      evacuationRoutes.data,
     );
+    const meshCollection = asFeatureCollection<Record<string, unknown>>(
+      primaryMeshData,
+    );
+    const cityPopulationCollection = asFeatureCollection<Record<string, unknown>>(
+      cityPopulation.data,
+    );
+    const linkCollection = asFeatureCollection<Record<string, unknown>>(links.data);
+    const cityNetworkCollection = asFeatureCollection<Record<string, unknown>>(
+      cityNetwork.data,
+    );
+    const floodCollection = asFeatureCollection<Record<string, unknown>>(flood.data);
     return {
-      mesh: asFeatureCollection(slicedMesh.phase === "ready" ? slicedMesh.data : meshAll.data),
-      links: asFeatureCollection(links.data),
+      studyArea: asFeatureCollection<StudyAreaProperties>(studyArea.data),
+      mesh:
+        meshCollection.features.length > 0 ? meshCollection : cityPopulationCollection,
+      links:
+        linkCollection.features.length > 0 ? linkCollection : cityNetworkCollection,
+      flood: floodCollection,
       buildings: buildingCollection,
       routes: routeCollection,
       refuges: extractRefuges(buildingCollection),
@@ -165,18 +238,18 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
       // the model-time bundle above.
       observedWater: { type: "FeatureCollection", features: [] },
     };
-  }, [slicedMesh, meshAll, links, buildings, evacuation]);
+  }, [studyArea.data, primaryMeshData, links, cityPopulation, cityNetwork, flood, buildings, evacuationRoutes]);
 
   const sourceRoles = useMemo(() => {
     const roles = new Set<string>();
-    for (const feature of bundle.mesh.features) {
+    for (const feature of bundle.flood.features) {
       const value = feature.properties?.source_role;
       if (typeof value === "string") roles.add(value);
     }
     const declared = payload?.flood?.source_role;
     if (declared) roles.add(declared);
     return [...roles].sort();
-  }, [bundle.mesh, payload]);
+  }, [bundle.flood, payload]);
 
   const toggleLayer = useCallback((id: LayerId) => {
     setLayers((current) => ({ ...current, [id]: !current[id] }));
@@ -189,7 +262,16 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
     : null;
 
   const anyLoading =
-    stats.phase === "loading" || meshAll.phase === "loading" || slicedMesh.phase === "loading";
+    stats.phase === "loading" ||
+    meshAll.phase === "loading" ||
+    slicedMesh.phase === "loading" ||
+    floodIndex.phase === "loading" ||
+    flood.phase === "loading" ||
+    links.phase === "loading" ||
+    buildings.phase === "loading" ||
+    cityPopulation.phase === "loading" ||
+    cityNetwork.phase === "loading" ||
+    evacuationRoutes.phase === "loading";
 
   // A city run does not compute a flood depth: `max_depth_m` and `edges_closed`
   // are null and the state of the computation is reported separately. Pilot
@@ -207,10 +289,11 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
         <p className="eyebrow">01 · Scenario Lab</p>
         <h1>Where can people still move?</h1>
         <p className="lead">
-          Flood, street network, building presence and evacuation for one Bangkok
-          pilot area. Every figure on this screen is a model output at a stated model
-          time. The one observed layer, JRC surface-water extent, is on the Observed
-          &amp; assets screen.
+          The map always opens on the full Bangkok Metropolitan Administration
+          boundary. Population and network data cover the city when a city run is
+          selected; flood depth and evacuation remain visibly limited to the scope
+          of the selected run. The observed JRC surface-water extent is on the
+          Observed &amp; assets screen.
         </p>
 
         <RunPicker />
@@ -409,7 +492,7 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
               <MapView
                 bundle={bundle}
                 layers={layers}
-                modelTime={modelTime}
+                modelTime={activeTime === null ? null : modelTime}
                 areaName={formatText(payload?.geography?.name ?? "the pilot area")}
                 reducedMotion={reducedMotion}
               />
@@ -591,7 +674,7 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
                     size="sm"
                     onClick={() =>
                       window.open(
-                        `${window.location.origin}/v1/runs/${encoded}/validation`,
+                        `${API_BASE_URL}/v1/runs/${encoded}/validation`,
                         "_blank",
                       )
                     }

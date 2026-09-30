@@ -45,12 +45,22 @@ export function RunProvider({ children }: { children: ReactNode }) {
     }
   });
 
-  const runs = useApi<RunSummary[]>("/v1/runs", []);
+  const rawRuns = useApi<unknown>("/v1/runs", []);
+  const runs = useMemo<AsyncState<RunSummary[]>>(
+    () => ({
+      phase: rawRuns.phase,
+      data: asRunList(rawRuns.data),
+      error: rawRuns.error,
+      loadedAt: rawRuns.loadedAt,
+      reload: rawRuns.reload,
+    }),
+    [rawRuns.phase, rawRuns.data, rawRuns.error, rawRuns.loadedAt, rawRuns.reload],
+  );
 
   // Keep the selection valid: prefer an explicit choice, else the newest run.
   useEffect(() => {
     if (runs.phase !== "ready") return;
-    const list = asRunList(runs.data);
+    const list = runs.data ?? [];
     if (list.length === 0) {
       if (activeRunId !== null) setActiveRunIdState(null);
       return;

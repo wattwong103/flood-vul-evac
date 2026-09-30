@@ -405,6 +405,24 @@ export type FeatureCollection<TProps> = {
   [key: string]: unknown;
 };
 
+export type StudyAreaProperties = {
+  scope?: "study_area" | null;
+  area_name?: string | null;
+  area_km2?: number | null;
+  geometry_source?: string | null;
+  attribution?: string | null;
+  [key: string]: unknown;
+};
+
+export type StudyAreaResponse = FeatureCollection<StudyAreaProperties> & {
+  area_id?: string | null;
+  area_name?: string | null;
+  area_km2?: number | null;
+  bbox_wgs84?: [number, number, number, number] | null;
+  coverage?: string | null;
+  warnings?: unknown[] | null;
+};
+
 /** `mesh_volume.parquet` — `run_id, gcode, mesh_size_m, time_s, stationary_pop, travelling_pop, total_pop` */
 export type MeshProperties = {
   cell_id?: string | null;
@@ -418,7 +436,21 @@ export type MeshProperties = {
   total_pop?: number | null;
   /** Optional: the exposed subset, which is a different quantity. */
   exposed_pop?: number | null;
+  /** Prevents resident baselines and PFLOW people-present estimates being conflated. */
+  population_quantity?: "people_present" | "resident_baseline" | string | null;
   source_role?: string | null;
+  [key: string]: unknown;
+};
+
+/** One positive-depth cell from `flood_slices.parquet`. */
+export type FloodProperties = {
+  cell_id?: string | null;
+  time_s?: number | null;
+  depth_m?: number | null;
+  peak_depth_m?: number | null;
+  distance_to_water_m?: number | null;
+  source_role?: string | null;
+  confidence?: string | number | null;
   [key: string]: unknown;
 };
 
@@ -464,12 +496,14 @@ export type BuildingProperties = {
 
 /** `evacuation_states.parquet` aggregates. */
 export type EvacuationProperties = {
+  edge_id?: string | null;
+  traversal_weight?: number | null;
+  route_quantity?: "aggregate_evacuation_bottleneck" | string | null;
   state?: string | null;
   reason?: string | null;
   dest_id?: string | null;
   event_time_s?: number | null;
   weight?: number | null;
-  edge_id?: string | null;
   [key: string]: unknown;
 };
 
@@ -486,7 +520,31 @@ export type EvacuationResult = {
   [key: string]: unknown;
 };
 
-export type MeshResult = FeatureCollection<MeshProperties> | null;
+export type MeshResult = FeatureCollection<MeshProperties> & {
+  run_id?: string | null;
+  time_s?: number | null;
+  time_defaulted?: boolean | null;
+  available_times?: number[] | null;
+  matched_rows?: number | null;
+  returned?: number | null;
+  truncated?: boolean | null;
+  limit?: number | null;
+  warnings?: unknown[] | null;
+};
+export type FloodResult = FeatureCollection<FloodProperties> & {
+  run_id?: string | null;
+  available?: boolean | null;
+  time_s?: number | null;
+  time_defaulted?: boolean | null;
+  available_times?: number[] | null;
+  peak_time_s?: number | null;
+  matched_rows?: number | null;
+  returned?: number | null;
+  truncated?: boolean | null;
+  limit?: number | null;
+  sample_is_spatial_subset?: boolean | null;
+  warnings?: unknown[] | null;
+};
 export type LinkResult = FeatureCollection<LinkProperties> | null;
 export type BuildingResult = FeatureCollection<BuildingProperties> | null;
 export type RouteResult = FeatureCollection<EvacuationProperties> | null;
@@ -518,6 +576,8 @@ export type PopulationGridRow = {
 };
 
 export type PopulationGridResponse = {
+  type?: "FeatureCollection";
+  features?: Array<Feature<MeshProperties>> | null;
   run_id?: string | null;
   available?: boolean | null;
   grid_size_m?: number | null;

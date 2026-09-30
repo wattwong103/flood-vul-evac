@@ -120,8 +120,10 @@
 .legend-group { display: grid; gap: 5px; }
 .legend-name { margin: 0; font-size: 9.5px; font-weight: 850; letter-spacing: .05em; text-transform: uppercase; }
 .legend-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
-.legend-group li, .legend-group > p:not(.legend-name) { display: flex; gap: 7px; align-items: flex-start; font-size: 9.5px; line-height: 1.5; color: #4d5c58; margin: 0; }
+.legend-group li { display: flex; gap: 7px; align-items: flex-start; }
+.legend-group li, .legend-group > p:not(.legend-name) { font-size: 9.5px; line-height: 1.5; color: #4d5c58; margin: 0; }
 .swatch { width: 20px; height: 11px; flex: none; margin-top: 2px; border: 1px solid #6d7c77; }
+.swatch.study-area { background: rgba(247,251,249,.7); border: 2px solid #173f3b; }
 .swatch.flood-observed { background: linear-gradient(90deg, #cfe6ef, #0f4b66); }
 .swatch.flood-modelled { background: linear-gradient(90deg, #ccd6e8, #26356b); border-style: dashed; }
 .swatch.flood-scenario { background: linear-gradient(90deg, #f7e2c6, #a3511d); border-style: dotted; }

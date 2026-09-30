@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint src/App.tsx src/main.tsx src/components/MapView.tsx src/components/primitives.tsx src/screens src/lib src/hooks/useApi.ts",
+    "test": "node --test tests/client.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

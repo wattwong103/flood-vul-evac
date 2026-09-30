@@ -15,6 +15,7 @@ import type {
   EvacuationResult,
   Feature,
   FeatureCollection,
+  FloodResult,
   HealthResponse,
   LinkResult,
   MeshResult,
@@ -29,11 +30,16 @@ import type {
   SiteConfig,
   SourceRecord,
   SourceRegistry,
+  StudyAreaResponse,
   ValidationReport,
 } from "./api";
 
+const viteEnv = (import.meta as ImportMeta & {
+  readonly env?: Record<string, string | undefined>;
+}).env;
+
 export const API_BASE_URL: string = (
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ""
+  viteEnv?.VITE_API_BASE_URL ?? ""
 ).replace(/\/+$/, "") || "http://127.0.0.1:8000";
 
 export type ApiErrorKind =
@@ -163,6 +169,11 @@ export const fetchHealth = (signal?: AbortSignal) =>
 export const fetchConfig = (signal?: AbortSignal) =>
   apiGet<SiteConfig>("/v1/config", signal);
 
+export const studyAreaPath = "/v1/areas/bangkok";
+
+export const fetchStudyArea = (signal?: AbortSignal) =>
+  apiGet<StudyAreaResponse>(studyAreaPath, signal);
+
 export const fetchSources = (signal?: AbortSignal) =>
   apiGet<SourceRegistry | SourceRecord[]>("/v1/sources", signal);
 
@@ -225,6 +236,21 @@ export const exportUrl = (runId: string) =>
 
 export const populationGridPath = (runId: string) =>
   `/v1/runs/${encodeURIComponent(runId)}/population-grid`;
+
+export const floodPath = (
+  runId: string,
+  time: number | null = null,
+  limit: number | null = null,
+) => {
+  const params = new URLSearchParams();
+  if (time !== null) params.set("time", String(time));
+  if (limit !== null) params.set("limit", String(limit));
+  const query = params.toString();
+  return `/v1/runs/${encodeURIComponent(runId)}/flood${query ? `?${query}` : ""}`;
+};
+
+export const routesPath = (runId: string) =>
+  `/v1/runs/${encodeURIComponent(runId)}/routes`;
 
 export const observedWaterPath = (runId: string) =>
   `/v1/runs/${encodeURIComponent(runId)}/observed-water`;
@@ -289,6 +315,16 @@ export const drainageCellsPath = (
 
 export const fetchPopulationGrid = (runId: string, signal?: AbortSignal) =>
   apiGet<PopulationGridResponse>(populationGridPath(runId), signal);
+
+export const fetchFlood = (
+  runId: string,
+  time: number | null = null,
+  limit: number | null = null,
+  signal?: AbortSignal,
+) => apiGet<FloodResult>(floodPath(runId, time, limit), signal);
+
+export const fetchRoutes = (runId: string, signal?: AbortSignal) =>
+  apiGet<RouteResult>(routesPath(runId), signal);
 
 export const fetchObservedWater = (runId: string, signal?: AbortSignal) =>
   apiGet<ObservedWaterResponse>(observedWaterPath(runId), signal);

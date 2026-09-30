@@ -19,9 +19,11 @@ import {
   Map as MapLibreMap,
   NavigationControl,
   ScaleControl,
+  setWorkerUrl,
   type StyleSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { Layers, Table2, Map as MapIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -37,9 +39,11 @@ import type {
   EvacuationProperties,
   Feature,
   FeatureCollection,
+  FloodProperties,
   LinkProperties,
   MeshProperties,
   ObservedWaterCellProperties,
+  StudyAreaProperties,
 } from "@/lib/api";
 import {
   formatCount,
@@ -51,6 +55,11 @@ import {
   propNumber,
   propString,
 } from "@/lib/format";
+import { stringPropertyExpression } from "@/lib/map-expressions";
+import { geoJsonBounds } from "@/lib/map-bounds";
+import { layerFooterText } from "@/lib/map-copy";
+
+setWorkerUrl(maplibreWorkerUrl);
 
 /* ------------------------------------------------------------------ *
  * Layer model
@@ -100,7 +109,7 @@ export const LAYER_LABELS: Record<LayerId, { name: string; quantity: string }> =
   population: {
     name: "Population",
     quantity:
-      "People present — PFLOW mesh total (stationary + travelling) at the selected model time",
+      "Quantity declared per feature: PFLOW people present or city resident baseline",
   },
   flood: {
     name: "Flood depth",
@@ -115,8 +124,8 @@ export const LAYER_LABELS: Record<LayerId, { name: string; quantity: string }> =
     quantity: "Road and path edges with flood-impedance state at the selected model time",
   },
   routes: {
-    name: "Evacuation routes",
-    quantity: "Simulated evacuation trajectories, weighted synthetic agents",
+    name: "Evacuation bottlenecks",
+    quantity: "Aggregate weighted flow on the run's top evacuation bottleneck edges",
   },
   refuges: {
     name: "Refuges",
@@ -130,7 +139,9 @@ export const LAYER_LABELS: Record<LayerId, { name: string; quantity: string }> =
 };
 
 export type MapBundle = {
+  studyArea: FeatureCollection<StudyAreaProperties>;
   mesh: FeatureCollection<MeshProperties>;
+  flood: FeatureCollection<FloodProperties>;
   links: FeatureCollection<LinkProperties>;
   buildings: FeatureCollection<BuildingProperties>;
   routes: FeatureCollection<EvacuationProperties>;
@@ -141,7 +152,9 @@ export type MapBundle = {
 };
 
 export const EMPTY_BUNDLE: MapBundle = {
+  studyArea: { type: "FeatureCollection", features: [] },
   mesh: { type: "FeatureCollection", features: [] },
+  flood: { type: "FeatureCollection", features: [] },
   links: { type: "FeatureCollection", features: [] },
   buildings: { type: "FeatureCollection", features: [] },
   routes: { type: "FeatureCollection", features: [] },
@@ -207,17 +220,7 @@ function depthExpression(stops: [number, string][]): unknown[] {
 }
 
 const NUM = (key: string) => ["coalesce", ["to-number", ["get", key]], 0] as unknown[];
-const STR = (key: string) => [
-  "match",
-  ["to-string", ["get", key]],
-  "observed",
-  "observed",
-  "modelled",
-  "modelled",
-  "modelled",
-  "scenario",
-  "scenario",
-] as unknown[];
+const STR = stringPropertyExpression;
 
 const CLOSED = [
   "any",
@@ -267,7 +270,15 @@ const POP_RADIUS = [
   16,
 ] as unknown[];
 
-const SOURCES = ["mesh", "links", "buildings", "routes", "observed-water"] as const;
+const SOURCES = [
+  "study-area",
+  "mesh",
+  "flood",
+  "links",
+  "buildings",
+  "routes",
+  "observed-water",
+] as const;
 
 /**
  * Observed extent is a single ramp, deliberately unlike the three flood-depth
@@ -349,13 +360,6 @@ function refugeGlyph(kind: "verified" | "unverified"): ImageData | null {
   return ctx.getImageData(0, 0, size, size);
 }
 
-function isPolygonal(features: Array<Feature<unknown>>): boolean {
-  return features.some((feature) => {
-    const type = feature.geometry?.type;
-    return type === "Polygon" || type === "MultiPolygon";
-  });
-}
-
 /* ------------------------------------------------------------------ *
  * Component
  * ------------------------------------------------------------------ */
@@ -375,28 +379,23 @@ export function MapView({
   bundle,
   layers,
   modelTime,
-  center = [100.5014, 13.75],
-  zoom = 11,
+  center = [100.6333, 13.5872],
+  zoom = 9.1,
   areaName,
   reducedMotion,
 }: MapViewProps) {
   const container = useRef<HTMLDivElement | null>(null);
   const map = useRef<MapLibreMap | null>(null);
+  const hasFittedStudyArea = useRef(false);
   const [ready, setReady] = useState(false);
   const [mode, setMode] = useState<"map" | "table">("map");
   const [failure, setFailure] = useState<string | null>(null);
 
-  const geometryKind = useMemo(
-    () => ({
-      mesh: isPolygonal(bundle.mesh.features),
-      routes: isPolygonal(bundle.routes.features),
-    }),
-    [bundle.mesh, bundle.routes],
-  );
-
   const dataFor = useMemo(
     () => ({
+      "study-area": bundle.studyArea as unknown as GeoJSON.FeatureCollection,
       mesh: bundle.mesh as unknown as GeoJSON.FeatureCollection,
+      flood: bundle.flood as unknown as GeoJSON.FeatureCollection,
       links: bundle.links as unknown as GeoJSON.FeatureCollection,
       buildings: bundle.buildings as unknown as GeoJSON.FeatureCollection,
       routes: bundle.routes as unknown as GeoJSON.FeatureCollection,
@@ -437,6 +436,27 @@ export function MapView({
         });
       }
 
+      // --- Study area: always the full Bangkok administrative extent. ---
+      instance.addLayer({
+        id: "study-area-fill",
+        type: "fill",
+        source: "study-area",
+        paint: {
+          "fill-color": "#f7fbf9",
+          "fill-opacity": 0.18,
+        },
+      });
+      instance.addLayer({
+        id: "study-area-outline",
+        type: "line",
+        source: "study-area",
+        paint: {
+          "line-color": "#173f3b",
+          "line-width": 2.2,
+          "line-opacity": 0.95,
+        },
+      });
+
       // --- Flood: three role-specific layers, never merged. -------------
       const roles: Array<[string, string, [number, string][], number[]]> = [
         ["flood-observed", "observed", DEPTH_STOPS_OBSERVED, []],
@@ -447,7 +467,7 @@ export function MapView({
         instance.addLayer({
           id: `${id}-fill`,
           type: "fill",
-          source: "mesh",
+          source: "flood",
           filter: ["==", STR("source_role"), role] as never,
           layout: { visibility: "visible" },
           paint: {
@@ -458,7 +478,7 @@ export function MapView({
         instance.addLayer({
           id: `${id}-line`,
           type: "line",
-          source: "mesh",
+          source: "flood",
           filter: ["==", STR("source_role"), role] as never,
           layout: { visibility: "visible", "line-join": "round" },
           paint: {
@@ -467,36 +487,55 @@ export function MapView({
             ...(dash.length ? { "line-dasharray": dash } : {}),
           },
         });
+        instance.addLayer({
+          id: `${id}-circle`,
+          type: "circle",
+          source: "flood",
+          filter: ["==", STR("source_role"), role] as never,
+          layout: { visibility: "visible" },
+          paint: {
+            "circle-color": depthExpression(stops) as never,
+            "circle-radius": [
+              "interpolate",
+              ["linear"],
+              ["coalesce", ["to-number", ["get", "depth_m"]], 0],
+              0,
+              3,
+              0.6,
+              11,
+            ] as never,
+            "circle-opacity": 0.72,
+            "circle-stroke-color": stops[stops.length - 1][1],
+            "circle-stroke-width": role === "observed" ? 1.4 : 0.8,
+          },
+        });
       }
 
       // --- Population -------------------------------------------------
-      if (geometryKind.mesh) {
-        instance.addLayer({
-          id: "population-fill",
-          type: "fill",
-          source: "mesh",
-          layout: { visibility: "visible" },
-          paint: {
-            "fill-color": POP_FILL as never,
-            "fill-opacity": 0.7,
-            "fill-outline-color": "#0d403c",
-          },
-        });
-      } else {
-        instance.addLayer({
-          id: "population-circle",
-          type: "circle",
-          source: "mesh",
-          layout: { visibility: "visible" },
-          paint: {
-            "circle-color": POP_FILL as never,
-            "circle-radius": POP_RADIUS as never,
-            "circle-opacity": 0.8,
-            "circle-stroke-color": "#0d403c",
-            "circle-stroke-width": 0.8,
-          },
-        });
-      }
+      instance.addLayer({
+        id: "population-fill",
+        type: "fill",
+        source: "mesh",
+        layout: { visibility: "visible" },
+        paint: {
+          "fill-color": POP_FILL as never,
+          "fill-opacity": 0.7,
+          "fill-outline-color": "#0d403c",
+        },
+      });
+      instance.addLayer({
+        id: "population-circle",
+        type: "circle",
+        source: "mesh",
+        layout: { visibility: "visible" },
+        paint: {
+          "circle-color": POP_FILL as never,
+          "circle-radius": POP_RADIUS as never,
+          "circle-opacity": 0.8,
+          "circle-stroke-color": "#0d403c",
+          "circle-stroke-width": 0.8,
+        },
+      });
 
       // --- Buildings: footprint exposure only, never shelter ----------
       instance.addLayer({
@@ -547,23 +586,32 @@ export function MapView({
       });
 
       // --- Routes ----------------------------------------------------
-      if (geometryKind.routes) {
-        instance.addLayer({
-          id: "routes-line",
-          type: "fill",
-          source: "routes",
-          layout: { visibility: "visible" },
-          paint: { "fill-color": "#ef9b43", "fill-opacity": 0.35 },
-        });
-      } else {
-        instance.addLayer({
-          id: "routes-line",
-          type: "line",
-          source: "routes",
-          layout: { visibility: "visible" },
-          paint: { "line-color": "#ef9b43", "line-width": 2.2, "line-opacity": 0.9 },
-        });
-      }
+      instance.addLayer({
+        id: "routes-fill",
+        type: "fill",
+        source: "routes",
+        layout: { visibility: "visible" },
+        paint: { "fill-color": "#ef9b43", "fill-opacity": 0.35 },
+      });
+      instance.addLayer({
+        id: "routes-line",
+        type: "line",
+        source: "routes",
+        layout: { visibility: "visible" },
+        paint: {
+          "line-color": "#ef9b43",
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            NUM("traversal_weight"),
+            0,
+            1.5,
+            1000,
+            7,
+          ] as never,
+          "line-opacity": 0.9,
+        },
+      });
 
       // --- Refuges: verified and unverified are drawn differently ----
       const verifiedIcon = refugeGlyph("verified");
@@ -637,6 +685,26 @@ export function MapView({
     }
   }, [ready, dataFor]);
 
+  // Fit the initial view to all of Bangkok once the city boundary arrives.
+  // Timeline changes update layers without repeatedly moving the user's map.
+  useEffect(() => {
+    if (!ready || !map.current || hasFittedStudyArea.current) return;
+    const bounds = geoJsonBounds(bundle.studyArea);
+    if (!bounds) return;
+    map.current.fitBounds(
+      [
+        [bounds[0], bounds[1]],
+        [bounds[2], bounds[3]],
+      ],
+      {
+        padding: { top: 40, right: 40, bottom: 40, left: 40 },
+        duration: reducedMotion ? 0 : 450,
+        maxZoom: 11,
+      },
+    );
+    hasFittedStudyArea.current = true;
+  }, [ready, bundle.studyArea, reducedMotion]);
+
   // Apply layer visibility.
   useEffect(() => {
     if (!ready || !map.current) return;
@@ -649,14 +717,18 @@ export function MapView({
     set("population-circle", layers.population);
     set("flood-observed-fill", layers.flood);
     set("flood-observed-line", layers.flood);
+    set("flood-observed-circle", layers.flood);
     set("flood-modelled-fill", layers.flood);
     set("flood-modelled-line", layers.flood);
+    set("flood-modelled-circle", layers.flood);
     set("flood-scenario-fill", layers.flood);
     set("flood-scenario-line", layers.flood);
+    set("flood-scenario-circle", layers.flood);
     set("buildings-fill", layers.buildings);
     set("network-open", layers.network);
     set("network-slowed", layers.network);
     set("network-closed", layers.network);
+    set("routes-fill", layers.routes);
     set("routes-line", layers.routes);
     set("refuge-verified", layers.refuges);
     set("refuge-unverified", layers.refuges);
@@ -665,6 +737,7 @@ export function MapView({
 
   const totalFeatures =
     bundle.mesh.features.length +
+    bundle.flood.features.length +
     bundle.links.features.length +
     bundle.buildings.features.length +
     bundle.routes.features.length +
@@ -685,10 +758,11 @@ export function MapView({
         </Tabs>
         <p className="map-toolbar-note">
           <Layers size={14} aria-hidden="true" />
+          Full Bangkok extent · {" "}
           {totalFeatures === 0
             ? "no features served for this run"
             : modelTime === null
-              ? `${totalFeatures} features served · this layer is an observation, so it has no model time`
+              ? `${totalFeatures} static or observed features served · no model time`
               : `${totalFeatures} features served at model time ${modelTime}`}
         </p>
       </div>
@@ -699,7 +773,7 @@ export function MapView({
             ref={container}
             className="map-canvas"
             role="img"
-            aria-label={`Map of ${areaName}. Flood, population, network, route, refuge and observed-water layers. All values are in the table view.`}
+            aria-label={`Map of the full Bangkok Metropolitan Administration extent, showing ${areaName}. Flood, population, network, route, refuge and observed-water layers. All values are in the table view.`}
             tabIndex={0}
           />
           {failure ? (
@@ -726,13 +800,7 @@ export function MapView({
 }
 
 function LayerFooterNote({ modelTime }: { modelTime: string | null }) {
-  return (
-    <p className="layer-legend-note">
-      {modelTime === null
-        ? "Every layer on this map is an observation or a static asset: none of them carries a model time, and none is a model output. Observed-water cells are classified extent for one year, never depth · unverified destination records are marked, not hidden."
-        : "Model time for every layer above: not available · flood source legend names observed, modelled and scenario separately · building height is never presented as shelter · unverified refuge records are marked, not hidden · observed-water cells are classified extent for one year, never depth."}
-    </p>
-  );
+  return <p className="layer-legend-note">{layerFooterText(modelTime)}</p>;
 }
 
 /* ------------------------------------------------------------------ *
@@ -743,6 +811,17 @@ function MapLegend({ layers }: { layers: LayerState }) {
   return (
     <aside className="map-legend" aria-label="Map legend">
       <p className="legend-title">Legend</p>
+
+      <div className="legend-group">
+        <p className="legend-name">Study area</p>
+        <ul>
+          <li>
+            <span className="swatch study-area" aria-hidden="true" />
+            <b>Bangkok boundary</b> — the full 1,643.5 km² Metropolitan
+            Administration extent. Detailed layers may cover only part of it.
+          </li>
+        </ul>
+      </div>
 
       {layers.flood ? (
         <div className="legend-group">
@@ -776,9 +855,10 @@ function MapLegend({ layers }: { layers: LayerState }) {
             <i className="pop-400" />
           </p>
           <p>
-            <b>People present</b> — PFLOW mesh total (stationary + travelling) at the
-            selected model time. <b>People exposed</b> is a different quantity and is
-            never drawn from this layer.
+            The map states its population quantity per feature: <b>people present</b>
+            for time-specific PFLOW mesh totals, or <b>resident baseline</b> for the
+            city population grid. <b>People exposed</b> is a separate result and is
+            never inferred from this layer.
           </p>
         </div>
       ) : null}
@@ -880,13 +960,13 @@ function meshRows(features: Array<Feature<MeshProperties>>): Row[] {
         formatNumber(propNumber(p, "travelling_pop"), 1),
         formatNumber(propNumber(p, "total_pop"), 1),
         formatNumber(propNumber(p, "exposed_pop"), 1),
-        formatText(propString(p, "source_role")),
+        formatText(propString(p, "population_quantity")),
       ],
     };
   });
 }
 
-function floodRows(features: Array<Feature<MeshProperties>>): Row[] {
+function floodRows(features: Array<Feature<FloodProperties>>): Row[] {
   return features.map((feature, index) => {
     const p = feature.properties ?? {};
     return {
@@ -946,11 +1026,8 @@ function routeRows(features: Array<Feature<EvacuationProperties>>): Row[] {
       id: featureId(feature, index),
       cells: [
         featureId(feature, index),
-        formatText(propString(p, "state")),
-        formatText(propString(p, "dest_id")),
-        formatNumber(propNumber(p, "weight"), 1),
-        formatNumber(propNumber(p, "event_time_s"), 0),
-        formatText(propString(p, "reason")),
+        formatNumber(propNumber(p, "traversal_weight"), 1),
+        formatText(propString(p, "route_quantity")),
       ],
     };
   });
@@ -988,14 +1065,14 @@ function MapTables({
     layers.population && {
       key: "population" as const,
       title: `Population — ${LAYER_LABELS.population.quantity}`,
-      head: ["cell", "gcode", "stationary", "travelling", "total present", "exposed", "source role"],
+      head: ["cell", "gcode", "stationary", "travelling", "population", "exposed", "quantity"],
       rows: meshRows(bundle.mesh.features),
     },
     layers.flood && {
       key: "flood" as const,
       title: `Flood — ${LAYER_LABELS.flood.quantity}`,
       head: ["cell", "source role", "depth (m)", "confidence"],
-      rows: floodRows(bundle.mesh.features),
+      rows: floodRows(bundle.flood.features),
     },
     layers.network && {
       key: "network" as const,
@@ -1024,7 +1101,7 @@ function MapTables({
     layers.routes && {
       key: "routes" as const,
       title: `Routes — ${LAYER_LABELS.routes.quantity}`,
-      head: ["record", "state", "destination", "weight", "event time (s)", "reason"],
+      head: ["edge", "weighted traversals", "quantity"],
       rows: routeRows(bundle.routes.features),
     },
   ].filter(Boolean) as Array<{
