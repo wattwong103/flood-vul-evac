@@ -1,5 +1,5 @@
 {
-  "registry_version": "2026-09-30.5",
+  "registry_version": "2026-09-30.6",
   "country": "Thailand",
   "scope": "Bangkok flood exposure and evacuation research",
   "policy": "A source is approved only when it is publicly accessible and has explicit reuse permission at resource level.",
@@ -92,7 +92,7 @@
       "licence": "Open data; upstream components are public domain or openly licensed. See the AWS registry entry for per-source attribution.",
       "status": "approved",
       "reviewed_at": "2026-09-30",
-      "notes": "NOT USED IN ANY RUN. Licence passes, fitness fails. Measured: +5.0 m at the centre of the tile covering Khlong San, where ground is 1-2 m; a 32-sample transect across the Chao Phraya shows no river channel at all. Vertical error (about 5-10 m) exceeds the entire flood-relevant elevation range (0-2 m), so a stage-based depth surface built on it would be dominated by DEM noise. Open-Meteo elevation was tested as an alternative and is worse (8 m, same SRTM source). Copernicus DEM GLO-30/GLO-90 hosts do not resolve from this environment. To use terrain, obtain a vertical-accurate DEM through a reachable route; see docs/CITY_SCALE_LIMITATIONS.md.",
+      "notes": "NOT USED IN ANY RUN. Licence passes, fitness fails. Measured: +5.0 m at the centre of the tile covering Khlong San, where ground is 1-2 m; a 32-sample transect across the Chao Phraya shows no river channel at all. Vertical error (about 5-10 m) exceeds the entire flood-relevant elevation range (0-2 m), so a stage-based depth surface built on it would be dominated by DEM noise. Open-Meteo elevation was tested as an alternative and is worse (8 m, same SRTM source). Copernicus DEM is registered separately and also fails the accuracy/DSM fitness gate. See docs/CITY_SCALE_LIMITATIONS.md.",
       "used_in_runs": false
     },
     {
@@ -244,6 +244,38 @@
       "status": "verify",
       "reviewed_at": "2026-09-30",
       "notes": "Registered but NOT ingested. The catalogue is reachable and browsable, but the per-epoch archives are single 12 GB files with an empty tile subfolder, so an AOI-scoped pull is not yet demonstrated. Keep as verify until a real extract is produced."
+    },
+    {
+      "source_id": "rtarf-central-basin-lidar-index",
+      "agency": "Royal Thai Armed Forces Headquarters / Royal Thai Survey Department",
+      "dataset": "Central Basin LiDAR elevation-survey coverage index",
+      "model_role": "Discovery index for a candidate ground-terrain model; this resource contains survey coverage, not elevation values",
+      "resource_url": "https://data.go.th/en/dataset/lidar",
+      "format": "Shapefile coverage index",
+      "spatial_resolution": "Index describes underlying 1 m LiDAR surveys",
+      "temporal_resolution": "Static index; source metadata last updated 2021-01-01",
+      "authentication": "None stated",
+      "licence": "Creative Commons Attribution",
+      "status": "approved",
+      "reviewed_at": "2026-09-30",
+      "notes": "The official catalogue claims better than 15 cm vertical and 10 cm horizontal accuracy for underlying Central Basin surveys. The downloadable resource is only an index. It does not authorize inventing a Bangkok DTM: first prove Bangkok coverage, obtain the referenced elevation tiles under explicit reuse terms, record the vertical datum and ground classification, and validate checkpoints before ingestion. The portal blocked the index download from the current environment, so coverage remains unverified.",
+      "used_in_runs": false
+    },
+    {
+      "source_id": "copernicus-dem-glo-30",
+      "agency": "European Union / ESA / DLR / Airbus Defence and Space",
+      "dataset": "Copernicus DEM GLO-30",
+      "model_role": "Global terrain-screening candidate; excluded from Bangkok flood-depth derivation on fitness grounds",
+      "resource_url": "https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM",
+      "format": "GeoTIFF or DTED digital surface model",
+      "spatial_resolution": "1 arc-second (about 30 m)",
+      "temporal_resolution": "Source acquisition mainly 2011-2015; maintained product releases",
+      "authentication": "Free Copernicus Data Space registration and CCM access selection",
+      "licence": "Copernicus WorldDEM-30 free licence with required attribution",
+      "status": "approved",
+      "reviewed_at": "2026-09-30",
+      "notes": "LICENCE-APPROVED BUT NOT IN USE. The provider describes this as a DSM containing buildings, infrastructure and vegetation, with absolute vertical accuracy below 4 m at 90% probability and relative accuracy below 2 m on gentle slopes. Both exceed Bangkok's flood-relevant relief, so this source cannot support metre or sub-metre depth claims without local survey validation and terrain correction.",
+      "used_in_runs": false
     },
     {
       "source_id": "mitrearth-provincial-geohazard-bangkok",

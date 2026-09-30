@@ -69,11 +69,14 @@ class SourceRegistry:
         self.policy: str = payload.get("policy", "")
         self._sources: dict[str, Source] = {}
         for item in payload["sources"]:
+            source_id = item["source_id"]
+            if source_id in self._sources:
+                raise ValueError(f"duplicate source_id {source_id!r}")
             status = item.get("status", VERIFY)
             if status not in STATUS_VALUES:
                 raise ValueError(f"{item.get('source_id')}: unknown status {status!r}")
-            self._sources[item["source_id"]] = Source(
-                source_id=item["source_id"],
+            self._sources[source_id] = Source(
+                source_id=source_id,
                 agency=item.get("agency", ""),
                 dataset=item.get("dataset", ""),
                 model_role=item.get("model_role", ""),

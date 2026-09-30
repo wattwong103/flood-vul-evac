@@ -14,7 +14,9 @@ says "this quantity was not computed, and here is why".
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import time
 import uuid
 from pathlib import Path
@@ -52,6 +54,62 @@ FLOOD_REASON = (
 
 def load_config(name: str) -> dict[str, Any]:
     return read_json(CONFIG_DIR / name)
+
+
+def _stage_record(
+    stage: str, seconds: float, rows: int | None = None, note: str = ""
+) -> dict[str, Any]:
+    """Build one trustworthy stage record; impossible timings abort publication."""
+    duration = float(seconds)
+    if not math.isfinite(duration) or duration < 0:
+        raise ValueError(f"stage {stage!r} duration must be finite and non-negative")
+    return {
+        "stage": stage,
+        "status": "completed",
+        "seconds": round(duration, 3),
+        "rows": rows,
+        "note": note,
+        "completed_at": utc_now_iso(),
+    }
+
+
+def _observed_source_version(
+    observed: dict[str, Any], *, aoi_id: str
+) -> dict[str, Any] | None:
+    """Describe the exact JRC tile set as one deterministic manifest source."""
+    if observed.get("status") != "ok":
+        return None
+    tiles = [
+        {
+            "year": int(record["year"]),
+            "tile_name": str(record["tile_name"]),
+            "content_sha256": str(record["content_sha256"]),
+        }
+        for record in observed.get("years", [])
+        if record.get("tile_name") and record.get("content_sha256")
+    ]
+    if not tiles:
+        return None
+    tiles.sort(key=lambda record: (record["year"], record["tile_name"]))
+    fingerprint = hashlib.sha256(
+        json.dumps(tiles, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    retrieved = [
+        str(record["retrieved_at"])
+        for record in observed.get("years", [])
+        if record.get("retrieved_at")
+    ]
+    return {
+        "source_id": str(observed.get("source_id", gsw.SOURCE_ID)),
+        "retrieved_at": max(retrieved) if retrieved else str(observed["retrieved_at"]),
+        "content_sha256": fingerprint,
+        "licence_snapshot": "CC BY 4.0 (Copernicus / European Commission JRC)",
+        "request_parameters": {
+            "aoi_id": aoi_id,
+            "years": [record["year"] for record in tiles],
+            "tiles": tiles,
+        },
+    }
 
 
 def _agglomerate_cells(
@@ -104,16 +162,7 @@ def execute_city_run(
     warnings: list[str] = []
 
     def record(stage: str, seconds: float, rows: int | None = None, note: str = "") -> None:
-        stages.append(
-            {
-                "stage": stage,
-                "status": "completed",
-                "seconds": round(float(seconds), 3),
-                "rows": rows,
-                "note": note,
-                "completed_at": utc_now_iso(),
-            }
-        )
+        stages.append(_stage_record(stage, seconds, rows, note))
 
     # ---- sources ---------------------------------------------------------
     stage_start = time.time()
@@ -142,7 +191,7 @@ def execute_city_run(
            note=f"{network.stats['nodes']} nodes, {network.stats['total_length_km']} km")
     warnings.append(
         "Network edges are undirected in the routing index. OSM oneway tags are not "
-        "enforced, which slightly understates connectivity for driving; the pedestrian "
+        "enforced, which overstates connectivity for driving; the pedestrian "
         "graph is unaffected."
     )
 
@@ -196,21 +245,28 @@ def execute_city_run(
     stage_start = time.time()
     observed = _observed_extent(analysis_crs, aoi_frame, aoi_id)
     write_json(run_dir / "observed_water.json", observed)
-    context_warning = (
-        f"Observed surface water from JRC Global Surface Water (Landsat) is available for "
-        f"{len(observed['years'])} years: " + ", ".join(
-            f"{entry['year']} {entry['aoi_water_share']:.1%}" for entry in observed["years"]
-        ) + ". It is EXTENT, not depth, and the annual composite does not capture the "
-        "2011 flood."
-    )
-    warnings.append(context_warning)
-    anomaly = max(observed["years"], key=lambda entry: entry["aoi_water_km2"])
+    observed_years = observed.get("years", [])
+    if observed_years:
+        warnings.append(
+            "Observed surface water from JRC Global Surface Water (Landsat) is available for "
+            f"{len(observed_years)} years: " + ", ".join(
+                f"{entry['year']} {entry['aoi_water_share']:.1%}" for entry in observed_years
+            ) + ". It is EXTENT, not depth, and the annual composite does not capture the "
+            "2011 flood."
+        )
+        anomaly = max(observed_years, key=lambda entry: entry["aoi_water_km2"])
+        observed_note = (
+            f"JRC GSW yearly classification; wettest year {anomaly['year']} at "
+            f"{anomaly['aoi_water_km2']:.1f} km2"
+        )
+    else:
+        warnings.append(str(observed.get("reason", "Observed surface water is unavailable.")))
+        observed_note = "JRC GSW unavailable; reason recorded in observed_water.json"
     record(
         "observed_water",
         time.time() - stage_start,
-        rows=len(observed["years"]),
-        note=f"JRC GSW yearly classification; wettest year {anomaly['year']} at "
-             f"{anomaly['aoi_water_km2']:.1f} km2",
+        rows=len(observed_years),
+        note=observed_note,
     )
 
     # ---- destination candidates ------------------------------------------
@@ -289,11 +345,12 @@ def execute_city_run(
     record("population", time.time() - stage_start, rows=len(persons),
            note=f"{total_residents:,.0f} weighted residents")
 
+    stage_start = time.time()
     grid = _agglomerate_cells(cells, crs=analysis_crs, cell_size_m=1000.0)
     grid_out = grid.copy()
     grid_out["geometry_wkt"] = grid.geometry.to_wkt()
     grid_out.drop(columns="geometry").to_parquet(run_dir / "population_grid_1km.parquet", index=False)
-    record("aggregation", time.time() - stage_start - stage_start + (time.time() - stage_start),
+    record("aggregation", time.time() - stage_start,
            rows=len(grid), note="1 km public aggregation grid")
 
     warnings.extend(
@@ -476,6 +533,9 @@ def execute_city_run(
             "request_parameters": {"popyear": 2020, "clip": aoi_id},
         },
     ]
+    observed_source = _observed_source_version(observed, aoi_id=aoi_id)
+    if observed_source is not None:
+        source_versions.append(observed_source)
 
     manifest = manifest_module.build_manifest(
         run_id=run_id,
@@ -667,6 +727,11 @@ def execute_city_run(
         "sources": [
             {"source_id": "bbbike-bangkok-osm-extract", "licence": "ODbL 1.0", "status": "approved"},
             {"source_id": "worldpop-global2-tha-100m-r2025a", "licence": "CC BY 4.0", "status": "approved"},
+            {
+                "source_id": "jrc-global-surface-water-v1.4",
+                "licence": "CC BY 4.0",
+                "status": "approved" if observed_source is not None else "unavailable",
+            },
         ],
         "elapsed_seconds": round(time.time() - started, 1),
     }

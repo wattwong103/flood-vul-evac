@@ -20,7 +20,12 @@ from shapely.geometry import LineString, box
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from bkkflow import city_network as cn  # noqa: E402
-from bkkflow.city_runner import FLOOD_NOT_COMPUTED, FLOOD_REASON  # noqa: E402
+from bkkflow.city_runner import (  # noqa: E402
+    FLOOD_NOT_COMPUTED,
+    FLOOD_REASON,
+    _observed_source_version,
+    _stage_record,
+)
 from bkkflow.sources import city_osm, terrain  # noqa: E402
 
 
@@ -240,3 +245,40 @@ def test_city_run_never_reports_zero_for_flood() -> None:
     assert '"edges_closed": None' in flood_block
     assert '"flooded_area_km2": None' in flood_block
     assert "0," not in flood_block.split('"reason"')[0].replace('"max_depth_m": 0', '')
+
+
+def test_stage_record_rejects_negative_or_non_finite_duration() -> None:
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        _stage_record("aggregation", -1.0)
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        _stage_record("aggregation", float("nan"))
+
+
+def test_observed_source_version_identifies_every_raw_tile() -> None:
+    observed = {
+        "status": "ok",
+        "source_id": "jrc-global-surface-water-v1.4",
+        "retrieved_at": "2026-09-30T00:00:00+00:00",
+        "years": [
+            {
+                "year": 2010,
+                "tile_name": "yearlyClassification2010.tif",
+                "content_sha256": "a" * 64,
+                "retrieved_at": "2026-09-29T00:00:00+00:00",
+            },
+            {
+                "year": 2012,
+                "tile_name": "yearlyClassification2012.tif",
+                "content_sha256": "b" * 64,
+                "retrieved_at": "2026-09-30T00:00:00+00:00",
+            },
+        ],
+    }
+
+    version = _observed_source_version(observed, aoi_id="bangkok-bma")
+
+    assert version is not None
+    assert version["source_id"] == "jrc-global-surface-water-v1.4"
+    assert len(version["content_sha256"]) == 64
+    assert version["request_parameters"]["years"] == [2010, 2012]
+    assert len(version["request_parameters"]["tiles"]) == 2

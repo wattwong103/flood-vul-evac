@@ -80,8 +80,9 @@ it as a city flood map would convert a limitation into a false headline.
 | Candidate | Result |
 |---|---|
 | AWS terrarium tiles (SRTM/NED/ETOPO compilation) | Reachable, decoded, **insufficient vertical accuracy** |
-| Copernicus DEM GLO-30 (AWS open bucket) | Host does not resolve from this environment |
-| Copernicus DEM GLO-90 (AWS open bucket) | Host does not resolve from this environment |
+| Copernicus DEM GLO-30 | Official access route now documented, but it is a DSM with <4 m absolute vertical accuracy at 90%; insufficient for Bangkok depth |
+| Copernicus DEM GLO-90 | Coarser than GLO-30 and therefore not a depth solution |
+| RTARF Central Basin LiDAR | Official open index claims 1 m surveys and <15 cm vertical accuracy; index download is blocked here and the underlying elevation tiles are not linked |
 | GISTDA open data | Host does not resolve from this environment |
 | BMA open data (`data.bangkok.go.th`) | TLS connection closed |
 | `data.go.th` national portal | HTTP 403 |
@@ -139,16 +140,21 @@ Everything that does not depend on a defensible depth surface:
 
 ## Options for a city hazard layer
 
-1. **Obtain a vertical-accurate DEM.** Copernicus DEM GLO-30 or TanDEM-X,
-   through a route this environment can reach. Then the approved
-   water-surface screening approach becomes viable as designed. This is the
-   only option that produces real depth.
+1. **Resolve the RTARF LiDAR data path.** Prove Bangkok coverage from the open
+   survey index, obtain the underlying ground-classified elevation tiles with
+   explicit reuse permission, identify the vertical datum and validate local
+   checkpoints. Copernicus GLO-30 and uncorrected TanDEM-X are surface models,
+   not substitutes for this evidence.
 2. **Restrict flood and evacuation to declared sub-areas** and keep the city
    layer as baseline only. Matches the plan's own phasing, and avoids any
    city-wide hazard claim.
 3. **Publish a relative canal-exposure index city-wide**, explicitly not depth,
    with no metres anywhere. Defensible as a screening indicator, but it is
    still a proximity measure and cannot answer "how deep" or "how long".
+
+Even an accepted DTM is only the first gate. A depth simulation also needs
+event rainfall, river/tide boundary conditions, drainage assumptions and
+held-out extent/depth observations for calibration and validation.
 
 The Khlong San pilot retains flood depth and evacuation. City and pilot results
 are separate runs, and a city run never silently substitutes for a pilot

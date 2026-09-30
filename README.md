@@ -19,7 +19,7 @@ Bangkok, built on the PFLOW people–activities–trips–trajectories contract.
 | API | `api/` | FastAPI service over the immutable run artefacts |
 | Site | `site/` | React + MapLibre frontend, reads only from the API |
 | Contracts | `schemas/`, `docs/RUN_ARTIFACT_CONTRACT.md` | Run manifest schema and the run/API/website contract |
-| Registry | `data/source-registry.json` | Licence-aware source gate: 12 resources, 3 states |
+| Registry | `data/source-registry.json` | Licence-aware source gate: 19 resources, 3 allowed status values |
 | Config | `config/` | Resolved pilot area, population and scenario configuration |
 
 ## The pilot
@@ -216,9 +216,13 @@ This distinction is the point of the project, so it is stated everywhere.
   ground is 1-2 m, and the MitrEarth 30 m DEM reads +13.8 m at Khlong San with
   adjacent samples swinging 5-31 m. Bangkok's flood-relevant topography is the
   0-2 m band, so any DEM with larger error cannot support a depth model. This
-  is the single blocker on city-scale depth and evacuation.
-- **No rainfall forcing and no observed extent**, for licence and reachability
-  reasons.
+  blocks city-scale depth and evacuation. Copernicus GLO-30 is also excluded:
+  its official specification describes a DSM with <4 m absolute vertical
+  accuracy, still larger than the signal of interest. An RTARF open LiDAR
+  coverage index is now registered, but the underlying elevation tiles and
+  their Bangkok coverage have not been obtained.
+- **No reusable event rainfall or water-level forcing.** JRC annual observed
+  water extent is available, but it has no within-year timing and no depth.
 - **No calibrated mobility.** No licensable Bangkok travel diary was available,
   so activity timing, mode choice and destination choice are priors. The run
   cannot be promoted above `demonstration`.

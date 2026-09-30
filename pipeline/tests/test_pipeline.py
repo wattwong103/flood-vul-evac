@@ -85,6 +85,30 @@ def test_licence_gate_blocks_unknown_source() -> None:
         _registry().require_approved(["not-registered"])
 
 
+def test_registry_rejects_duplicate_source_ids() -> None:
+    payload = {
+        "registry_version": "test",
+        "country": "Thailand",
+        "sources": [
+            {
+                "source_id": "duplicate",
+                "resource_url": "https://example.org/one",
+                "licence": "CC BY 4.0",
+                "status": "approved",
+            },
+            {
+                "source_id": "duplicate",
+                "resource_url": "https://example.org/two",
+                "licence": "CC BY 4.0",
+                "status": "approved",
+            },
+        ],
+    }
+
+    with pytest.raises(ValueError, match="duplicate source_id"):
+        SourceRegistry(payload)
+
+
 # --------------------------------------------------------------------------
 # determinism
 # --------------------------------------------------------------------------

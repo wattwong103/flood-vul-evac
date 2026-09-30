@@ -101,19 +101,25 @@ the drainage index and the connectivity screening.
 
 ## Open gaps, in priority order
 
-1. A vertical-accurate DEM (Copernicus GLO-30 or TanDEM-X) through a reachable
-   route. This is the single blocker on city-scale depth and evacuation.
-2. A GISTDA API key, for a licensed flood-extent layer to sit beside JRC.
+1. Resolve the RTARF Central Basin LiDAR lead: prove Bangkok coverage, obtain
+   the underlying 1 m elevation tiles under explicit reuse terms, identify the
+   vertical datum and ground classification, and validate held-out benchmarks.
+   The open download currently exposes only a survey-coverage index.
+2. Obtain event forcing and validation together: reusable rainfall, river/tide
+   levels and time-specific GISTDA or Sentinel-1 flood extent. Terrain alone
+   cannot produce a defensible city depth surface.
 3. A refuge inventory. Until one exists, no destination may be called a
    refuge and no arrival implies usable shelter.
-4. An administrative control total, to close the population QA gap.
-5. An age/sex marginal.
+4. Ingest the already registered DOPA/NSO administrative controls and report
+   reconciliation by district without relabelling registered residents as
+   people present.
+5. Ingest the registered age/sex marginal and preserve its modelled status.
 6. Destination capacity by class, as a declared scenario rather than an
    observation.
 
 ## Verification
 
-150 automated tests pass. Each run re-validates itself: 17 checks in the
-pilot, 8 in the city, and the manifest against the committed JSON Schema.
-Three real classes of defect were found only because the tests existed, and
-each is recorded in the commit that fixed it.
+The current verification count is recorded by the test commands at release
+time rather than copied into this document. Each run re-validates itself: 17
+checks in the pilot, 8 in the city, and the manifest against the committed JSON
+Schema.
