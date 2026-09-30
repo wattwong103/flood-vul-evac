@@ -29,6 +29,54 @@ from bkkflow.city_runner import (  # noqa: E402
 from bkkflow.sources import city_osm, terrain  # noqa: E402
 
 
+def test_source_coverage_rejects_an_uncovered_eastern_aoi(tmp_path):
+    path = tmp_path / "source.poly"
+    path.write_text("test\n1\n100 13\n100.8 13\n100.8 14\n100 14\nEND\nEND\n")
+    aoi = gpd.GeoDataFrame(geometry=[box(100.4, 13.2, 100.94, 13.9)], crs="EPSG:4326")
+    with pytest.raises(ValueError, match="does not cover"):
+        city_osm.source_coverage(path, aoi)
+
+
+def test_source_coverage_respects_holes_and_crs(tmp_path):
+    path = tmp_path / "source.poly"
+    path.write_text("test\n1\n100 13\n101 13\n101 14\n100 14\nEND\n"
+                    "!2\n100.8 13.8\n100.9 13.8\n100.9 13.9\n100.8 13.9\nEND\nEND\n")
+    aoi = gpd.GeoDataFrame(geometry=[box(100.4, 13.2, 100.5, 13.3)], crs="EPSG:4326")
+    coverage = city_osm.source_coverage(path, aoi.to_crs("EPSG:32647"))
+    assert coverage["covers_aoi"] is True
+    assert len(coverage["sha256"]) == 64
+    with pytest.raises(ValueError, match="does not cover"):
+        city_osm.source_coverage(path, gpd.GeoDataFrame(
+            geometry=[box(100.82, 13.82, 100.88, 13.88)], crs="EPSG:4326"))
+
+
+def test_destination_candidates_are_clipped_to_aoi(tmp_path, monkeypatch):
+    import pyogrio
+    from shapely.geometry import Point
+    from bkkflow.sources.destinations import extract_destinations
+    points = gpd.GeoDataFrame({"osm_id": [1, 2], "name": [None, None],
+        "other_tags": ['"amenity"=>"school"'] * 2},
+        geometry=[Point(100.5, 13.5), Point(100.9, 13.5)], crs="EPSG:4326")
+    monkeypatch.setattr(pyogrio, "read_dataframe", lambda *args, **kwargs: points)
+    aoi = gpd.GeoDataFrame(geometry=[box(100.4, 13.4, 100.6, 13.6)], crs="EPSG:4326")
+    result = extract_destinations(out_dir=tmp_path, aoi_frame=aoi)
+    assert result["rows"] == 1
+    assert result["verified_count"] == 0
+    assert pd.read_parquet(tmp_path / "destinations.parquet").destination_id.tolist() == ["d_1"]
+
+
+def test_cached_osm_provenance_rejects_changed_bytes(tmp_path):
+    from bkkflow.util import sha256_file, write_json
+    source = tmp_path / "sample.pbf"
+    source.write_bytes(b"source snapshot")
+    write_json(source.with_suffix(".provenance.json"), {"url": "https://example.test/source",
+        "retrieved_at": "2026-09-29T00:00:00Z", "content_sha256": sha256_file(source)})
+    assert city_osm.source_provenance(source, "https://example.test/source")["retrieved_at"].startswith("2026-09-29")
+    source.write_bytes(b"changed snapshot")
+    with pytest.raises(ValueError, match="provenance"):
+        city_osm.source_provenance(source, "https://example.test/source")
+
+
 def _roads() -> gpd.GeoDataFrame:
     """A small grid with a crossing, so noding has something to do."""
     # Near Bangkok: coordinates at (0, 0) degrees fall outside the UTM 47N
@@ -282,3 +330,30 @@ def test_observed_source_version_identifies_every_raw_tile() -> None:
     assert len(version["content_sha256"]) == 64
     assert version["request_parameters"]["years"] == [2010, 2012]
     assert len(version["request_parameters"]["tiles"]) == 2
+
+
+def test_city_cache_rejects_old_source_before_reuse(tmp_path):
+    with pytest.raises(ValueError, match="re-ingest"):
+        city_osm.validate_cached_ingest({"source_id": "bbbike-bangkok-osm-extract"},
+            gpd.GeoDataFrame(geometry=[box(100, 13, 101, 14)], crs="EPSG:4326"), tmp_path)
+
+
+def test_city_cache_rejects_changed_layer(tmp_path, monkeypatch):
+    from bkkflow.util import sha256_file
+    path = tmp_path / "roads.parquet"
+    path.write_bytes(b"original")
+    record = {"source_id": city_osm.SOURCE_ID, "pbf_path": "unused",
+        "resource_url": "unused", "content_sha256": "source", "coverage": {"sha256": "coverage"},
+        "layers": {"roads": {"sha256": sha256_file(path)}}}
+    monkeypatch.setattr(city_osm, "source_provenance", lambda *a: {"content_sha256": "source"})
+    monkeypatch.setattr(city_osm, "source_coverage", lambda *a: {"sha256": "coverage"})
+    path.write_bytes(b"replaced")
+    with pytest.raises(ValueError, match="roads"):
+        city_osm.validate_cached_ingest(record, None, tmp_path)
+
+
+def test_manually_staged_osm_requires_download_provenance(tmp_path):
+    source = tmp_path / "manual.pbf"
+    source.write_bytes(b"manual source")
+    with pytest.raises(ValueError, match="download provenance.*re-download"):
+        city_osm.source_provenance(source, "https://example.test/source")
