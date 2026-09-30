@@ -170,6 +170,7 @@ def execute_city_run(
     if not ingest_path.is_file():
         city_osm.ingest_city()
     ingest = read_json(ingest_path)
+    city_osm.validate_cached_ingest(ingest, aoi_frame, CURATED_DIR / "city")
     record("sources", time.time() - stage_start, rows=int(ingest["road_ways"]),
            note="regional PBF extract via GDAL, not tiled Overpass")
 
@@ -221,7 +222,7 @@ def execute_city_run(
     water_frames = []
     for name, crs_hint in (("water_lines", "EPSG:4326"), ("water_areas", "EPSG:4326")):
         path = CURATED_DIR / "city" / f"{name}.parquet"
-        if path.is_file():
+        if name in ingest["layers"] and path.is_file():
             water_frames.append(gpd.read_parquet(path))
     water = (
         gpd.GeoDataFrame(pd.concat(water_frames, ignore_index=True), crs="EPSG:4326")
@@ -517,11 +518,13 @@ def execute_city_run(
     # ---- manifest --------------------------------------------------------
     source_versions = [
         {
-            "source_id": "bbbike-bangkok-osm-extract",
+            "source_id": ingest["source_id"],
             "retrieved_at": ingest["retrieved_at"],
             "content_sha256": ingest["content_sha256"],
             "licence_snapshot": "ODbL 1.0 (c) OpenStreetMap contributors",
-            "request_parameters": {"byte_count": ingest["byte_count"]},
+            "request_parameters": {"byte_count": ingest["byte_count"],
+                                   "resource_url": ingest["resource_url"],
+                                   "coverage": ingest["coverage"]},
         },
         {
             "source_id": "worldpop-global2-tha-100m-r2025a",
@@ -560,7 +563,7 @@ def execute_city_run(
             "seed": 29092026,
             "control_source_ids": [
                 "worldpop-global2-tha-100m-r2025a",
-                "bbbike-bangkok-osm-extract",
+                ingest["source_id"],
             ],
             "time_profile": {
                 "status": "illustrative",
@@ -725,7 +728,7 @@ def execute_city_run(
         },
         "warnings": warnings,
         "sources": [
-            {"source_id": "bbbike-bangkok-osm-extract", "licence": "ODbL 1.0", "status": "approved"},
+            {"source_id": ingest["source_id"], "licence": "ODbL 1.0", "status": "approved"},
             {"source_id": "worldpop-global2-tha-100m-r2025a", "licence": "CC BY 4.0", "status": "approved"},
             {
                 "source_id": "jrc-global-surface-water-v1.4",
