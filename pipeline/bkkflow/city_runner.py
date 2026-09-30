@@ -29,7 +29,7 @@ from . import city_network as city_network_module
 from . import manifest as manifest_module
 from . import population as population_module
 from . import validate as validate_module
-from .sources import city_osm, destinations as destinations_source, gsw
+from .sources import city_osm, destinations as destinations_source, gsw, mitrearth
 from .util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
@@ -227,6 +227,37 @@ def execute_city_run(
             f"{key}={value}" for key, value in list(destination_record["by_class"].items())[:4]
         ),
     )
+
+    # ---- MitrEarth hazard, drainage and hydrography layers ---------------
+    stage_start = time.time()
+    mitre = mitrearth.ingest(aoi_frame=aoi_frame, analysis_crs=analysis_crs)
+    mitre_layers = [
+        name for name, detail in mitre.layers.items() if detail.get("status") == "ok"
+    ]
+    unreliable = mitre.flood_extent_by_year.get("unreliable_years", [])
+    warnings.append(
+        "MitrEarth hazard and drainage layers are ingested: " + ", ".join(mitre_layers) + ". "
+        "The bundled DEM and its contours are excluded on fitness grounds, independent of the "
+        "licence decision: the DEM reads +13.8 m at Khlong San where ground is 1-2 m."
+    )
+    if unreliable:
+        warnings.append(
+            f"MitrEarth mapped flood extent is UNRELIABLE for {unreliable}: those years contain "
+            "features with self-intersecting rings that had to be discarded, so the published "
+            "extent would be a truncated artifact rather than a measurement. Only the "
+            "reliable years may be used."
+        )
+    record(
+        "mitrearth",
+        time.time() - stage_start,
+        rows=sum(
+            detail.get("rows_in_aoi", 0)
+            for detail in mitre.layers.values()
+            if detail.get("status") == "ok"
+        ),
+        note=", ".join(mitre_layers) + f"; flood years unreliable={unreliable}",
+    )
+    write_json(run_dir / "mitrearth.json", mitre.as_dict())
 
     # ---- population ------------------------------------------------------
     stage_start = time.time()

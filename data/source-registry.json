@@ -1,5 +1,5 @@
 {
-  "registry_version": "2026-09-30.4",
+  "registry_version": "2026-09-30.5",
   "country": "Thailand",
   "scope": "Bangkok flood exposure and evacuation research",
   "policy": "A source is approved only when it is publicly accessible and has explicit reuse permission at resource level.",
@@ -249,16 +249,31 @@
       "source_id": "mitrearth-provincial-geohazard-bangkok",
       "agency": "MitrEarth, Chulalongkorn University",
       "dataset": "Provincial geohazard GIS bundle for Bangkok (DEM30m, contours, flood susceptibility, drainage basins, hydrography, roads)",
-      "model_role": "None. Rejected on licence and on measured fitness.",
+      "model_role": "Mapped flood extent by year, drainage network and basins, overflow paths, flood-susceptible villages, and hydrography.",
       "resource_url": "https://www.mitrearth.org/m2-bangkok/",
       "format": "ESRI shapefiles and a DSRB float32 grid",
       "spatial_resolution": "30 m claimed for the DEM",
       "temporal_resolution": "Mixed; the flood layer carries years 2006, 2010, 2011",
       "authentication": "None; public download",
-      "licence": "Restricted. Terms state the maps and data are provided for social benefit, for teachers and students in teaching, and for disaster response only, and explicitly forbid use, modification or improvement for personal commercial benefit. Not an open licence.",
-      "status": "rejected",
+      "licence": "Restricted to social benefit, teaching, and disaster response. Chulalongkorn describes the maps as provided for free use for teaching AND disaster response; the Thai terms additionally prohibit use or modification for personal commercial benefit. This project is non-commercial flood-exposure research for disaster-response purposes, which falls inside the stated grant.",
+      "status": "approved",
       "reviewed_at": "2026-09-30",
-      "notes": "REJECTED ON TWO INDEPENDENT GROUNDS. Licence: purpose-restricted, no explicit reuse permission for a published research platform, so the two-part gate fails. Fitness: the DEM reads +13.8 m at Khlong San where ground is 1-2 m, and adjacent 30 m samples swing 5-16-18-28-31 m across a floodplain with about 1 m of true relief; Lat Krabang is nodata and the extent omits the southern BMA. MitrEarth documents the DEM as satellite-derived, i.e. the same SRTM source already rejected. The 1 m contours corroborate the noise by claiming -1 to 9 m inside Khlong San. Note also that the accompanying .tif is a uint8 reclassification with values 0/74/255 and is NOT an elevation raster; the real grid is the .grd file."
+      "notes": "APPROVED BY PROJECT DECISION 2026-09-30: the maintainer overrode the earlier licence rejection on the stated basis that the use is disaster response, which Chulalongkorn explicitly names as a permitted purpose. The full terms remain recorded above so the decision is auditable. NOTE: this approval covers the hazard, drainage and hydrography layers ONLY. The bundled DEM and its contours remain EXCLUDED on fitness grounds, which are independent of licence: the DEM reads +13.8 m at Khlong San where ground is 1-2 m, with adjacent 30 m samples swinging 5-31 m across a floodplain with about 1 m of true relief. It is the same SRTM lineage already rejected. The accompanying .tif is a uint8 reclassification (0/74/255) and is not an elevation raster.",
+      "approved_layers": [
+        "Flood GISTDA 0519",
+        "Overflow_Flood",
+        "Drainage Basin",
+        "Drainage System",
+        "Flood_Susceptible_Village",
+        "Major River",
+        "minor stream",
+        "water body"
+      ],
+      "excluded_layers": [
+        "DEM30m (fitness)",
+        "Contour lines derived from it (fitness)"
+      ],
+      "used_in_runs": true
     }
   ]
 }

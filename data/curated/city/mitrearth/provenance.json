@@ -1,0 +1,172 @@
+{
+  "source_id": "mitrearth-provincial-geohazard-bangkok",
+  "layers": {
+    "flood_extent_gistda": {
+      "discarded_invalid_area_by_year": {
+        "2010": {
+          "invalid_features": 11,
+          "bounds_were_finite": true
+        },
+        "2011": {
+          "invalid_features": 1,
+          "bounds_were_finite": true
+        }
+      },
+      "status": "ok",
+      "source_file": "7 Geological Hazard/2 Flood GISTDA 0519 BANGKOK.shp",
+      "rows_total": 1829,
+      "repaired_geometries": 12,
+      "dropped_unrepairable": 0,
+      "rows_in_aoi": 1826,
+      "area_km2": 611.869,
+      "length_km": null,
+      "sha256": "fcfa7c53979a57e849e383d3f4fb3cc8adae8514ebacc477f51d68400aa4c777"
+    },
+    "flood_susceptible_village": {
+      "discarded_invalid_area_by_year": {},
+      "status": "ok",
+      "source_file": "6 Valley Ridge and Basin/2_Flood_Susceptible_Village_BANGKOK_-_mitrearth.shp",
+      "rows_total": 271,
+      "repaired_geometries": 0,
+      "dropped_unrepairable": 0,
+      "rows_in_aoi": 268,
+      "area_km2": null,
+      "length_km": null,
+      "sha256": "68b8442c1546bd7d3762b63d4c704ebcc189ae02c252ed93189615007d677121"
+    },
+    "drainage_basin": {
+      "discarded_invalid_area_by_year": {},
+      "status": "ok",
+      "source_file": "6 Valley Ridge and Basin/2 Drainage Basin.shp",
+      "rows_total": 137,
+      "repaired_geometries": 3,
+      "dropped_unrepairable": 0,
+      "rows_in_aoi": 137,
+      "area_km2": 1025.943,
+      "length_km": null,
+      "sha256": "c62c951c07b55f78fb0dc2704cfcb6c38ba02db4f72b716e51f08c9fd43bd237"
+    },
+    "drainage_system": {
+      "discarded_invalid_area_by_year": {},
+      "status": "ok",
+      "source_file": "6 Valley Ridge and Basin/2 Drainage System BANGKOK - mitrearth.shp",
+      "rows_total": 5698,
+      "repaired_geometries": 0,
+      "dropped_unrepairable": 0,
+      "rows_in_aoi": 5672,
+      "area_km2": null,
+      "length_km": 2389.883,
+      "sha256": "795facc2436bab4700feee61a398ae0fd871eb0fe45a3f4dde3e14a551c42c63"
+    },
+    "overflow_flood": {
+      "discarded_invalid_area_by_year": {},
+      "status": "ok",
+      "source_file": "6 Valley Ridge and Basin/2_Overflow_Flood_BANGKOK_-_mitrearth.shp",
+      "rows_total": 1593,
+      "repaired_geometries": 0,
+      "dropped_unrepairable": 0,
+      "rows_in_aoi": 1588,
+      "area_km2": null,
+      "length_km": 13045.033,
+      "sha256": "ecea3d7d1d1963809787189f25570d2f5efe21c01b19ff47016d78ceae01af54"
+    },
+    "major_river": {
+      "discarded_invalid_area_by_year": {},
+      "status": "ok",
+      "source_file": "5 Surface and Ground Water/2 Major River.shp",
+      "rows_total": 117,
+      "repaired_geometries": 0,
+      "dropped_unrepairable": 0,
+      "rows_in_aoi": 115,
+      "area_km2": null,
+      "length_km": 444.633,
+      "sha256": "5b8899f7db707b5e8368207d1b117ac9b32d0001b0519cbc503a597c1b697016"
+    },
+    "minor_stream": {
+      "discarded_invalid_area_by_year": {},
+      "status": "ok",
+      "source_file": "5 Surface and Ground Water/2 minor stream.shp",
+      "rows_total": 4703,
+      "repaired_geometries": 0,
+      "dropped_unrepairable": 0,
+      "rows_in_aoi": 4527,
+      "area_km2": null,
+      "length_km": 2998.309,
+      "sha256": "533660453473cfe9d4ea23e6dd0c8e9183597d3190ad1a9976f2dac55139a64c"
+    },
+    "water_body": {
+      "discarded_invalid_area_by_year": {},
+      "status": "ok",
+      "source_file": "5 Surface and Ground Water/2 water body.shp",
+      "rows_total": 662,
+      "repaired_geometries": 0,
+      "dropped_unrepairable": 0,
+      "rows_in_aoi": 659,
+      "area_km2": 29.837,
+      "length_km": null,
+      "sha256": "b8ec255733c8bcc62ee75a9c8ba6fcaa5fdcc89f023ad8882fe0698a15b4f7c8"
+    }
+  },
+  "flood_extent_by_year": {
+    "status": "ok",
+    "measures": "mapped flood extent, a mapped hazard layer rather than a satellite observation",
+    "years": [
+      {
+        "year": 2006,
+        "polygons": 855,
+        "discarded_invalid": {},
+        "union_km2": 286.572,
+        "raw_sum_km2": 286.572,
+        "overlap_factor": 1.0,
+        "reliable": true,
+        "is_largest_mapped_event": true
+      },
+      {
+        "year": 2010,
+        "polygons": 904,
+        "discarded_invalid": {
+          "invalid_features": 11,
+          "bounds_were_finite": true
+        },
+        "union_km2": 186.085,
+        "raw_sum_km2": 186.085,
+        "overlap_factor": 1.0,
+        "reliable": false,
+        "is_largest_mapped_event": false
+      },
+      {
+        "year": 2011,
+        "polygons": 6,
+        "discarded_invalid": {
+          "invalid_features": 1,
+          "bounds_were_finite": true
+        },
+        "union_km2": 4.977,
+        "raw_sum_km2": 4.977,
+        "overlap_factor": 1.0,
+        "reliable": false,
+        "is_largest_mapped_event": false
+      }
+    ],
+    "unspecified_year": {
+      "year": 0,
+      "polygons": 61,
+      "discarded_invalid": {},
+      "union_km2": 113.702,
+      "raw_sum_km2": 134.236,
+      "overlap_factor": 1.181,
+      "reliable": true
+    },
+    "unreliable_years": [
+      2010,
+      2011
+    ],
+    "note": "Polygons overlap heavily, so only the dissolved union is an extent. The LAYER field is 'Unknown Area Type' for every feature in this extract, so hazard type is not recoverable. This layer is a mapping, not an observation, and is labelled source_role='mapped'. A year whose apparent extent was mostly self-intersecting geometry is reported as unreliable rather than published as a small confident number."
+  },
+  "excluded": {
+    "dem": "Reads +13.8 m at Khlong San where ground is 1-2 m; unusable for depth.",
+    "contours": "Derived from the same rejected DEM, so they encode its noise.",
+    "transportation": "OSM from the regional extract is more detailed and better attributed."
+  },
+  "written_at": "2026-09-30T10:03:47+00:00"
+}
