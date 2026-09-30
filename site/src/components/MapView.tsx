@@ -39,10 +39,12 @@ import type {
   FeatureCollection,
   LinkProperties,
   MeshProperties,
+  ObservedWaterCellProperties,
 } from "@/lib/api";
 import {
   formatCount,
   formatNumber,
+  formatShare,
   formatText,
   prop,
   propBoolean,
@@ -60,7 +62,8 @@ export type LayerId =
   | "buildings"
   | "network"
   | "routes"
-  | "refuges";
+  | "refuges"
+  | "observedWater";
 
 export const LAYER_IDS: readonly LayerId[] = [
   "population",
@@ -69,7 +72,17 @@ export const LAYER_IDS: readonly LayerId[] = [
   "network",
   "routes",
   "refuges",
+  "observedWater",
 ] as const;
+
+/**
+ * The layers the Scenario Lab offers as toggles. The observed-water layer is
+ * served by its own route and is only drawn on the Observed & assets screen,
+ * where the year it belongs to is always stated.
+ */
+export const SCENARIO_LAYER_IDS: readonly LayerId[] = LAYER_IDS.filter(
+  (id) => id !== "observedWater",
+);
 
 export type LayerState = Record<LayerId, boolean>;
 
@@ -80,6 +93,7 @@ export const DEFAULT_LAYERS: LayerState = {
   network: true,
   routes: true,
   refuges: true,
+  observedWater: false,
 };
 
 export const LAYER_LABELS: Record<LayerId, { name: string; quantity: string }> = {
@@ -108,6 +122,11 @@ export const LAYER_LABELS: Record<LayerId, { name: string; quantity: string }> =
     name: "Refuges",
     quantity: "Destination records. A record is a shelter only when refuge_verified is true",
   },
+  observedWater: {
+    name: "Observed water extent",
+    quantity:
+      "JRC Global Surface Water: share of each cell classified as water in the selected year. Extent, not depth",
+  },
 };
 
 export type MapBundle = {
@@ -117,6 +136,8 @@ export type MapBundle = {
   routes: FeatureCollection<EvacuationProperties>;
   /** Derived from the building records; the contract serves no refuge endpoint. */
   refuges: FeatureCollection<BuildingProperties>;
+  /** Served by `/observed-water/cells` for one selected year. */
+  observedWater: FeatureCollection<ObservedWaterCellProperties>;
 };
 
 export const EMPTY_BUNDLE: MapBundle = {
@@ -125,6 +146,7 @@ export const EMPTY_BUNDLE: MapBundle = {
   buildings: { type: "FeatureCollection", features: [] },
   routes: { type: "FeatureCollection", features: [] },
   refuges: { type: "FeatureCollection", features: [] },
+  observedWater: { type: "FeatureCollection", features: [] },
 };
 
 /** Records that the API presents as a destination of some kind. */
@@ -245,7 +267,38 @@ const POP_RADIUS = [
   16,
 ] as unknown[];
 
-const SOURCES = ["mesh", "links", "buildings", "routes"] as const;
+const SOURCES = ["mesh", "links", "buildings", "routes", "observed-water"] as const;
+
+/**
+ * Observed extent is a single ramp, deliberately unlike the three flood-depth
+ * ramps above: it carries one observation, not one observation per source role.
+ * Depth is separated from it by the wording of the legend, never by a hue.
+ */
+const WATER_SHARE_FILL = [
+  "interpolate",
+  ["linear"],
+  NUM("water_share"),
+  0,
+  "#e8f1f4",
+  0.05,
+  "#a9cfe0",
+  0.25,
+  "#4b93b8",
+  0.5,
+  "#1d5f85",
+  1,
+  "#0b3550",
+] as unknown[];
+
+const WATER_SHARE_RADIUS = [
+  "interpolate",
+  ["linear"],
+  NUM("water_share"),
+  0,
+  3,
+  1,
+  16,
+] as unknown[];
 
 /**
  * Refuge status has to survive greyscale and colour-blind viewing, and a circle
@@ -347,6 +400,7 @@ export function MapView({
       links: bundle.links as unknown as GeoJSON.FeatureCollection,
       buildings: bundle.buildings as unknown as GeoJSON.FeatureCollection,
       routes: bundle.routes as unknown as GeoJSON.FeatureCollection,
+      "observed-water": bundle.observedWater as unknown as GeoJSON.FeatureCollection,
     }),
     [bundle],
   );
@@ -545,6 +599,21 @@ export function MapView({
         });
       }
 
+      // --- Observed surface water: extent only, for the selected year --
+      instance.addLayer({
+        id: "observed-water-cell",
+        type: "circle",
+        source: "observed-water",
+        layout: { visibility: "visible" },
+        paint: {
+          "circle-color": WATER_SHARE_FILL as never,
+          "circle-radius": WATER_SHARE_RADIUS as never,
+          "circle-opacity": 0.85,
+          "circle-stroke-color": "#0b3550",
+          "circle-stroke-width": 0.6,
+        },
+      });
+
       setReady(true);
     };
 
@@ -591,13 +660,15 @@ export function MapView({
     set("routes-line", layers.routes);
     set("refuge-verified", layers.refuges);
     set("refuge-unverified", layers.refuges);
+    set("observed-water-cell", layers.observedWater);
   }, [ready, layers]);
 
   const totalFeatures =
     bundle.mesh.features.length +
     bundle.links.features.length +
     bundle.buildings.features.length +
-    bundle.routes.features.length;
+    bundle.routes.features.length +
+    bundle.observedWater.features.length;
 
   return (
     <div className="map-shell">
@@ -616,7 +687,9 @@ export function MapView({
           <Layers size={14} aria-hidden="true" />
           {totalFeatures === 0
             ? "no features served for this run"
-            : `${totalFeatures} features served at model time ${modelTime ?? "not available"}`}
+            : modelTime === null
+              ? `${totalFeatures} features served · this layer is an observation, so it has no model time`
+              : `${totalFeatures} features served at model time ${modelTime}`}
         </p>
       </div>
 
@@ -626,7 +699,7 @@ export function MapView({
             ref={container}
             className="map-canvas"
             role="img"
-            aria-label={`Map of ${areaName}. Flood, population, network, route and refuge layers. All values are in the table view.`}
+            aria-label={`Map of ${areaName}. Flood, population, network, route, refuge and observed-water layers. All values are in the table view.`}
             tabIndex={0}
           />
           {failure ? (
@@ -655,9 +728,9 @@ export function MapView({
 function LayerFooterNote({ modelTime }: { modelTime: string | null }) {
   return (
     <p className="layer-legend-note">
-      Model time for every layer above: {modelTime ?? "not available"} · flood source
-      legend names observed, modelled and scenario separately · building height is
-      never presented as shelter · unverified refuge records are marked, not hidden.
+      {modelTime === null
+        ? "Every layer on this map is an observation or a static asset: none of them carries a model time, and none is a model output. Observed-water cells are classified extent for one year, never depth · unverified destination records are marked, not hidden."
+        : "Model time for every layer above: not available · flood source legend names observed, modelled and scenario separately · building height is never presented as shelter · unverified refuge records are marked, not hidden · observed-water cells are classified extent for one year, never depth."}
     </p>
   );
 }
@@ -735,6 +808,24 @@ function MapLegend({ layers }: { layers: LayerState }) {
           <p>
             Footprint with maximum modelled depth at the footprint. <b>Height is never
             a shelter claim.</b>
+          </p>
+        </div>
+      ) : null}
+
+      {layers.observedWater ? (
+        <div className="legend-group">
+          <p className="legend-name">Observed surface water</p>
+          <p className="legend-ramp" aria-hidden="true">
+            <i className="water-0" />
+            <i className="water-05" />
+            <i className="water-25" />
+            <i className="water-1" />
+          </p>
+          <p>
+            Share of each cell classified as water in the selected year. Marker
+            size rises with the share as well as colour. <b>Extent only:</b> the
+            classification carries no depth, duration or direction, and no year
+            here is a forecast.
           </p>
         </div>
       ) : null}
@@ -865,6 +956,25 @@ function routeRows(features: Array<Feature<EvacuationProperties>>): Row[] {
   });
 }
 
+function observedWaterRows(
+  features: Array<Feature<ObservedWaterCellProperties>>,
+): Row[] {
+  return features.map((feature, index) => {
+    const p = feature.properties ?? {};
+    return {
+      id: featureId(feature, index),
+      cells: [
+        propString(p, "cell_id") ?? featureId(feature, index),
+        formatCount(propNumber(p, "year")),
+        formatShare(propNumber(p, "water_share")),
+        formatNumber(propNumber(p, "water_km2"), 2),
+        formatText(propString(p, "source_role")),
+        formatText(propString(p, "measures")),
+      ],
+    };
+  });
+}
+
 function MapTables({
   bundle,
   layers,
@@ -904,6 +1014,12 @@ function MapTables({
       title: `Refuges — ${LAYER_LABELS.refuges.quantity}`,
       head: ["refuge", "height (m)", "height source", "max depth (m)", "refuge status", "capacity"],
       rows: buildingRows(bundle.refuges.features),
+    },
+    layers.observedWater && {
+      key: "observedWater" as const,
+      title: `Observed water — ${LAYER_LABELS.observedWater.quantity}`,
+      head: ["cell", "year", "water share", "water (km²)", "source role", "measures"],
+      rows: observedWaterRows(bundle.observedWater.features),
     },
     layers.routes && {
       key: "routes" as const,

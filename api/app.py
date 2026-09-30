@@ -136,6 +136,17 @@ def get_ctx(request: Request) -> Settings:
 SettingsDep = Annotated[Settings, Depends(get_ctx)]
 
 
+def _analysis_crs(run: "RunRef") -> str | None:
+    """The CRS the run's stored geometry is in, from its own manifest.
+
+    GeoJSON must be emitted in WGS84, so every geometry-served endpoint needs
+    to know what the artefacts were written in.
+    """
+    geography = (run.manifest or {}).get("geography") or {}
+    value = geography.get("analysis_crs")
+    return str(value) if value else None
+
+
 def _read_json_object(path: Path) -> tuple[dict[str, Any] | None, list[ApiWarning]]:
     name = path.name
     if not path.exists():
@@ -552,7 +563,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         features: list[dict[str, Any]] = []
         for record in states.to_dict(orient="records"):
-            geometry = wkt_to_geometry(record.get("geometry_wkt"))
+            geometry = wkt_to_geometry(record.get("geometry_wkt"), _analysis_crs(run))
             properties = {
                 key: value
                 for key, value in record.items()
@@ -643,7 +654,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for record in frame.to_dict(orient="records"):
                 geometry = None
                 if geometry_column:
-                    geometry = wkt_to_geometry(record.get(geometry_column))
+                    geometry = wkt_to_geometry(record.get(geometry_column), _analysis_crs(run))
                 elif has_lon_lat:
                     lon = record.get("lon")
                     lat = record.get("lat")
@@ -1282,7 +1293,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             step = max(matched // max(limit, 1), 1)
             sample = frame.iloc[::step].head(limit)
             for record in sample.to_dict(orient="records"):
-                geometry = wkt_to_geometry(record.get("geometry_wkt"))
+                geometry = wkt_to_geometry(record.get("geometry_wkt"), _analysis_crs(run))
                 if geometry is None:
                     continue
                 sampled_rows.append(

@@ -30,7 +30,7 @@
     }
   },
   "grid_size_m": 1000.0,
-  "sha256": "7dcd62d7131c2b7d31d0d95669e208b58fbe735dc27238d89b5e79e31ea4dca6",
-  "written_at": "2026-09-30T08:39:01+00:00",
+  "sha256": "b90a47ae4f0509ce12563afa70888af6264e1e655087f5dbf2d1d40eb4933800",
+  "written_at": "2026-09-30T08:58:54+00:00",
   "note": "Aggregated to the 1 km public grid to match the population layer. Extent only: no depth, no duration, no direction. Every year is a lower bound because an annual Landsat composite under-detects short-lived flooding."
 }

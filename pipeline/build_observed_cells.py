@@ -112,9 +112,15 @@ def build() -> dict:
 
     frame = pd.DataFrame.from_records(records)
     if not frame.empty:
-        frame = gpd.GeoDataFrame(frame, geometry=gpd.points_from_xy(frame["x"], frame["y"]), crs="EPSG:32647")
-        frame["lon"] = frame.geometry.x
-        frame["lat"] = frame.geometry.y
+        frame = gpd.GeoDataFrame(
+            frame, geometry=gpd.points_from_xy(frame["x"], frame["y"]), crs="EPSG:32647"
+        )
+        # GeoJSON is WGS84 by specification (RFC 7946), so publish real
+        # longitude and latitude rather than projected metres with misleading
+        # column names. The analysis-CRS x/y are kept alongside.
+        wgs84 = frame.to_crs("OGC:CRS84")
+        frame["lon"] = wgs84.geometry.x
+        frame["lat"] = wgs84.geometry.y
         frame = frame[["cell_id", "year", "x", "y", "lon", "lat", "water_px", "classified_px",
                        "water_share", "water_km2", "source_role", "measures"]]
         frame.to_parquet(destination, index=False)

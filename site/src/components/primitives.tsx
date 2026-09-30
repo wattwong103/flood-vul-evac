@@ -17,7 +17,7 @@ import {
   VALIDATION_STATUS_NOTE,
   type ValidationStatus,
 } from "@/lib/api";
-import { formatTimestamp, NOT_AVAILABLE } from "@/lib/format";
+import { formatTimestamp, NOT_AVAILABLE, NOT_COMPUTED } from "@/lib/format";
 
 /* ------------------------------------------------------------------ *
  * Validation status
@@ -172,7 +172,7 @@ export function MetricCard({
   emphasis?: boolean;
   icon?: ReactNode;
 }) {
-  const unavailable = value === NOT_AVAILABLE;
+  const unavailable = value === NOT_AVAILABLE || value === NOT_COMPUTED;
   return (
     <Card className={`metric-card${emphasis ? " emphasis" : ""}`}>
       <CardHeader className="metric-head">

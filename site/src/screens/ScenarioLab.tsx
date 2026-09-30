@@ -33,9 +33,9 @@ import {
 } from "@/components/ui/select";
 import {
   DEFAULT_LAYERS,
-  LAYER_IDS,
   LAYER_LABELS,
   MapView,
+  SCENARIO_LAYER_IDS,
   extractRefuges,
   type LayerId,
   type LayerState,
@@ -53,7 +53,7 @@ import {
 import { useApi } from "@/hooks/useApi";
 import { useRuns } from "@/lib/run-context";
 import { asFeatureCollection } from "@/lib/client";
-import { isFloodSourceRole, type RunStats } from "@/lib/api";
+import { isFloodSourceRole, evacuationReason, floodReason, floodStatus, type RunStats } from "@/lib/api";
 import {
   formatCount,
   formatModelClock,
@@ -63,6 +63,7 @@ import {
   formatSigned,
   formatText,
   formatTimestamp,
+  NOT_COMPUTED,
   propNumber,
 } from "@/lib/format";
 
@@ -160,6 +161,9 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
       buildings: buildingCollection,
       routes: routeCollection,
       refuges: extractRefuges(buildingCollection),
+      // Observed extent is served per year on its own screen, never mixed into
+      // the model-time bundle above.
+      observedWater: { type: "FeatureCollection", features: [] },
     };
   }, [slicedMesh, meshAll, links, buildings, evacuation]);
 
@@ -187,6 +191,16 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
   const anyLoading =
     stats.phase === "loading" || meshAll.phase === "loading" || slicedMesh.phase === "loading";
 
+  // A city run does not compute a flood depth: `max_depth_m` and `edges_closed`
+  // are null and the state of the computation is reported separately. Pilot
+  // runs carry a depth and the earlier `status` / `reason` keys. Both shapes are
+  // read through the resolvers, and a null always renders as "not computed".
+  const depthValue = payload?.flood?.max_depth_m ?? null;
+  const depthComputed = depthValue !== null;
+  const depthState = floodStatus(payload?.flood);
+  const depthReason = floodReason(payload?.flood);
+  const closedValue = payload?.flood?.edges_closed ?? null;
+
   return (
     <div className="scenario-lab">
       <aside className="lab-rail" aria-label="Scenario controls and layers">
@@ -194,7 +208,9 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
         <h1>Where can people still move?</h1>
         <p className="lead">
           Flood, street network, building presence and evacuation for one Bangkok
-          pilot area. Every figure is a model output at a stated model time.
+          pilot area. Every figure on this screen is a model output at a stated model
+          time. The one observed layer, JRC surface-water extent, is on the Observed
+          &amp; assets screen.
         </p>
 
         <RunPicker />
@@ -267,6 +283,10 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
               Model {formatText(payload?.flood?.model?.name)} · version{" "}
               {formatText(payload?.flood?.model?.version)}
             </p>
+            <p className="rail-note">
+              Depth computation: {floodStatus(payload?.flood) ?? "not reported"}
+              {floodReason(payload?.flood) ? ` — ${floodReason(payload?.flood)}` : ""}
+            </p>
             <ul className="role-list">
               {(["observed", "modelled", "scenario"] as const).map((role) => {
                 const present = sourceRoles.includes(role);
@@ -329,7 +349,7 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
           </CardHeader>
           <CardContent className="rail-body">
             <ul className="layer-toggles">
-              {LAYER_IDS.map((id) => (
+              {SCENARIO_LAYER_IDS.map((id) => (
                 <li key={id}>
                   <label>
                     <Switch
@@ -431,14 +451,24 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
               <MetricCard
                 label="Maximum flood depth"
                 icon={<Waves size={15} aria-hidden="true" />}
-                value={formatNumber(payload?.flood?.max_depth_m ?? null, 2)}
+                value={depthComputed ? formatNumber(depthValue, 2) : NOT_COMPUTED}
                 unit="m"
                 quantity={`${
-                  isFloodSourceRole(payload?.flood?.source_role)
-                    ? payload?.flood?.source_role
+                  isFloodSourceRole(payload?.flood?.source_role ?? payload?.flood?.depth_source_role)
+                    ? (payload?.flood?.source_role ?? payload?.flood?.depth_source_role)
                     : "unspecified"
                 } flood source`}
-                caption="Depth comes from the model. Observed extent alone has no depth."
+                caption={
+                  depthComputed ? (
+                    "Depth comes from the model. Observed extent alone has no depth."
+                  ) : (
+                    <>
+                      This run reports no depth: {depthState ?? "no status published"}
+                      {depthReason ? ` — ${depthReason}` : ""}. A missing depth is
+                      never shown as 0 m.
+                    </>
+                  )
+                }
                 status={status}
                 modelTime={modelTime}
               />
@@ -447,9 +477,18 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
                 icon={<Route size={15} aria-hidden="true" />}
                 value={formatShare(payload?.flood?.road_capacity_loss_share ?? null)}
                 quantity="network capacity multiplier against the dry baseline"
-                caption={`${formatCount(
-                  payload?.flood?.edges_closed ?? null,
-                )} of ${formatCount(payload?.flood?.edges_total ?? null)} edges closed.`}
+                caption={
+                  closedValue === null ? (
+                    <>
+                      Closed edges: {NOT_COMPUTED}
+                      {depthReason ? ` — ${depthReason}` : ""}.
+                    </>
+                  ) : (
+                    `${formatCount(closedValue)} of ${formatCount(
+                      payload?.flood?.edges_total ?? null,
+                    )} edges closed.`
+                  )
+                }
                 status={status}
                 modelTime={modelTime}
               />
@@ -518,6 +557,21 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
                   <div>
                     <dt>Population version</dt>
                     <dd>{formatText(payload?.population?.population_version ?? null)}</dd>
+                  </div>
+                  <div>
+                    <dt>Flood depth</dt>
+                    <dd>
+                      {depthComputed
+                        ? `${formatNumber(depthValue, 2)} m`
+                        : `${NOT_COMPUTED}${depthReason ? ` — ${depthReason}` : ""}`}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Evacuation reason</dt>
+                    <dd>
+                      {evacuationReason(payload?.evacuation) ??
+                        "no run-level reason published"}
+                    </dd>
                   </div>
                   <div>
                     <dt>Warnings</dt>

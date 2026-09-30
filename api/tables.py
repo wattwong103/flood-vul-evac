@@ -212,12 +212,19 @@ def artefact_path(run: RunRef, filename: str) -> Path:
 # --------------------------------------------------------------------------
 
 
-def wkt_to_geometry(wkt: Any) -> dict[str, Any] | None:
-    """WKT to a GeoJSON geometry mapping.
+def wkt_to_geometry(
+    wkt: Any, source_crs: str | None = None
+) -> dict[str, Any] | None:
+    """WKT to a GeoJSON geometry mapping, reprojected to WGS84.
 
-    Uses the shapely geometry's ``__geo_interface__``; shapely is already a hard
-    dependency of geopandas, so this avoids paying for a GeoDataFrame round trip
-    on every feature.
+    GeoJSON is defined in WGS84 longitude/latitude by RFC 7946, but the pipeline
+    stores geometry in the run's analysis CRS, which is UTM metres for Bangkok.
+    Serving stored coordinates directly would place every feature hundreds of
+    kilometres from its true position, so projected geometry is transformed on
+    the way out.
+
+    `source_crs=None` passes coordinates through unchanged, which is correct
+    for a run already stored in a geographic CRS.
     """
     if not isinstance(wkt, str) or not wkt.strip():
         return None
@@ -230,10 +237,22 @@ def wkt_to_geometry(wkt: Any) -> dict[str, Any] | None:
         return None
     if geometry is None or geometry.is_empty:
         return None
+
+    if source_crs:
+        try:
+            from pyproj import Transformer
+            from shapely.ops import transform as shapely_transform
+
+            transformer = Transformer.from_crs(source_crs, "OGC:CRS84", always_xy=True)
+            geometry = shapely_transform(transformer.transform, geometry)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.info("reprojection from %s failed, passing through: %r", source_crs, exc)
+
     interface = geometry.__geo_interface__
     if not isinstance(interface, dict):
         return None
     return jsonable(interface)
+
 
 
 def feature(

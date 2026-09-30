@@ -12,6 +12,7 @@ import {
   Database,
   Gauge,
   Menu,
+  Satellite,
   ShieldAlert,
   Users,
   X,
@@ -23,6 +24,7 @@ import { Population } from "@/screens/Population";
 import { DataRegistry } from "@/screens/DataRegistry";
 import { Method } from "@/screens/Method";
 import { RunDetail } from "@/screens/RunDetail";
+import { ObservedAssets } from "@/screens/ObservedAssets";
 import { RunProvider, useRuns, API_BASE_URL } from "@/lib/run-context";
 import { resolveValidationStatus } from "@/components/primitives";
 import { formatText } from "@/lib/format";
@@ -120,6 +122,13 @@ function Shell() {
             <BookOpen size={15} aria-hidden="true" /> Method
           </button>
           <button
+            className={view === "observed" ? "active" : ""}
+            aria-current={view === "observed" ? "page" : undefined}
+            onClick={() => select("observed")}
+          >
+            <Satellite size={15} aria-hidden="true" /> Observed &amp; assets
+          </button>
+          <button
             className={view === "run" ? "active" : ""}
             aria-current={view === "run" ? "page" : undefined}
             onClick={() => select("run")}
@@ -151,8 +160,9 @@ function Shell() {
       <div className="prototype-banner" role="note">
         <ShieldAlert size={15} aria-hidden="true" />
         <span>
-          <b>Research prototype.</b> Not a warning, routing or emergency service. Every
-          figure is a model output at a stated model time, not an observation.
+          <b>Research prototype.</b> Not a warning, routing or emergency service. Most
+          figures are model outputs at a stated model time. The JRC surface-water layer
+          is an observation, and it measures extent only — not depth.
         </span>
         <ApiStatus />
       </div>
@@ -163,6 +173,7 @@ function Shell() {
           <TabsTrigger value="population">Population</TabsTrigger>
           <TabsTrigger value="data">Data registry</TabsTrigger>
           <TabsTrigger value="method">Method</TabsTrigger>
+          <TabsTrigger value="observed">Observed &amp; assets</TabsTrigger>
           <TabsTrigger value="run">Run detail</TabsTrigger>
         </TabsList>
 
@@ -178,6 +189,9 @@ function Shell() {
           </TabsContent>
           <TabsContent value="method">
             <Method />
+          </TabsContent>
+          <TabsContent value="observed">
+            <ObservedAssets reducedMotion={reducedMotion} />
           </TabsContent>
           <TabsContent value="run">
             <RunDetail />

@@ -146,3 +146,59 @@ def test_city_run_reports_null_depth_rather_than_zero(client: TestClient) -> Non
     assert "depth" in flood["depth_reason"].lower()
     # The observed layer must still be present and separately flagged.
     assert flood["observed_extent"]["is_observation"] is True
+
+
+def _iter_coords(geometry: dict, depth: int = 0):
+    """Yield every coordinate pair in a GeoJSON geometry."""
+    if depth > 6:
+        return
+    kind = geometry.get("type")
+    coords = geometry.get("coordinates")
+    if kind == "Point" and isinstance(coords, (list, tuple)) and len(coords) >= 2:
+        yield float(coords[0]), float(coords[1])
+    elif kind == "LineString":
+        for position in coords or []:
+            if len(position) >= 2:
+                yield float(position[0]), float(position[1])
+    elif kind in {"Polygon", "MultiLineString", "MultiPoint"}:
+        for part in coords or []:
+            for position in part or []:
+                if len(position) >= 2:
+                    yield float(position[0]), float(position[1])
+    elif kind == "MultiPolygon":
+        for polygon in coords or []:
+            for ring in polygon or []:
+                for position in ring or []:
+                    if len(position) >= 2:
+                        yield float(position[0]), float(position[1])
+    elif kind == "GeometryCollection":
+        for sub in geometry.get("geometries") or []:
+            yield from _iter_coords(sub, depth + 1)
+
+
+@needs_run
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/observed-water/cells?limit=5",
+        "/network?limit=5",
+        "/buildings?limit=5",
+    ],
+)
+def test_served_geojson_is_wgs84_not_projected(client: TestClient, path: str) -> None:
+    """GeoJSON is WGS84 by RFC 7946; serving UTM metres misplaces every layer.
+
+    The pipeline stores geometry in EPSG:32647 for metric work. If the API ever
+    stops reprojecting, features land hundreds of kilometres away and still
+    render, which is why this asserts the coordinate range rather than trusting
+    the response shape.
+    """
+    body = client.get(f"/v1/runs/{RUN_ID}{path}").json()
+    features = body.get("features") or []
+    assert features, f"{path} returned no features"
+    for item in features:
+        for lon, lat in _iter_coords(item["geometry"]):
+            # Bangkok and its metropolitan area.
+            assert 100.2 < lon < 101.1, f"{path}: longitude {lon} is not Bangkok WGS84"
+            assert 13.1 < lat < 14.1, f"{path}: latitude {lat} is not Bangkok WGS84"
+
