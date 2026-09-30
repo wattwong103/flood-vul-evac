@@ -250,9 +250,9 @@ def execute_city_run(
         warnings.append(
             "Observed surface water from JRC Global Surface Water (Landsat) is available for "
             f"{len(observed_years)} years: " + ", ".join(
-                f"{entry['year']} {entry['aoi_water_share']:.1%}" for entry in observed_years
-            ) + ". It is EXTENT, not depth, and the annual composite does not capture the "
-            "2011 flood."
+                f"{entry['year']} {entry['aoi_water_km2']:.1f} km2" for entry in observed_years
+            ) + ". It is EXTENT, not depth, and the annual classification does not resolve the "
+            "timing or peak extent of a flood event."
         )
         anomaly = max(observed_years, key=lambda entry: entry["aoi_water_km2"])
         observed_note = (

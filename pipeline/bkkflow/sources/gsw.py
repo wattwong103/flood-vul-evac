@@ -12,9 +12,8 @@ What it is, stated precisely so it is not over-read:
   classification.
 * **Extent, not depth.** A pixel classified as water carries no depth, no
   duration and no flow direction.
-* An annual Landsat composite under-detects short-lived inundation. The 2011
-  Bangkok flood in particular is known to be poorly captured by an annual
-  classification, so the 2011 layer should be read as a *lower bound*.
+* Annual observations do not resolve a flood event or its peak. Missing
+  observations must remain distinct from observed non-water.
 * Because the year is a classification of a whole year, it cannot resolve
   within-year timing, so it cannot validate a 4-hour evacuation scenario
   directly. It can and does validate *spatial extent*.
@@ -50,21 +49,26 @@ OFFSET_STEP = 40_000
 TILE_SIZE_PX = 40_000
 PIXEL_DEGREES = 0.00025
 
-# JRC yearly classification codes. Note that 0 is DRY LAND, not no-data: land
-# is the most common class in every tile. Treating 0 as nodata inverts the
-# statistic, because it removes the denominator and leaves only water and
-# the two nodata codes in the ratio.
-CODE_LAND = 0
-CODE_WATER = 1
-CODE_NO_DATA_LAND = 2
-CODE_NO_DATA_CLOUD = 3
-CODE_NODATA = (CODE_NO_DATA_LAND, CODE_NO_DATA_CLOUD)
+# JRC Data Users Guide v4, p15: waterClass (not MonthlyHistory or occurrence).
+ENCODING_REFERENCE = (
+    "https://storage.googleapis.com/global-surface-water/downloads_ancillary/"
+    "DataUsersGuidev2021.pdf"
+)
+CODE_NO_OBSERVATIONS = 0
+CODE_LAND = 1
+CODE_SEASONAL = 2
+CODE_PERMANENT = 3
+CODE_NODATA = (CODE_NO_OBSERVATIONS,)
 CODE_CODES = {
-    0: "land",
-    1: "water",
-    2: "no_data_land_masked",
-    3: "no_data_cloud",
+    0: "no_observations", 1: "non_water", 2: "seasonal_water", 3: "permanent_water",
 }
+
+
+def is_water(array: np.ndarray) -> np.ndarray:
+    """Decode yearly waterClass and reject a different/unknown product encoding."""
+    if not np.isin(array, list(CODE_CODES)).all():
+        raise ValueError("unknown JRC waterClass code; expected 0, 1, 2 or 3")
+    return np.isin(array, (CODE_SEASONAL, CODE_PERMANENT))
 
 
 @dataclass
@@ -77,9 +81,12 @@ class GswRecord:
     retrieved_at: str
     aoi_water_pixels: int
     aoi_total_pixels: int
-    aoi_water_share: float
+    aoi_water_share: float | None
     aoi_water_km2: float
     aoi_area_km2: float
+    aoi_seasonal_pixels: int
+    aoi_permanent_pixels: int
+    aoi_no_observation_pixels: int
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -91,9 +98,12 @@ class GswRecord:
             "retrieved_at": self.retrieved_at,
             "aoi_water_pixels": self.aoi_water_pixels,
             "aoi_total_pixels": self.aoi_total_pixels,
-            "aoi_water_share": round(self.aoi_water_share, 6),
+            "aoi_water_share": round(self.aoi_water_share, 6) if self.aoi_water_share is not None else None,
             "aoi_water_km2": round(self.aoi_water_km2, 4),
             "aoi_area_km2": round(self.aoi_area_km2, 4),
+            "aoi_seasonal_pixels": self.aoi_seasonal_pixels,
+            "aoi_permanent_pixels": self.aoi_permanent_pixels,
+            "aoi_no_observation_pixels": self.aoi_no_observation_pixels,
         }
 
 
@@ -162,18 +172,15 @@ def measure_year(
                 series = geometry.geometry
                 geometry = series.union_all() if hasattr(series, "union_all") else series.unary_union
             geometries = [geometry]
-            data, _ = rio_mask(dataset, geometries, crop=True, filled=True, nodata=CODE_NO_DATA_LAND)
-            array = data[0]
+            data, _ = rio_mask(dataset, geometries, crop=True, filled=False)
+            array = data[0].compressed()
         else:
             window = dataset.window(*bounds)
-            data, _ = dataset.read(1, window=window, boundless=True, fill_value=CODE_NO_DATA_LAND)
-            array = data
+            array = dataset.read(1, window=window, boundless=True, masked=True).compressed()
 
-        water = int((array == CODE_WATER).sum())
-        total = int(array.size)
+        water = int(is_water(array).sum())
         pixel_area_km2 = (PIXEL_DEGREES * 111.32) ** 2 * np.cos(np.radians(np.mean(bounds[1::2])))
-        # Exclude only the two genuine nodata codes, so the share describes the
-        # surface actually classified rather than the masked remainder.
+        # Coverage is observed pixels only; a zero code is not evidence of dry land.
         classified = int((~np.isin(array, CODE_NODATA)).sum())
         return GswRecord(
             year=year,
@@ -184,9 +191,12 @@ def measure_year(
             retrieved_at=retrieved_at or utc_now_iso(),
             aoi_water_pixels=water,
             aoi_total_pixels=classified,
-            aoi_water_share=water / classified if classified else 0.0,
+            aoi_water_share=water / classified if classified else None,
             aoi_water_km2=water * float(pixel_area_km2),
             aoi_area_km2=classified * float(pixel_area_km2),
+            aoi_seasonal_pixels=int((array == CODE_SEASONAL).sum()),
+            aoi_permanent_pixels=int((array == CODE_PERMANENT).sum()),
+            aoi_no_observation_pixels=int((array == CODE_NO_OBSERVATIONS).sum()),
         )
 
 
@@ -198,8 +208,8 @@ def observed_water_mask(path: Path, aoi_geometry: Any) -> np.ndarray:
             geometry = series.union_all() if hasattr(series, "union_all") else series.unary_union
         else:
             geometry = aoi_geometry
-        data, transform = rio_mask(dataset, [geometry], crop=True, filled=True, nodata=CODE_NO_DATA_LAND)
-    return data[0] == CODE_WATER, transform
+        data, transform = rio_mask(dataset, [geometry], crop=True, filled=True, nodata=CODE_NO_OBSERVATIONS)
+    return is_water(data[0]), transform
 
 
 def fetch_years(
@@ -210,8 +220,8 @@ def fetch_years(
 ) -> dict[str, Any]:
     """Fetch a set of years and write a per-year observed extent summary.
 
-    Fetching several years matters: a single year cannot be distinguished from
-    permanent water, and the year-on-year change is what identifies a flood.
+    Preserve the annual classes; differences between years are not event-flood
+    estimates, particularly when observation coverage differs.
     """
     target_dir = ensure_dir(STAGED_DIR / "gsw")
     records: list[GswRecord] = []
@@ -260,15 +270,15 @@ def fetch_years(
         "source_id": SOURCE_ID,
         "licence": "CC BY 4.0 (Copernicus / European Commission JRC)",
         "product": "Global Surface Water v1.4 yearly classification, 1984-2021, Landsat 5/7/8",
+        "encoding_reference": ENCODING_REFERENCE,
+        "class_codes": CODE_CODES,
         "is_observation": True,
         "measures": "water extent, NOT depth, duration or direction",
         "baseline_year": baseline_year,
         "years": years_payload,
         "interpretation_notes": [
-            "An annual Landsat composite under-detects short-lived inundation, so each "
-            "year is a lower bound on flood extent.",
-            "2011 in particular is known to be poorly captured by annual classification; "
-            "treat the 2011 layer as a lower bound, not a measurement of the flood peak.",
+            "Annual water classes are not event-flood extent or flood peak estimates.",
+            "Compare observation coverage alongside annual area; no observations is not dry land.",
             "A year cannot resolve within-year timing and therefore cannot validate a "
             "4-hour evacuation scenario directly; it can validate spatial extent.",
             "Permanent water (the river and canals) is included in every year, which is "

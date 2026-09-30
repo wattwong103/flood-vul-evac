@@ -286,7 +286,7 @@ def _plot_observed_water(axis, aoi, stats) -> None:
         return
     geometry = aoi.to_crs("OGC:CRS84").geometry.union_all()
     with rasterio.open(path) as dataset:
-        data, transform = rio_mask(dataset, [geometry], crop=True, filled=True, nodata=gsw.CODE_NO_DATA_LAND)
+        data, transform = rio_mask(dataset, [geometry], crop=True, filled=True, nodata=gsw.CODE_NO_OBSERVATIONS)
     array = data[0]
     rows, cols = array.shape
     # Compute cell centres from the affine transform directly; rasterio's xy()
@@ -296,7 +296,7 @@ def _plot_observed_water(axis, aoi, stats) -> None:
     xs = transform.c + transform.a * (col_index + 0.5)
     ys = transform.f + transform.e * (row_index + 0.5)
     sampled = array[row_index, col_index]
-    water = sampled == gsw.CODE_WATER
+    water = gsw.is_water(sampled)
     # The mask transform is in the raster CRS (WGS84); the axes are in the
     # analysis CRS, so the sampled points have to be reprojected too.
     from pyproj import Transformer

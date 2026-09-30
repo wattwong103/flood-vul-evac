@@ -187,10 +187,10 @@ def water_mask(year: int):
             [aoi.geometry.union_all()],
             crop=True,
             filled=True,
-            nodata=gsw_module.CODE_NO_DATA_LAND,
+            nodata=gsw_module.CODE_NO_OBSERVATIONS,
         )
         crs = dataset.crs
-    result = (data[0] == gsw_module.CODE_WATER, transform, crs)
+    result = (gsw_module.is_water(data[0]), transform, crs)
     WATER_MASK_CACHE[year] = result
     return result
 
@@ -221,7 +221,7 @@ def edges_in_water(
     ys: list[np.ndarray] = []
     for fraction in np.linspace(0.0, 1.0, samples_per_edge):
         points = shapely.get_coordinates(
-            shapely.line_interpolate_point(geometries, fraction)
+            shapely.line_interpolate_point(geometries, fraction, normalized=True)
         )
         xs.append(points[:, 0])
         ys.append(points[:, 1])
@@ -229,8 +229,9 @@ def edges_in_water(
     rows, cols = rowcol(transform, mask_x, mask_y)
     rows = np.clip(np.asarray(rows, dtype="int64"), 0, mask.shape[0] - 1)
     cols = np.clip(np.asarray(cols, dtype="int64"), 0, mask.shape[1] - 1)
-    wet = mask[rows, cols].reshape(len(edges), samples_per_edge)
-    return wet.any(axis=1)
+    # Concatenation groups by sample fraction, not by edge.
+    wet = mask[rows, cols].reshape(samples_per_edge, len(edges))
+    return wet.any(axis=0)
 
 
 def _water_cell_geometries(year: int) -> gpd.GeoDataFrame:
