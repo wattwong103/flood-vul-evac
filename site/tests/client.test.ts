@@ -54,6 +54,21 @@ test("viewport budget reports incomplete coverage and rejects mixed runs", async
   } finally { globalThis.fetch = original; }
 });
 
+test("validation stamp renders valid paragraph content", async () => {
+  const { createServer } = await import("vite");
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { ValidationStamp } = await server.ssrLoadModule("/src/components/primitives.tsx");
+    const html = renderToStaticMarkup(createElement(ValidationStamp, { status: "demonstration", modelTime: null }));
+    assert.match(html, /demonstration/);
+    assert.match(html, /model time/);
+    // HTML parsing closes a paragraph before a div, separating the stamp's content.
+    assert.doesNotMatch(html, /^<p\b[^>]*>[\s\S]*<(?:div|section|p)\b/);
+  } finally { await server.close(); }
+});
+
 test("stringPropertyExpression has no duplicate match branches", () => {
   assert.deepEqual(stringPropertyExpression("source_role"), [
     "to-string",

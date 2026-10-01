@@ -34,6 +34,14 @@ def _draw_outline(axis, aoi_wgs84) -> None:
     axis.set_yticks([])
 
 
+def _plot_building_evidence(axis, buildings) -> None:
+    for label, colour in (("unknown", "#cbd5e1"), ("osm_building_levels", "#f59e0b"), ("osm_height", "#b91c1c")):
+        selected = buildings[buildings["height_source"] == label]
+        if not selected.empty:
+            axis.scatter(selected["centre_x"], selected["centre_y"], s=1.2, c=colour, linewidths=0, label=label)
+    axis.legend(markerscale=8, fontsize=8, loc="lower left")
+
+
 def figure_city_baseline(run_id: str, report_dir: Path) -> Path:
     stats = json.loads((RUNS_DIR / run_id / "stats.json").read_text(encoding="utf-8"))
     # Plot against the analysis CRS, the same CRS as the data panels; drawing a
@@ -79,16 +87,7 @@ def figure_city_baseline(run_id: str, report_dir: Path) -> Path:
 
     # 3. Building height evidence.
     axis = axes[1][0]
-    bx, by = buildings["centre_x"].to_numpy(), buildings["centre_y"].to_numpy()
-    for label, colour in (
-        ("unknown_height", "#cbd5e1"),
-        ("osm_building_levels", "#f59e0b"),
-        ("osm_height", "#b91c1c"),
-    ):
-        mask = buildings["height_source"] == label
-        if mask.any():
-            axis.scatter(bx[mask], by[mask], s=1.2, c=colour, linewidths=0, label=label)
-    axis.legend(markerscale=8, fontsize=8, loc="lower left")
+    _plot_building_evidence(axis, buildings)
     axis.set_title(
         f"Building height evidence — coverage {stats['buildings']['height_coverage_share']:.1%}"
     )
