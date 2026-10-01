@@ -108,6 +108,7 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
 
   const runId = activeRunId;
   const encoded = runId ? encodeURIComponent(runId) : null;
+  const isCity = stats.data?.scale === "city";
 
   // The unfiltered mesh response is the only place the run's own model times
   // are discoverable, so it drives the timeline.
@@ -163,7 +164,7 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
     [runId, activeTime],
   );
 
-  const buildings = useApi<unknown>(encoded ? `/v1/runs/${encoded}/buildings` : null, [runId]);
+  const buildings = useApi<unknown>(encoded && stats.phase === "ready" && !isCity ? `/v1/runs/${encoded}/buildings` : null, [runId, isCity, stats.phase]);
 
   // City runs publish a resident grid and a bounded network sample through
   // dedicated endpoints. Fetch those large fallbacks only after the primary
@@ -179,10 +180,10 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
     [runId, primaryMeshPhase, primaryMeshCount],
   );
   const cityNetwork = useApi<NetworkResult>(
-    runId && shouldLoadStaticFallback(links.phase, primaryLinkCount)
+    runId && stats.phase === "ready" && !isCity && shouldLoadStaticFallback(links.phase, primaryLinkCount)
       ? networkPath(runId, 5000)
       : null,
-    [runId, links.phase, primaryLinkCount],
+    [runId, links.phase, primaryLinkCount, isCity, stats.phase],
   );
 
   const flood = useApi<FloodResult>(
@@ -491,6 +492,7 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
               {anyLoading ? <LoadingState label="Reading run artefacts from the API" /> : null}
               <MapView
                 bundle={bundle}
+                spatialRunId={isCity ? runId : null}
                 layers={layers}
                 modelTime={activeTime === null ? null : modelTime}
                 areaName={formatText(payload?.geography?.name ?? "the pilot area")}

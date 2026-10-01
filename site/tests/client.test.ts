@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { asRunList, floodPath, routesPath } from "../src/lib/client.ts";
+import { asRunList, floodPath, routesPath, loadViewportLayer } from "../src/lib/client.ts";
 import {
   availableModelTimes,
   layerFooterText,
@@ -19,6 +19,39 @@ test("asRunList unwraps the API run-list envelope", () => {
   });
 
   assert.deepEqual(runs.map((run) => run.run_id), ["city-run"]);
+});
+
+test("viewport loader follows pages and preserves bounds and run identity", async () => {
+  const original = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    const second = String(url).includes("after=9");
+    return new Response(JSON.stringify({ available: true, run_id: "city run", layer: "network",
+      type: "FeatureCollection", features: [{ type: "Feature", geometry: null, properties: { edge_id: second ? "east2" : "east1" } }],
+      matched_rows: 2, next_cursor: second ? null : 9 }));
+  };
+  try {
+    const result = await loadViewportLayer("city run", "network", [100.7, 13.4, 100.9, 13.6]);
+    assert.equal(result.features.length, 2);
+    assert.equal(result.truncated, false);
+    assert.equal(urls.length, 2);
+    assert.ok(urls.every(url => url.includes("city%20run/map/network") && new URL(url).searchParams.get("bbox") === "100.7,13.4,100.9,13.6"));
+  } finally { globalThis.fetch = original; }
+});
+
+test("viewport budget reports incomplete coverage and rejects mixed runs", async () => {
+  const original = globalThis.fetch;
+  let run = "chosen";
+  globalThis.fetch = async () => new Response(JSON.stringify({ available: true, run_id: run, layer: "buildings",
+    type: "FeatureCollection", features: [{ type: "Feature", geometry: null, properties: {} }], matched_rows: 50, next_cursor: 1 }));
+  try {
+    const result = await loadViewportLayer("chosen", "buildings", [100, 13, 101, 14], undefined, 1);
+    assert.equal(result.truncated, true);
+    assert.match(result.note, /Zoom in/);
+    run = "different";
+    await assert.rejects(loadViewportLayer("chosen", "buildings", [100, 13, 101, 14]), /run or layer/);
+  } finally { globalThis.fetch = original; }
 });
 
 test("stringPropertyExpression has no duplicate match branches", () => {

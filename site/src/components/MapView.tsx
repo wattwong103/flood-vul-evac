@@ -58,6 +58,7 @@ import {
 import { stringPropertyExpression } from "@/lib/map-expressions";
 import { geoJsonBounds } from "@/lib/map-bounds";
 import { layerFooterText } from "@/lib/map-copy";
+import { useViewportLayers } from "@/hooks/useViewportLayers";
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -373,16 +374,18 @@ export type MapViewProps = {
   /** Named so the map can be labelled and described for assistive tech. */
   areaName: string;
   reducedMotion: boolean;
+  spatialRunId?: string | null;
 };
 
 export function MapView({
-  bundle,
+  bundle: suppliedBundle,
   layers,
   modelTime,
   center = [100.6333, 13.5872],
   zoom = 9.1,
   areaName,
   reducedMotion,
+  spatialRunId = null,
 }: MapViewProps) {
   const container = useRef<HTMLDivElement | null>(null);
   const map = useRef<MapLibreMap | null>(null);
@@ -390,6 +393,8 @@ export function MapView({
   const [ready, setReady] = useState(false);
   const [mode, setMode] = useState<"map" | "table">("map");
   const [failure, setFailure] = useState<string | null>(null);
+  const { bundle, note: viewportNote } = useViewportLayers(ready ? map.current : null,
+    spatialRunId, suppliedBundle, layers.network, layers.buildings || layers.refuges);
 
   const dataFor = useMemo(
     () => ({
@@ -794,6 +799,7 @@ export function MapView({
         <MapTables bundle={bundle} layers={layers} modelTime={modelTime} />
       )}
 
+      {viewportNote ? <p className="layer-legend-note" role="status">{viewportNote}</p> : null}
       <LayerFooterNote modelTime={modelTime} />
     </div>
   );
