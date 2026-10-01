@@ -34,11 +34,15 @@ from . import population as population_module
 from . import validate as validate_module
 from . import drainage as drainage_module
 from . import observed_evac as observed_evac_module
+from .provenance import verify_source
+from .sources.registry import load_registry
 from .sources import city_osm, destinations as destinations_source, gsw, mitrearth
 from .util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 WORLDPOP_RASTER = Path(__file__).resolve().parents[2] / "data/staged/population/tha_ppp_2020.tif"
+WORLDPOP_SOURCE_ID = "worldpop-global-2000-2020-tha-100m"
+WORLDPOP_URL = "https://data.worldpop.org/GIS/Population/Global_2000_2020/2020/THA/tha_ppp_2020.tif"
 
 FLOOD_NOT_COMPUTED = (
     "not_computed_insufficient_dem_vertical_accuracy"
@@ -144,6 +148,35 @@ def _agglomerate_cells(
     return frame_out.to_crs("OGC:CRS84")
 
 
+def population_source_version(aoi_id: str) -> dict:
+    source = load_registry().require_approved([WORLDPOP_SOURCE_ID])[0]
+    metadata = verify_source(WORLDPOP_RASTER, WORLDPOP_URL)
+    return source.manifest_entry(retrieved_at=metadata["retrieved_at"],
+        content_sha256=metadata["content_sha256"], licence_snapshot=source.licence,
+        request_parameters={"popyear": 2020, "clip": aoi_id, "resource_url": WORLDPOP_URL})
+
+
+def save_coverage(coverage: dict, run_dir: Path) -> dict:
+    path = run_dir / "osm_source_coverage.json"
+    write_json(path, coverage)
+    return {key: value for key, value in coverage.items() if key not in {"polygon_wkt", "path"}} | {
+        "geometry_uri": path.name, "geometry_sha256": sha256_file(path)}
+
+
+def save_mapped_water(water, aoi, analysis_crs: str, run_dir: Path) -> dict:
+    projected = water.to_crs(analysis_crs)
+    clip = aoi.to_crs(analysis_crs).geometry.union_all()
+    projected = projected[projected.geometry.intersects(clip)].copy()
+    projected["geometry_wkt"] = projected.geometry.to_wkt()
+    projected.drop(columns="geometry").to_parquet(run_dir / "water_features.parquet", index=False)
+    lines = projected.geom_type.isin(["LineString", "MultiLineString"])
+    areas = projected.geom_type.isin(["Polygon", "MultiPolygon"])
+    return {"features": int(len(projected)),
+            "waterway_length_km": round(float(projected.loc[lines].geometry.length.sum() / 1000), 2),
+            "water_area_km2": float(projected.loc[areas].geometry.area.sum() / 1e6),
+            "geometry_scope": "saved source features intersecting AOI; may cross its boundary"}
+
+
 def execute_city_run(
     *, run_id: str | None = None, max_agents: int = 1500
 ) -> dict[str, Any]:
@@ -172,6 +205,8 @@ def execute_city_run(
         city_osm.ingest_city()
     ingest = read_json(ingest_path)
     city_osm.validate_cached_ingest(ingest, aoi_frame, CURATED_DIR / "city")
+    population_version = population_source_version(aoi_id)
+    coverage_reference = save_coverage(ingest["coverage"], run_dir)
     record("sources", time.time() - stage_start, rows=int(ingest["road_ways"]),
            note="regional PBF extract via GDAL, not tiled Overpass")
 
@@ -230,18 +265,9 @@ def execute_city_run(
         if water_frames
         else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
     )
-    if len(water):
-        water_projected = water.to_crs(analysis_crs)
-        clip = aoi_frame.to_crs(analysis_crs).geometry.union_all()
-        water_projected = water_projected[water_projected.geometry.intersects(clip)]
-        water_out = water_projected.copy()
-        water_out["geometry_wkt"] = water_out.geometry.to_wkt()
-        water_out.drop(columns="geometry").to_parquet(run_dir / "water_features.parquet", index=False)
-        water_length_km = float(water_projected.geometry.length.sum() / 1000.0)
-    else:
-        water_length_km = 0.0
-    record("water", time.time() - stage_start, rows=len(water),
-           note=f"{water_length_km:.0f} km mapped waterway length")
+    water_stats = save_mapped_water(water, aoi_frame, analysis_crs, run_dir)
+    record("water", time.time() - stage_start, rows=water_stats["features"],
+           note=f"{water_stats['waterway_length_km']:.0f} km mapped waterway length (lines only)")
 
     # ---- observed surface water (the only observational hazard layer) ----
     stage_start = time.time()
@@ -528,17 +554,9 @@ def execute_city_run(
             "licence_snapshot": "ODbL 1.0 (c) OpenStreetMap contributors",
             "request_parameters": {"byte_count": ingest["byte_count"],
                                    "resource_url": ingest["resource_url"],
-                                   "coverage": ingest["coverage"]},
+                                   "coverage": coverage_reference},
         },
-        {
-            "source_id": "worldpop-global2-tha-100m-r2025a",
-            "retrieved_at": aoi_provenance["retrieved_at"],
-            # The real checksum of the staged raster. The schema demands a
-            # 64-hex digest, and a placeholder here would be a provenance lie.
-            "content_sha256": sha256_file(WORLDPOP_RASTER),
-            "licence_snapshot": "CC BY 4.0",
-            "request_parameters": {"popyear": 2020, "clip": aoi_id},
-        },
+        population_version,
     ]
     observed_source = _observed_source_version(observed, aoi_id=aoi_id)
     if observed_source is not None:
@@ -566,7 +584,7 @@ def execute_city_run(
             },
             "seed": 29092026,
             "control_source_ids": [
-                "worldpop-global2-tha-100m-r2025a",
+                WORLDPOP_SOURCE_ID,
                 ingest["source_id"],
             ],
             "time_profile": {
@@ -631,6 +649,8 @@ def execute_city_run(
         },
         outputs=[
             *extra_outputs,
+            manifest_module.output_entry("osm_source_coverage", run_dir / "osm_source_coverage.json", crs="EPSG:4326"),
+            manifest_module.output_entry("water_features", run_dir / "water_features.parquet", row_count=water_stats["features"], crs=analysis_crs),
             manifest_module.output_entry("observed_water_cells", run_dir / "observed_water_cells.parquet", row_count=observed_cells["rows"], crs="OGC:CRS84"),
             manifest_module.output_entry("connectivity_screening", run_dir / "connectivity_screening.json", row_count=len(screening)),
             manifest_module.output_entry("network_edges", edges_path, row_count=len(edges), crs=analysis_crs),
@@ -682,7 +702,7 @@ def execute_city_run(
             "derived_from_levels": coverage.get("derived_from_levels"),
             "unknown_height": coverage.get("unknown_height"),
         },
-        "water": {"features": int(len(water)), "waterway_length_km": round(water_length_km, 2)},
+        "water": water_stats,
         "flood": {
             # Depth and closure remain uncomputable; observed extent is real.
             "depth_status": FLOOD_NOT_COMPUTED,
@@ -735,7 +755,7 @@ def execute_city_run(
         "warnings": warnings,
         "sources": [
             {"source_id": ingest["source_id"], "licence": "ODbL 1.0", "status": "approved"},
-            {"source_id": "worldpop-global2-tha-100m-r2025a", "licence": "CC BY 4.0", "status": "approved"},
+            {"source_id": WORLDPOP_SOURCE_ID, "licence": "CC BY 4.0", "status": "approved"},
             {
                 "source_id": "jrc-global-surface-water-v1.4",
                 "licence": "CC BY 4.0",

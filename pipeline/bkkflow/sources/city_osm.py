@@ -23,7 +23,7 @@ from typing import Any
 import geopandas as gpd
 
 from ..http import HttpClient
-from ..util import CURATED_DIR, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
+from ..util import CURATED_DIR, REPO_ROOT, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
 from .registry import load_registry
 
 SOURCE_ID = "geofabrik-thailand-osm-20260929"
@@ -109,20 +109,27 @@ def source_coverage(path: Path, aoi: gpd.GeoDataFrame) -> dict[str, Any]:
     from shapely import union_all
     from shapely.geometry import Polygon
     positive, negative = [], []
-    lines = iter(path.read_text(encoding="utf-8").splitlines()[1:])
-    for label in lines:
-        if label.strip() == "END":
-            break
-        coordinates = []
-        for line in lines:
-            if line.strip() == "END":
-                break
-            coordinates.append(tuple(map(float, line.split())))
-        (negative if label.strip().startswith("!") else positive).append(Polygon(coordinates))
+    lines = iter(line.strip() for line in path.read_text(encoding="utf-8").splitlines()[1:] if line.strip())
+    try:
+        while (label := next(lines)) != "END":
+            coordinates = []
+            while (line := next(lines)) != "END":
+                coordinate = tuple(map(float, line.split()))
+                if len(coordinate) != 2:
+                    raise ValueError("expected longitude latitude")
+                coordinates.append(coordinate)
+            ring = Polygon(coordinates)
+            if not ring.is_valid or ring.is_empty:
+                raise ValueError("invalid ring")
+            (negative if label.startswith("!") else positive).append(ring)
+        if not positive or list(lines):
+            raise ValueError("missing exterior or trailing data")
+    except (StopIteration, ValueError) as error:
+        raise ValueError(f"Malformed OSM coverage polygon: {path.name}") from error
     polygon = union_all(positive).difference(union_all(negative))
     if polygon.is_empty or not polygon.is_valid or not polygon.covers(aoi.to_crs("EPSG:4326").geometry.union_all()):
         raise ValueError("OSM source polygon does not cover the complete city AOI")
-    return {"covers_aoi": True, "sha256": sha256_file(path),
+    return {"covers_aoi": True, "sha256": sha256_file(path), "path": str(path.resolve()),
             "polygon_wkt": polygon.wkt, "crs": "EPSG:4326",
             "note": "Source coverage, not proof of mapping completeness."}
 
@@ -144,8 +151,10 @@ def validate_cached_ingest(record: dict, aoi: gpd.GeoDataFrame, target: Path) ->
     """Do not silently reuse the former incomplete extract or changed layers."""
     if record.get("source_id") != SOURCE_ID:
         raise ValueError("OSM source changed; re-ingest the complete city extract")
+    load_registry().require_approved([SOURCE_ID])
     metadata = source_provenance(Path(record["pbf_path"]), record["resource_url"])
-    coverage = source_coverage(Path(DEFAULT_COVERAGE), aoi)
+    coverage_path = Path(record["coverage"].get("path", REPO_ROOT / DEFAULT_COVERAGE))
+    coverage = source_coverage(coverage_path, aoi)
     if (metadata["content_sha256"] != record["content_sha256"]
             or coverage["sha256"] != record["coverage"]["sha256"]):
         raise ValueError("OSM inputs changed; re-ingest the city extract")

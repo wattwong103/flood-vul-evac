@@ -65,6 +65,21 @@
       "notes": "Thailand is covered. Height validation was not performed in Thailand; treat height as an estimate and locally validate."
     },
     {
+      "source_id": "worldpop-global-2000-2020-tha-100m",
+      "agency": "WorldPop / University of Southampton / CIESIN",
+      "dataset": "Thailand 2020 population counts, Global 2000-2020, DOI 10.5258/SOTON/WP00645",
+      "model_role": "City resident baseline; modelled counts, not people present",
+      "resource_url": "https://data.worldpop.org/GIS/Population/Global_2000_2020/2020/THA/tha_ppp_2020.tif",
+      "format": "GeoTIFF",
+      "spatial_resolution": "3 arc seconds (approximately 100 m)",
+      "temporal_resolution": "2020 estimate; produced 2018-11-01",
+      "authentication": "None",
+      "licence": "CC BY 4.0",
+      "status": "approved",
+      "reviewed_at": "2026-10-01",
+      "notes": "Source and licence verified at https://hub.worldpop.org/geodata/summary?id=6439. This is the raster actually staged by the city pipeline; it is distinct from Global2 R2025A."
+    },
+    {
       "source_id": "worldpop-global2-tha-100m-r2025a",
       "agency": "WorldPop",
       "dataset": "Thailand population counts, Global2 R2025A",
