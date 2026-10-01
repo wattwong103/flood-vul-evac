@@ -50,7 +50,6 @@ import {
   formatNumber,
   formatShare,
   formatText,
-  prop,
   propBoolean,
   propNumber,
   propString,
@@ -60,6 +59,8 @@ import { geoJsonBounds } from "@/lib/map-bounds";
 import { layerFooterText } from "@/lib/map-copy";
 import { useViewportLayers } from "@/hooks/useViewportLayers";
 import { updateMapSources } from "@/lib/map-sources";
+import { isRefugeRecord } from "@/lib/map-refuges";
+import { MapPanel } from "@/components/MapPanel";
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -168,14 +169,7 @@ export const EMPTY_BUNDLE: MapBundle = {
 export function extractRefuges(
   buildings: FeatureCollection<BuildingProperties>,
 ): FeatureCollection<BuildingProperties> {
-  const features = buildings.features.filter((feature) => {
-    const properties = feature.properties ?? {};
-    return (
-      prop(properties, "refuge_id") !== null ||
-      prop(properties, "refuge_verified") !== null ||
-      prop(properties, "refuge_name") !== null
-    );
-  });
+  const features = buildings.features.filter((feature) => isRefugeRecord(feature.properties));
   return { type: "FeatureCollection", features };
 }
 
@@ -278,6 +272,7 @@ const SOURCES = [
   "flood",
   "links",
   "buildings",
+  "refuges",
   "routes",
   "observed-water",
 ] as const;
@@ -405,6 +400,7 @@ export function MapView({
       flood: bundle.flood as unknown as GeoJSON.FeatureCollection,
       links: bundle.links as unknown as GeoJSON.FeatureCollection,
       buildings: bundle.buildings as unknown as GeoJSON.FeatureCollection,
+      refuges: bundle.refuges as unknown as GeoJSON.FeatureCollection,
       routes: bundle.routes as unknown as GeoJSON.FeatureCollection,
       "observed-water": bundle.observedWater as unknown as GeoJSON.FeatureCollection,
     }),
@@ -628,7 +624,7 @@ export function MapView({
         instance.addLayer({
           id: "refuge-verified",
           type: "symbol",
-          source: "buildings",
+          source: "refuges",
           filter: VERIFIED as never,
           layout: {
             "icon-image": "refuge-verified-icon",
@@ -643,7 +639,7 @@ export function MapView({
         instance.addLayer({
           id: "refuge-unverified",
           type: "symbol",
-          source: "buildings",
+          source: "refuges",
           filter: NOT_VERIFIED as never,
           layout: {
             "icon-image": "refuge-unverified-icon",
@@ -748,6 +744,10 @@ export function MapView({
     bundle.routes.features.length +
     bundle.observedWater.features.length;
 
+  useEffect(() => {
+    if (mode === "map") map.current?.resize();
+  }, [mode]);
+
   return (
     <div className="map-shell">
       <div className="map-toolbar">
@@ -772,8 +772,7 @@ export function MapView({
         </p>
       </div>
 
-      {mode === "map" ? (
-        <div className="map-body">
+        <MapPanel visible={mode === "map"}>
           <div
             ref={container}
             className="map-canvas"
@@ -794,10 +793,10 @@ export function MapView({
             </p>
           ) : null}
           <MapLegend layers={layers} />
-        </div>
-      ) : (
+        </MapPanel>
+      {mode === "table" ? (
         <MapTables bundle={bundle} layers={layers} modelTime={modelTime} />
-      )}
+      ) : null}
 
       {viewportNote ? <p className="layer-legend-note" role="status">{viewportNote}</p> : null}
       <LayerFooterNote modelTime={modelTime} />

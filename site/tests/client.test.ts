@@ -10,6 +10,30 @@ import {
 import { stringPropertyExpression } from "../src/lib/map-expressions.ts";
 import { geoJsonBounds } from "../src/lib/map-bounds.ts";
 import { updateMapSources } from "../src/lib/map-sources.ts";
+import { isRefugeRecord } from "../src/lib/map-refuges.ts";
+
+test("ordinary buildings are not refuge candidates merely because verification is false", () => {
+  assert.equal(isRefugeRecord({ refuge_verified: false, refuge_status: "not_a_refuge" }), false);
+  assert.equal(isRefugeRecord({ refuge_verified: false, height_m: 30 }), false);
+  assert.equal(isRefugeRecord({ refuge_verified: false, refuge_status: "osm_tagged_candidate_unverified" }), true);
+  assert.equal(isRefugeRecord({ refuge_verified: true }), true);
+  assert.equal(isRefugeRecord({ refuge_id: "candidate-1", refuge_verified: false }), true);
+});
+
+test("table mode retains the map container for a working return to map mode", async () => {
+  const { createServer } = await import("vite");
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { MapPanel } = await server.ssrLoadModule("/src/components/MapPanel.tsx");
+    for (const visible of [true, false, true]) {
+      const html = renderToStaticMarkup(createElement(MapPanel, { visible }, createElement("canvas")));
+      assert.match(html, /<canvas/);
+      assert.equal(html.includes("display:none"), !visible);
+    }
+  } finally { await server.close(); }
+});
 
 test("asRunList unwraps the API run-list envelope", () => {
   const runs = asRunList({
