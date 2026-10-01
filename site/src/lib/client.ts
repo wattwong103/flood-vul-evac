@@ -345,6 +345,35 @@ export const fetchDestinations = (
 export const fetchNetwork = (runId: string, limit: number | null = null, signal?: AbortSignal) =>
   apiGet<NetworkResult>(networkPath(runId, limit), signal);
 
+export type ViewportLayer = "network" | "buildings";
+export type ViewportBounds = [number, number, number, number];
+export type ViewportResult = FeatureCollection<Record<string, unknown>> & {
+  available: boolean; run_id: string; layer: ViewportLayer;
+  matched_rows: number; next_cursor: number | null; truncated: boolean; note: string;
+};
+
+export async function loadViewportLayer(
+  runId: string, layer: ViewportLayer, bounds: ViewportBounds,
+  signal?: AbortSignal, budget = 10_000,
+): Promise<ViewportResult> {
+  const features: Feature<Record<string, unknown>>[] = [];
+  let after = 0;
+  for (;;) {
+    const query = new URLSearchParams({ bbox: bounds.join(","), after: String(after),
+      limit: String(Math.min(1000, budget - features.length)) });
+    const page = await apiGet<ViewportResult>(
+      `/v1/runs/${encodeURIComponent(runId)}/map/${layer}?${query}`, signal);
+    if (page.run_id !== runId || page.layer !== layer) throw new Error("Map page has a different run or layer.");
+    if (!page.available) return { ...page, features: [], note: `${layer}: detailed map unavailable for this run.` };
+    features.push(...page.features);
+    const more = page.next_cursor !== null;
+    if (!more || features.length >= budget) return { ...page, features, truncated: more,
+      note: `${layer}: ${features.length.toLocaleString()} of ${page.matched_rows.toLocaleString()} viewport features. ${more ? "Zoom in to see all details." : "All viewport features loaded."}` };
+    if (!page.features.length || page.next_cursor! <= after) throw new Error("Map page cursor did not advance.");
+    after = page.next_cursor!;
+  }
+}
+
 export const fetchConnectivity = (
   runId: string,
   year: number | null = null,
