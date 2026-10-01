@@ -9,6 +9,7 @@ import {
 } from "../src/lib/map-copy.ts";
 import { stringPropertyExpression } from "../src/lib/map-expressions.ts";
 import { geoJsonBounds } from "../src/lib/map-bounds.ts";
+import { updateMapSources } from "../src/lib/map-sources.ts";
 
 test("asRunList unwraps the API run-list envelope", () => {
   const runs = asRunList({
@@ -67,6 +68,20 @@ test("validation stamp renders valid paragraph content", async () => {
     // HTML parsing closes a paragraph before a div, separating the stamp's content.
     assert.doesNotMatch(html, /^<p\b[^>]*>[\s\S]*<(?:div|section|p)\b/);
   } finally { await server.close(); }
+});
+
+test("unrelated renders never re-upload unchanged map geometry", () => {
+  const calls: string[] = [];
+  const map = { getSource: (id: string) => ({ setData: () => { calls.push(id); } }) };
+  const roads = { type: "FeatureCollection", features: [{ properties: { edge_id: "a" } }] };
+  const buildings = { type: "FeatureCollection", features: [] };
+  const previous = new Map<string, unknown>();
+  updateMapSources(map, { roads, buildings }, previous);
+  assert.deepEqual(calls, ["roads", "buildings"]);
+  updateMapSources(map, { roads: { ...roads }, buildings: { ...buildings } }, previous);
+  assert.equal(calls.length, 2);
+  updateMapSources(map, { roads: { ...roads, features: [] }, buildings }, previous);
+  assert.deepEqual(calls, ["roads", "buildings", "roads"]);
 });
 
 test("stringPropertyExpression has no duplicate match branches", () => {

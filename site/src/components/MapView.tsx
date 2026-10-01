@@ -59,6 +59,7 @@ import { stringPropertyExpression } from "@/lib/map-expressions";
 import { geoJsonBounds } from "@/lib/map-bounds";
 import { layerFooterText } from "@/lib/map-copy";
 import { useViewportLayers } from "@/hooks/useViewportLayers";
+import { updateMapSources } from "@/lib/map-sources";
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -389,6 +390,7 @@ export function MapView({
 }: MapViewProps) {
   const container = useRef<HTMLDivElement | null>(null);
   const map = useRef<MapLibreMap | null>(null);
+  const uploadedFeatures = useRef(new Map<string, unknown>());
   const hasFittedStudyArea = useRef(false);
   const [ready, setReady] = useState(false);
   const [mode, setMode] = useState<"map" | "table">("map");
@@ -684,10 +686,8 @@ export function MapView({
   // Push new data into the existing sources.
   useEffect(() => {
     if (!ready || !map.current) return;
-    for (const id of SOURCES) {
-      const source = map.current.getSource(id) as GeoJSONSource | undefined;
-      source?.setData(dataFor[id] as GeoJSON.FeatureCollection);
-    }
+    const instance = map.current;
+    updateMapSources({ getSource: id => instance.getSource(id) as GeoJSONSource | undefined }, dataFor, uploadedFeatures.current);
   }, [ready, dataFor]);
 
   // Fit the initial view to all of Bangkok once the city boundary arrives.
