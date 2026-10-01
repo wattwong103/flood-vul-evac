@@ -108,6 +108,8 @@ class ScreeningResult:
             "snap_tolerance_m": SNAP_TOLERANCE_M,
             "routing_cutoff_minutes": 180,
             "closure_selection": "seeded permutation of sorted wet-edge IDs, nested prefixes",
+            "exposure_method": "positive area overlap of 1 km population and water-containing cells",
+            "travel_percentiles_weighting": "unweighted reachable exposed cells",
             "elapsed_seconds": round(self.elapsed_seconds, 1),
             "warnings": self.warnings,
         }
@@ -280,6 +282,26 @@ def select_designated_destinations(
     return frame
 
 
+def exposed_cells(grid: pd.DataFrame, water: gpd.GeoDataFrame) -> np.ndarray:
+    """Cell-footprint co-location, counting each population cell at most once.
+
+    Grids may have different origins. This is a coarse exposure proxy, not the
+    number of residents within the 30 m water pixels of an intersecting cell.
+    """
+    import shapely
+    exposed = np.zeros(len(grid), dtype=bool)
+    if water.empty or grid.empty:
+        return exposed
+    def footprints(x, y):
+        return shapely.box(x - 500., y - 500., x + 500., y + 500.)
+    population_boxes = footprints(grid["x"].to_numpy(), grid["y"].to_numpy())
+    water_boxes = footprints(water.geometry.x.to_numpy(), water.geometry.y.to_numpy())
+    rows, columns = shapely.STRtree(water_boxes).query(population_boxes, predicate="intersects")
+    overlap = shapely.area(shapely.intersection(population_boxes[rows], water_boxes[columns]))
+    exposed[rows[overlap > 0]] = True
+    return exposed
+
+
 def closure_mask(wet_mask: np.ndarray, edge_ids: np.ndarray, fraction: float) -> np.ndarray:
     """Nested, reproducible closures, independent of source row order."""
     if not 0.0 <= fraction <= 1.0:
@@ -380,17 +402,7 @@ def run_connectivity_screening(
     else:
         matrix = np.vstack(fields)
 
-    # Exposed population: cells that hold observed water.
-    water_points = water.geometry.values
-    exposed = np.zeros(len(grid), dtype=bool)
-    if len(water_points) and "x" in grid.columns:
-        from scipy.spatial import cKDTree
-
-        tree_points = np.column_stack([np.asarray([p.x for p in water_points]), np.asarray([p.y for p in water_points])])
-        lookup = cKDTree(tree_points)
-        distance, _ = lookup.query(np.column_stack([grid["x"].to_numpy(), grid["y"].to_numpy()]))
-        # A 1 km cell is exposed if its centre is within half a cell diagonal.
-        exposed = distance <= 707.0
+    exposed = exposed_cells(grid, water)
 
     cell_points = np.column_stack([grid["x"].to_numpy(), grid["y"].to_numpy()])
     nodes = np.array(
