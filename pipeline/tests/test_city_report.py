@@ -60,8 +60,14 @@ def test_building_evidence_panel_includes_unknown_height():
     import city_report
     import pandas as pd
     import matplotlib.pyplot as plt
-    buildings = pd.DataFrame({"height_source": ["unknown", "osm_height", "osm_building_levels"],
-                              "centre_x": [0., 1., 2.], "centre_y": [0., 1., 2.]})
+    import geopandas as gpd
+    from shapely.geometry import box
+    from bkkflow.buildings import build_building_table
+    source = gpd.GeoDataFrame({"osm_id": [1, 2, 3], "building": ["yes"] * 3,
+        "height": [None, "10", None], "building:levels": [None, None, "3"]},
+        geometry=[box(100.5 + i*.001, 13.7, 100.5005 + i*.001, 13.7005) for i in range(3)], crs="EPSG:4326")
+    aoi = gpd.GeoDataFrame(geometry=[box(100.49, 13.69, 100.51, 13.71)], crs=source.crs)
+    buildings = build_building_table(source, aoi_frame=aoi, analysis_crs="EPSG:32647", building_version="test")
     figure, axis = plt.subplots()
     try:
         city_report._plot_building_evidence(axis, buildings)
