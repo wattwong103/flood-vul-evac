@@ -279,11 +279,13 @@ def _plot_observed_water(axis, aoi, stats) -> None:
         axis.text(0.5, 0.5, "observed layer unavailable", ha="center", transform=axis.transAxes)
         return
     wettest = max(years, key=lambda entry: entry["water_km2"])
-    path = Path("data/staged/gsw") / gsw.tile_name_for(wettest["year"], tuple(aoi.to_crs("OGC:CRS84").geometry.union_all().bounds))
+    bounds = tuple(aoi.to_crs("OGC:CRS84").geometry.union_all().bounds)
+    path = gsw.STAGED_DIR / "gsw" / gsw.tile_name_for(wettest["year"], bounds)
     if not path.is_file():
         axis.text(0.5, 0.5, f"tile for {wettest['year']} not staged", ha="center", transform=axis.transAxes)
         return
     geometry = aoi.to_crs("OGC:CRS84").geometry.union_all()
+    path, _ = gsw.staged_tile(wettest["year"], bounds)
     with rasterio.open(path) as dataset:
         data, transform = rio_mask(dataset, [geometry], crop=True, filled=True, nodata=gsw.CODE_NO_OBSERVATIONS)
     array = data[0]
