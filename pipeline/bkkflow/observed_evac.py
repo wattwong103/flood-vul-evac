@@ -46,11 +46,10 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from .city_network import CityRoutingIndex
+from .city_network import CityRoutingIndex, SNAP_TOLERANCE_M
 from .util import CURATED_DIR, ensure_dir, utc_now_iso, write_json
 
 DESIGNATED_DESTINATIONS = 150
-SNAP_TOLERANCE_M = 700.0
 CLEARANCE_THRESHOLDS_MIN = (15.0, 30.0, 60.0, 120.0)
 
 SEVERITY_TEXT = (
@@ -105,6 +104,10 @@ class ScreeningResult:
             "threshold_minutes_reached": self.thresholds,
             "designated_destinations": self.designated_destinations,
             "closure_fraction": self.closure_fraction,
+            "access_anchors": "baseline walking graph, fixed across closures",
+            "snap_tolerance_m": SNAP_TOLERANCE_M,
+            "routing_cutoff_minutes": 180,
+            "closure_selection": "seeded permutation of sorted wet-edge IDs, nested prefixes",
             "elapsed_seconds": round(self.elapsed_seconds, 1),
             "warnings": self.warnings,
         }
@@ -277,6 +280,18 @@ def select_designated_destinations(
     return frame
 
 
+def closure_mask(wet_mask: np.ndarray, edge_ids: np.ndarray, fraction: float) -> np.ndarray:
+    """Nested, reproducible closures, independent of source row order."""
+    if not 0.0 <= fraction <= 1.0:
+        raise ValueError("closure_fraction must be between 0 and 1")
+    wet = np.flatnonzero(wet_mask)
+    ordered = wet[np.argsort(np.asarray(edge_ids)[wet], kind="stable")]
+    priority = np.random.default_rng(20260930).permutation(ordered)
+    result = np.zeros_like(wet_mask, dtype=bool)
+    result[priority[:int(round(len(wet) * fraction))]] = True
+    return result
+
+
 def run_connectivity_screening(
     *,
     run_dir: Path,
@@ -328,17 +343,7 @@ def run_connectivity_screening(
         closed_mask = edges_in_water(edges, year)
     else:
         closed_mask = np.zeros(len(edges), dtype=bool)
-    if not 0.0 <= closure_fraction <= 1.0:
-        raise ValueError("closure_fraction must be between 0 and 1")
-    if 0.0 <= closure_fraction < 1.0:
-        wet = np.flatnonzero(closed_mask)
-        if wet.size:
-            keep = np.random.default_rng(20260930).choice(
-                wet, size=int(round(wet.size * closure_fraction)), replace=False
-            )
-            reduced = np.zeros_like(closed_mask)
-            reduced[keep] = True
-            closed_mask = reduced
+    closed_mask = closure_mask(closed_mask, edges["edge_id"].to_numpy(), closure_fraction)
     closed_edges = int(closed_mask.sum())
     total_edges = int(len(edges))
 
@@ -350,6 +355,7 @@ def run_connectivity_screening(
         edges,
         open_mask,
         edges["speed_walk_mps"].fillna(1.25).to_numpy(),
+        anchor_mask=edges["walk_allowed"].to_numpy(dtype=bool),
     )
 
     targets = (

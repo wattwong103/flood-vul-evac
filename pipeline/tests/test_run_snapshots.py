@@ -58,7 +58,7 @@ def test_water_cache_retains_original_retrieval_and_rejects_changed_bytes(tmp_pa
 def test_screening_keeps_node_zero_and_honours_zero_closure(tmp_path, monkeypatch):
     from shapely.geometry import LineString, Point
     edges = gpd.GeoDataFrame({"geometry_wkt": ["LINESTRING (0 0, 10 0)"],
-        "walk_allowed": [True], "speed_walk_mps": [1.25]},
+        "walk_allowed": [True], "speed_walk_mps": [1.25], "edge_id": ["test"]},
         geometry=[LineString([(0, 0), (10, 0)])], crs="EPSG:32647")
     pd.DataFrame({"x": [0.], "y": [0.], "pop": [10.]}).to_parquet(tmp_path / "population_grid_1km.parquet")
     points = gpd.GeoDataFrame(geometry=[Point(0, 0)], crs="EPSG:32647")
@@ -66,7 +66,7 @@ def test_screening_keeps_node_zero_and_honours_zero_closure(tmp_path, monkeypatc
     monkeypatch.setattr(observed_evac, "_water_cell_geometries", lambda *a: points)
     monkeypatch.setattr(observed_evac, "edges_in_water", lambda *a: __import__('numpy').array([True]))
     class Index:
-        def __init__(self, edges, opened, speeds):
+        def __init__(self, edges, opened, speeds, **kwargs):
             self.coords = __import__('numpy').array([[0., 0.]])
             self.node_count = 1
         def nearest_node(self, *args): return 0

@@ -38,6 +38,7 @@ VEHICLE_SPEED_KMH = {
     "living_street": 15, "service": 15, "road": 20,
 }
 WALK_SPEED_MPS = 4.5 / 3.6
+SNAP_TOLERANCE_M = 400.0
 
 PEDESTRIAN_ALLOWED = {
     "motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link",
@@ -280,13 +281,17 @@ class CityRoutingIndex:
     to *every* origin in one pass instead of one pass per person.
     """
 
-    def __init__(self, edges: gpd.GeoDataFrame, allowed_mask: np.ndarray, speed_mps: np.ndarray) -> None:
+    def __init__(self, edges: gpd.GeoDataFrame, allowed_mask: np.ndarray, speed_mps: np.ndarray,
+                 *, anchor_mask: np.ndarray | None = None) -> None:
         subset = edges[allowed_mask]
+        anchors = edges[allowed_mask if anchor_mask is None else anchor_mask]
         self.speed_mps = np.asarray(speed_mps[allowed_mask], dtype="float64")
         self.length_m = np.asarray(subset["length_m"].to_numpy(), dtype="float64")
         self.edge_ids = subset["edge_id"].to_numpy()
 
-        nodes = np.unique(np.concatenate([subset["u"].to_numpy(), subset["v"].to_numpy()]))
+        nodes = np.unique(np.concatenate([anchors["u"].to_numpy(), anchors["v"].to_numpy()]))
+        if not np.isin(subset[["u", "v"]].to_numpy(), nodes).all():
+            raise ValueError("every open edge must belong to the anchor graph")
         self.node_ids = nodes
         index = np.searchsorted(nodes, np.concatenate([subset["u"].to_numpy(), subset["v"].to_numpy()]))
         half = len(subset)
@@ -315,13 +320,12 @@ class CityRoutingIndex:
         # coordinate range, which overflows int64 for full UTM. Deriving the
         # coordinates directly is exact and costs nothing.
         coordinates = np.zeros((len(nodes), 2), dtype="float64")
-        starts = np.asarray(
-            [shapely.get_coordinates(geometry) for geometry in np.asarray(subset.geometry.values, dtype=object)],
-            dtype=object,
-        )
-        for edge_position, coordinates_pair in enumerate(starts):
-            coordinates[source[edge_position]] = coordinates_pair[0]
-            coordinates[target[edge_position]] = coordinates_pair[-1]
+        anchor_u = np.searchsorted(nodes, anchors["u"].to_numpy())
+        anchor_v = np.searchsorted(nodes, anchors["v"].to_numpy())
+        for u, v, geometry in zip(anchor_u, anchor_v, anchors.geometry):
+            coordinates_pair = shapely.get_coordinates(geometry)
+            coordinates[u] = coordinates_pair[0]
+            coordinates[v] = coordinates_pair[-1]
         self.coords = coordinates
         # Endpoints in index space, so a traced path can be walked back.
         self.edge_source = source
@@ -336,9 +340,11 @@ class CityRoutingIndex:
         return len(self.edge_ids)
 
     def nearest_node(self, x: float, y: float, coords: np.ndarray) -> int | None:
+        if not len(coords):
+            return None
         distances = np.hypot(coords[:, 0] - x, coords[:, 1] - y)
         index = int(np.argmin(distances))
-        if distances[index] > 400.0:
+        if distances[index] > SNAP_TOLERANCE_M:
             return None
         return index
 
@@ -365,6 +371,8 @@ class CityRoutingIndex:
             for position in range(indptr[node], indptr[node + 1]):
                 neighbour = indices[position]
                 step = cost + edge_costs[position]
+                if cutoff is not None and step > cutoff:
+                    continue
                 if step < costs[neighbour]:
                     costs[neighbour] = step
                     prev_edge[neighbour] = self.edge_ref[position]
