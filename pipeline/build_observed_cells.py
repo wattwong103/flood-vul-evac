@@ -3,7 +3,8 @@
 The observed extent is the only measured hazard layer in the project, so it
 should be visible on the map rather than only as a table of numbers. Rendering
 it at the source 30 m would mean serving hundreds of thousands of points, so it
-is aggregated to the same fixed 1 km public grid the population uses.
+is aggregated to a fixed 1 km projected grid. The population grid can have a
+different origin; screening compares the full cell footprints.
 
 This reads tiles that are already staged, so it does not require re-running the
 city pipeline.
