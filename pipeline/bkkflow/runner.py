@@ -34,8 +34,8 @@ from . import mobility as mobility_module
 from . import network as network_module
 from . import population as population_module
 from . import validate as validate_module
-from .sources import population_source
 from .code_identity import capture_code_identity, verify_code_identity
+from .pilot_config import load_pilot_bundle
 from .sources.registry import load_registry
 from .util import (
     CURATED_DIR,
@@ -62,6 +62,9 @@ class RunContext:
     pilot: dict[str, Any]
     population_config: dict[str, Any]
     scenario_config: dict[str, Any]
+    input_root: Path
+    versions: dict[str, str]
+    sources: dict[str, str]
     stages: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     source_versions: list[dict[str, Any]] = field(default_factory=list)
@@ -120,16 +123,20 @@ def execute_run(
     run_id: str | None = None,
     flood_enabled: bool = True,
     max_agents: int | None = None,
+    pilot_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline once and return the published run summary."""
+    bundle = load_pilot_bundle(
+        pilot_id, config_dir=CONFIG_DIR, curated_dir=CURATED_DIR
+    )
     run_id = run_id or str(uuid.uuid4())
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     code_identity = capture_code_identity()
 
-    pilot = load_config("pilot.json")
-    population_config = load_config("population.json")
-    scenario_config = load_config("scenario.json")
+    pilot = bundle.pilot
+    population_config = bundle.population
+    scenario_config = bundle.scenario
 
     context = RunContext(
         run_id=run_id,
@@ -137,6 +144,9 @@ def execute_run(
         pilot=pilot,
         population_config=population_config,
         scenario_config=scenario_config,
+        input_root=bundle.input_root,
+        versions=bundle.versions,
+        sources=bundle.sources,
     )
     context.write_state("validating_inputs")
 
@@ -145,10 +155,7 @@ def execute_run(
     registry = load_registry()
 
     # ---- licence gate ----------------------------------------------------
-    required_sources = [
-        "worldpop-global2-tha-100m-r2025a",
-        "osm-thailand-geofabrik",
-    ]
+    required_sources = [bundle.sources["population"], bundle.sources["osm"]]
     registry.require_approved(required_sources)
     stage_start = time.time()
     context.record("sources", time.time() - stage_start, rows=len(registry), note="licence gate passed")
@@ -156,9 +163,27 @@ def execute_run(
     # ---- AOI -------------------------------------------------------------
     aoi_frame = aoi_module.load_aoi(aoi_id)
     aoi_provenance = read_json(CURATED_DIR / "aoi" / f"{aoi_id}.provenance.json")
+    osm_provenance = read_json(bundle.input_root / "osm" / "provenance.json")
+    if bundle.named:
+        expected = {
+            "AOI aoi_id": (aoi_provenance.get("aoi_id"), aoi_id),
+            "AOI relation": (
+                aoi_provenance.get("osm_id"), pilot["aoi"]["osm_relation_id"]
+            ),
+            "AOI source": (aoi_provenance.get("source_id"), bundle.sources["osm"]),
+            "OSM aoi_id": (osm_provenance.get("aoi_id"), aoi_id),
+            "OSM source": (osm_provenance.get("source_id"), bundle.sources["osm"]),
+        }
+        mismatches = [
+            f"{label}: {actual!r} != {wanted!r}"
+            for label, (actual, wanted) in expected.items()
+            if actual != wanted
+        ]
+        if mismatches:
+            raise ValueError("Named pilot input identity mismatch: " + "; ".join(mismatches))
     context.source_versions.append(
         {
-            "source_id": "osm-thailand-geofabrik",
+            "source_id": bundle.sources["osm"],
             "retrieved_at": aoi_provenance["retrieved_at"],
             "content_sha256": aoi_provenance["content_sha256"],
             "licence_snapshot": "ODbL 1.0 (c) OpenStreetMap contributors",
@@ -168,8 +193,37 @@ def execute_run(
 
     # ---- P0/P1 population ------------------------------------------------
     stage_start = time.time()
-    clip_path = CURATED_DIR / "population" / "population_cells.parquet"
+    clip_path = bundle.input_root / "population" / "population_cells.parquet"
     cells = gpd.read_parquet(clip_path)
+    if bundle.named:
+        cell_versions = {str(value) for value in cells["population_version"].dropna().unique()}
+        if cell_versions != {bundle.versions["population"]}:
+            raise ValueError(
+                "Named pilot population version mismatch: "
+                f"{sorted(cell_versions)!r} != {[bundle.versions['population']]!r}"
+            )
+        population_provenance = read_json(bundle.input_root / "population" / "provenance.json")
+        expected_population = {
+            "aoi_id": aoi_id,
+            "source_id": bundle.sources["population"],
+            "population_version": bundle.versions["population"],
+        }
+        if any(population_provenance.get(key) != value
+               for key, value in expected_population.items()):
+            raise ValueError("Named pilot population provenance mismatch")
+        context.source_versions.append(
+            {
+                "source_id": bundle.sources["population"],
+                "retrieved_at": population_provenance["retrieved_at"],
+                "content_sha256": population_provenance["content_sha256"],
+                "licence_snapshot": "CC BY 4.0",
+                "request_parameters": {
+                    "role": "resident_population",
+                    "aoi_id": aoi_id,
+                    "resource_url": population_provenance["resource_url"],
+                },
+            }
+        )
     total_residents = float(cells["pop_count"].sum())
     context.record("population_cells", time.time() - stage_start, rows=len(cells))
 
@@ -224,9 +278,8 @@ def execute_run(
 
     # ---- network ---------------------------------------------------------
     stage_start = time.time()
-    roads = gpd.read_parquet(CURATED_DIR / "osm" / "roads.parquet")
-    osm_provenance = read_json(CURATED_DIR / "osm" / "provenance.json")
-    network_version = f"osm-khlong-san-{osm_provenance['fetches'][0]['retrieved_at'][:10]}"
+    roads = gpd.read_parquet(bundle.input_root / "osm" / "roads.parquet")
+    network_version = f"{bundle.versions['network']}-{osm_provenance['fetches'][0]['retrieved_at'][:10]}"
     build = network_module.build_network(
         roads, analysis_crs=analysis_crs, network_version=network_version, aoi_geometry=aoi_frame
     )
@@ -238,7 +291,7 @@ def execute_run(
     for fetch in osm_provenance["fetches"]:
         context.source_versions.append(
             {
-                "source_id": "osm-thailand-geofabrik",
+                "source_id": bundle.sources["osm"],
                 "retrieved_at": fetch["retrieved_at"],
                 "content_sha256": fetch["content_sha256"],
                 "licence_snapshot": "ODbL 1.0 (c) OpenStreetMap contributors",
@@ -249,12 +302,12 @@ def execute_run(
 
     # ---- buildings -------------------------------------------------------
     stage_start = time.time()
-    raw_buildings = gpd.read_parquet(CURATED_DIR / "osm" / "buildings.parquet")
+    raw_buildings = gpd.read_parquet(bundle.input_root / "osm" / "buildings.parquet")
     building_table = buildings_module.build_building_table(
         raw_buildings,
         aoi_frame=aoi_frame,
         analysis_crs=analysis_crs,
-        building_version=f"osm-buildings-{osm_provenance['fetches'][1]['retrieved_at'][:10]}",
+        building_version=f"{bundle.versions['buildings']}-{osm_provenance['fetches'][1]['retrieved_at'][:10]}",
     )
     coverage = buildings_module.height_coverage(building_table)
     if coverage.get("coverage_share", 0) < 0.5:
@@ -389,7 +442,7 @@ def _finish_run(
 
     # ---- F1/F2 flood -----------------------------------------------------
     stage_start = time.time()
-    water = gpd.read_parquet(CURATED_DIR / "osm" / "water.parquet")
+    water = gpd.read_parquet(context.input_root / "osm" / "water.parquet")
     flood_config = scenario_config["flood"]
     scenario = flood_module.FloodScenario(
         scenario_id=flood_config["scenario_id"],
@@ -621,8 +674,8 @@ def _finish_run(
             },
             "seed": seed,
             "control_source_ids": [
-                "worldpop-global2-tha-100m-r2025a",
-                "osm-thailand-geofabrik",
+                context.sources["population"],
+                context.sources["osm"],
             ],
             "time_profile": {
                 "status": "illustrative",
@@ -795,7 +848,7 @@ def _build_stats(
         "sources": [
             {
                 "source_id": entry["source_id"],
-                "licence": "ODbL 1.0" if entry["source_id"].startswith("osm") else "CC BY 4.0",
+                "licence": entry["licence_snapshot"].split(" (c)", 1)[0],
                 "status": "approved",
             }
             for entry in manifest["source_versions"]

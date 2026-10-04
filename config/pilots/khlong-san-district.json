@@ -1,0 +1,22 @@
+{
+  "input_scope": "khlong-san-district",
+  "analysis_crs": "EPSG:32647",
+  "aoi": {
+    "aoi_id": "khlong-san-district",
+    "name": "เขตคลองสาน",
+    "name_en": "Khlong San",
+    "admin_level": "6",
+    "osm_relation_id": 3147280,
+    "area_km2": 5.9607
+  },
+  "versions": {
+    "population": "bkk-pop-v0.2-khlong-san-district-2020",
+    "network": "osm-khlong-san-district",
+    "buildings": "osm-buildings-khlong-san-district"
+  },
+  "sources": {
+    "osm": "geofabrik-thailand-osm-20260929",
+    "population": "worldpop-global-2000-2020-tha-100m"
+  },
+  "flood_scenario_id": "bangkok-moderate-distance-to-water"
+}
