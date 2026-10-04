@@ -36,6 +36,7 @@ from . import population as population_module
 from . import validate as validate_module
 from .code_identity import capture_code_identity, verify_code_identity
 from .pilot_config import load_pilot_bundle
+from .sources import pilot_stage
 from .sources.registry import load_registry
 from .util import (
     CURATED_DIR,
@@ -65,6 +66,7 @@ class RunContext:
     input_root: Path
     versions: dict[str, str]
     sources: dict[str, str]
+    named_pilot: bool
     stages: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     source_versions: list[dict[str, Any]] = field(default_factory=list)
@@ -129,6 +131,10 @@ def execute_run(
     bundle = load_pilot_bundle(
         pilot_id, config_dir=CONFIG_DIR, curated_dir=CURATED_DIR
     )
+    if bundle.named:
+        pilot_stage.validate_staged_pilot(
+            bundle.input_root, expected_bundle=bundle
+        )
     run_id = run_id or str(uuid.uuid4())
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -147,6 +153,7 @@ def execute_run(
         input_root=bundle.input_root,
         versions=bundle.versions,
         sources=bundle.sources,
+        named_pilot=bundle.named,
     )
     context.write_state("validating_inputs")
 
@@ -161,8 +168,12 @@ def execute_run(
     context.record("sources", time.time() - stage_start, rows=len(registry), note="licence gate passed")
 
     # ---- AOI -------------------------------------------------------------
-    aoi_frame = aoi_module.load_aoi(aoi_id)
-    aoi_provenance = read_json(CURATED_DIR / "aoi" / f"{aoi_id}.provenance.json")
+    if bundle.named:
+        aoi_frame = gpd.read_parquet(bundle.input_root / "aoi.parquet")
+        aoi_provenance = read_json(bundle.input_root / "aoi.provenance.json")
+    else:
+        aoi_frame = aoi_module.load_aoi(aoi_id)
+        aoi_provenance = read_json(CURATED_DIR / "aoi" / f"{aoi_id}.provenance.json")
     osm_provenance = read_json(bundle.input_root / "osm" / "provenance.json")
     if bundle.named:
         expected = {
@@ -651,6 +662,15 @@ def _finish_run(
 
     # ---- U1 publish ------------------------------------------------------
     stage_start = time.time()
+    if context.named_pilot:
+        pilot_stage.validate_staged_pilot(
+            context.input_root,
+            expected_bundle=load_pilot_bundle(
+                context.pilot["aoi"]["aoi_id"],
+                config_dir=CONFIG_DIR,
+                curated_dir=CURATED_DIR,
+            ),
+        )
     manifest = manifest_module.build_manifest(
         code_identity=verify_code_identity(code_identity, context.run_dir),
         run_id=context.run_id,

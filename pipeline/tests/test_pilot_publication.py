@@ -1,25 +1,49 @@
 """Exercise the complete pilot path through its separate publication helper."""
+import shutil
 import sys
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pytest
+import rasterio
+from rasterio.transform import from_origin
 from shapely.geometry import LineString, box
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bkkflow import runner
+from bkkflow.sources import pilot_stage
 from bkkflow.util import read_json, write_json
 from test_pipeline import _roads
 
 
 @pytest.fixture
 def pilot_inputs(tmp_path, monkeypatch):
+    source_config = Path(__file__).resolve().parents[2] / "config"
+    config = tmp_path / "config"
+    (config / "pilots").mkdir(parents=True)
+    shutil.copyfile(source_config / "population.json", config / "population.json")
+    shutil.copyfile(source_config / "scenario.json", config / "scenario.json")
     curated = tmp_path / "curated"
     scoped = curated / "pilots" / "khlong-san-district"
     for directory in ("population", "osm"):
         (scoped / directory).mkdir(parents=True)
     (curated / "aoi").mkdir(parents=True)
-    area = gpd.GeoDataFrame(geometry=[box(100.4995, 13.7195, 100.5025, 13.7215)], crs=4326)
+    area = gpd.GeoDataFrame(
+        {"osm_id": [3147280]},
+        geometry=[box(100.4995, 13.7195, 100.5025, 13.7215)],
+        crs=4326,
+    )
+    geometry_hash = pilot_stage.geometry_sha256(area.geometry.iloc[0])
+    pilot = read_json(source_config / "pilots/khlong-san-district.json")
+    pilot["aoi"]["area_km2"] = round(
+        float(area.to_crs(pilot["analysis_crs"]).geometry.area.iloc[0]) / 1e6, 4
+    )
+    pilot["source_sha256"] = {
+        "osm": "1" * 64, "population": "1" * 64, "geometry": geometry_hash,
+    }
+    write_json(config / "pilots/khlong-san-district.json", pilot)
+    area.to_parquet(scoped / "aoi.parquet", index=False)
     cells = gpd.GeoDataFrame({
         "cell_id": ["one", "two"], "population_version": ["test"] * 2,
         "pop_count": [100.0, 200.0], "area_m2": [10000.0] * 2,
@@ -44,6 +68,9 @@ def pilot_inputs(tmp_path, monkeypatch):
     write_json(scoped / "osm/provenance.json", {
         "aoi_id": "khlong-san-district",
         "source_id": "geofabrik-thailand-osm-20260929",
+        "retrieved_at": fetch["retrieved_at"],
+        "content_sha256": fetch["content_sha256"],
+        "layers": {"roads": {}, "buildings": {}, "water": {}},
         "fetches": [fetch] * 3,
     })
     write_json(scoped / "population/provenance.json", {
@@ -53,13 +80,61 @@ def pilot_inputs(tmp_path, monkeypatch):
         "population_version": "bkk-pop-v0.2-khlong-san-district-2020",
         "resource_url": "https://data.worldpop.org/example.tif",
     })
-    write_json(curated / "aoi/khlong-san-district.provenance.json", {
+    write_json(scoped / "aoi.provenance.json", {
         **fetch, "aoi_id": "khlong-san-district", "osm_id": 3147280,
-        "source_id": "geofabrik-thailand-osm-20260929",
+        "source_id": "geofabrik-thailand-osm-20260929", "geometry_sha256": geometry_hash,
     })
+    clip = scoped / "population/source_clip.tif"
+    with rasterio.open(clip, "w", driver="GTiff", width=1, height=1, count=1,
+                       dtype="float32", crs="EPSG:4326",
+                       transform=from_origin(100.5, 13.72, .001, .001)) as dst:
+        dst.write(np.array([[1]], dtype="float32"), 1)
+    outputs = {
+        "aoi": pilot_stage._output(scoped, scoped / "aoi.parquet", rows=1,
+                                   crs=area.crs.to_string(), kind="geoparquet"),
+        "aoi_provenance": pilot_stage._output(scoped, scoped / "aoi.provenance.json",
+                                              rows=None, crs=None, kind="json"),
+        "roads": pilot_stage._output(scoped, scoped / "osm/roads.parquet", rows=4,
+                                     crs="OGC:CRS84", kind="geoparquet"),
+        "buildings": pilot_stage._output(scoped, scoped / "osm/buildings.parquet", rows=3,
+                                         crs="EPSG:4326", kind="geoparquet"),
+        "water": pilot_stage._output(scoped, scoped / "osm/water.parquet", rows=1,
+                                     crs="EPSG:4326", kind="geoparquet"),
+        "osm_provenance": pilot_stage._output(scoped, scoped / "osm/provenance.json",
+                                              rows=None, crs=None, kind="json"),
+        "population_clip": pilot_stage._output(scoped, clip, rows=None, crs=None, kind="raster"),
+        "population_cells": pilot_stage._output(
+            scoped, scoped / "population/population_cells.parquet", rows=2,
+            crs="EPSG:4326", kind="geoparquet"),
+        "population_provenance": pilot_stage._output(
+            scoped, scoped / "population/provenance.json", rows=None, crs=None, kind="json"),
+    }
+    write_json(scoped / "stage_manifest.json", {
+        "state": "complete", "aoi_id": "khlong-san-district",
+        "sources": {"osm": "geofabrik-thailand-osm-20260929",
+                    "population": "worldpop-global-2000-2020-tha-100m"},
+        "source_sha256": pilot["source_sha256"],
+        "analysis_crs": "EPSG:32647",
+        "inputs": {
+            "osm": {"source_id": "geofabrik-thailand-osm-20260929",
+                    "content_sha256": "1" * 64, "retrieved_at": fetch["retrieved_at"],
+                    "resource_url": "https://example.test/osm",
+                    "coverage_sha256": "4" * 64,
+                    "cached_layer_sha256": {"roads": "5" * 64,
+                                             "buildings": "6" * 64,
+                                             "water_lines": "7" * 64}},
+            "population": {"source_id": "worldpop-global-2000-2020-tha-100m",
+                           "content_sha256": "1" * 64, "retrieved_at": fetch["retrieved_at"],
+                           "resource_url": "https://data.worldpop.org/example.tif"},
+        },
+        "geometry": {"osm_relation_id": 3147280, "content_sha256": geometry_hash,
+                     "source_crs": "EPSG:4326", "analysis_crs": "EPSG:32647",
+                     "area_km2": pilot["aoi"]["area_km2"]},
+        "outputs": outputs,
+    })
+    monkeypatch.setattr(runner, "CONFIG_DIR", config)
     monkeypatch.setattr(runner, "CURATED_DIR", curated)
     monkeypatch.setattr(runner, "RUNS_DIR", tmp_path / "runs")
-    monkeypatch.setattr(runner.aoi_module, "load_aoi", lambda _: area)
     return tmp_path / "runs"
 
 
@@ -91,8 +166,16 @@ def test_named_pilot_rejects_mismatched_scoped_provenance(pilot_inputs):
     payload["aoi_id"] = "sai-mai-district"
     write_json(provenance, payload)
 
-    with pytest.raises(ValueError, match="input identity mismatch"):
+    with pytest.raises(ValueError, match="staged provenance AOI mismatch"):
         runner.execute_run(pilot_id="khlong-san-district", max_agents=10)
+
+
+def test_named_pilot_rejects_tampered_stage_before_run(pilot_inputs):
+    roads = pilot_inputs.parent / "curated/pilots/khlong-san-district/osm/roads.parquet"
+    roads.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="Staged output changed"):
+        runner.execute_run(pilot_id="khlong-san-district", max_agents=10)
+    assert not pilot_inputs.exists()
 
 
 @pytest.mark.parametrize("check_number", [1, 2])

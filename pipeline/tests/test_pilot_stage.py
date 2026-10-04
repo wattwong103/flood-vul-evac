@@ -129,3 +129,44 @@ def test_stage_writes_complete_scoped_outputs_and_reopens_them(stage_inputs):
     osm_provenance = json.loads((root / "osm/provenance.json").read_text(encoding="utf-8"))
     assert osm_provenance["layers"]["buildings"]["geometry_diagnostics"]["predicate_repairs"] == 1
     assert _stage(stage_inputs)["reused"] is True
+
+
+def test_stage_and_runner_validation_reject_changed_output(stage_inputs):
+    _stage(stage_inputs)
+    root = stage_inputs["curated"] / "pilots/test-district"
+    roads = root / "osm/roads.parquet"
+    roads.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="Staged output changed"):
+        pilot_stage.validate_staged_pilot(root)
+    with pytest.raises(ValueError, match="Staged output changed"):
+        _stage(stage_inputs)
+    assert roads.read_bytes() == b"tampered"
+
+
+def test_existing_stage_must_match_current_pilot_config(stage_inputs):
+    _stage(stage_inputs)
+    config_path = stage_inputs["config"] / "pilots/test-district.json"
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["source_sha256"]["population"] = "f" * 64
+    write_json(config_path, payload)
+    with pytest.raises(ValueError, match="source hash mismatch"):
+        _stage(stage_inputs)
+
+
+def test_incomplete_provenance_has_clear_error(stage_inputs):
+    _stage(stage_inputs)
+    root = stage_inputs["curated"] / "pilots/test-district"
+    provenance = root / "population/provenance.json"
+    payload = json.loads(provenance.read_text(encoding="utf-8"))
+    payload.pop("resource_url")
+    write_json(provenance, payload)
+    with pytest.raises(ValueError, match="Incomplete staged provenance"):
+        pilot_stage.validate_staged_pilot(root)
+
+
+def test_boundary_relation_must_match_configuration(stage_inputs, monkeypatch):
+    wrong = stage_inputs["aoi"].copy()
+    wrong["osm_id"] = "1000"
+    monkeypatch.setattr(pyogrio, "read_dataframe", lambda *args, **kwargs: wrong)
+    with pytest.raises(ValueError, match="exactly one boundary"):
+        _stage(stage_inputs)
