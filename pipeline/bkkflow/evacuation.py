@@ -24,6 +24,8 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
+from .clearance import weighted_clearance_minutes
+
 # Terminal states. A person in the cohort must end in exactly one of these.
 TERMINAL_STATES = (
     "arrived",
@@ -194,7 +196,6 @@ def simulate_evacuation(
     """Run the auditable state machine and return per-agent outcomes."""
     rng = np.random.default_rng(seed)
     records: list[dict[str, Any]] = []
-    clearance: list[float] = []
     bottleneck: dict[str, float] = {}
     capacity_remaining = {dest.dest_id: int(dest.capacity) for dest in destinations.itertuples()}
 
@@ -351,10 +352,10 @@ def simulate_evacuation(
                     "person_id": person.person_id,
                     "state": "arrived",
                     "reason": "admitted",
-                    "event_time_s": int(arrival),
+                    "event_time_s": float(arrival),
                     "weight": float(admitted),
                     "dest_id": str(destination["dest_id"]),
-                    "clearance_s": round(arrival - scenario.warning_time_s, 1),
+                    "clearance_s": float(arrival - scenario.warning_time_s),
                     "distance_m": round(distance_m, 1),
                 }
             )
@@ -364,10 +365,10 @@ def simulate_evacuation(
                     "person_id": person.person_id,
                     "state": "arrived",
                     "reason": "admitted",
-                    "event_time_s": int(arrival),
+                    "event_time_s": float(arrival),
                     "weight": weight,
                     "dest_id": str(destination["dest_id"]),
-                    "clearance_s": round(arrival - scenario.warning_time_s, 1),
+                    "clearance_s": float(arrival - scenario.warning_time_s),
                     "distance_m": round(distance_m, 1),
                 }
             )
@@ -378,12 +379,6 @@ def simulate_evacuation(
     frame = pd.DataFrame.from_records(records)
     if frame.empty:
         return frame, _empty_outcome_summary()
-
-    arrived = frame[frame["state"] == "arrived"]
-    weighted_clearance = []
-    for row in arrived.itertuples():
-        repetitions = max(int(round(float(row.weight))), 1)
-        weighted_clearance.extend([float(row.clearance_s)] * min(repetitions, 50))
 
     summary = {
         "cohort_weighted": round(float(frame["weight"].sum()), 2),
@@ -397,8 +392,8 @@ def simulate_evacuation(
         "unserved_weighted": round(
             float(frame.loc[frame["state"] != "arrived", "weight"].sum()), 2
         ),
-        "clearance_time_minutes": _percentiles(
-            [value / 60.0 for value in weighted_clearance]
+        "clearance_time_minutes": weighted_clearance_minutes(
+            frame, warning_time_s=scenario.warning_time_s
         ),
         "top_bottleneck_edges": [
             {"edge_id": edge_id, "traversal_weight": round(weight, 1)}
@@ -418,17 +413,6 @@ def simulate_evacuation(
         ],
     }
     return frame, summary
-
-
-def _percentiles(values: list[float]) -> dict[str, float | None]:
-    if not values:
-        return {"p5": None, "median": None, "p95": None}
-    array = np.asarray(values, dtype="float64")
-    return {
-        "p5": round(float(np.percentile(array, 5)), 2),
-        "median": round(float(np.percentile(array, 50)), 2),
-        "p95": round(float(np.percentile(array, 95)), 2),
-    }
 
 
 def _empty_outcome_summary() -> dict[str, Any]:

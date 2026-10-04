@@ -24,6 +24,10 @@ import pyarrow.parquet as pq
 
 from api.models import ApiWarning
 from api.runs import RunRef
+from pipeline.bkkflow.clearance import (
+    EMPTY_CLEARANCE_MINUTES,
+    weighted_clearance_minutes,
+)
 
 LOGGER = logging.getLogger("bkkflow.api.tables")
 
@@ -775,7 +779,7 @@ def _evacuation_block(run: RunRef, warnings: list[ApiWarning]) -> dict[str, Any]
             )
         )
 
-    block["clearance_time_minutes"] = _clearance_times(states, warnings)
+    block["clearance_time_minutes"] = _clearance_times(states, run, warnings)
     # The contract's list is intentionally empty: no artefact in section 3 ties
     # a clearance delay to a specific edge, so naming bottleneck edges here
     # would be a guess.
@@ -784,35 +788,66 @@ def _evacuation_block(run: RunRef, warnings: list[ApiWarning]) -> dict[str, Any]
 
 
 def _clearance_times(
-    states: pd.DataFrame, warnings: list[ApiWarning]
+    states: pd.DataFrame, run: RunRef, warnings: list[ApiWarning]
 ) -> dict[str, float | None]:
-    """Clearance time in **minutes** from the ``arrived`` event times.
-
-    ``evacuation_states.event_time_s`` is seconds from model start, and the
-    contract names this block ``clearance_time_minutes``. The conversion lives
-    here so every caller reports the same unit; a seconds value in a field named
-    minutes is a 60x error the site would print as fact.
-    """
-    empty = {"p5": None, "median": None, "p95": None}
-    if "event_time_s" not in states.columns:
-        return empty
-    arrived = states.loc[states["state"] == EVACUATION_ARRIVED_STATE, "event_time_s"]
-    values = pd.to_numeric(arrived, errors="coerce").dropna().to_numpy(dtype=float)
-    if values.size == 0:
+    """Apply the canonical clearance definition using saved warning metadata."""
+    scenario = run.manifest.get("evacuation_scenario")
+    departure = scenario.get("departure_model") if isinstance(scenario, dict) else None
+    if not isinstance(departure, dict) or "warning_time_s" not in departure:
         warnings.append(
             make_warning(
-                "no_measurements",
-                "no arrived records carry an event time; clearance percentiles are null",
+                "missing_warning_time",
+                "manifest.json has no evacuation warning_time_s; clearance quantiles "
+                "cannot be reconstructed and are null",
+                "manifest.json",
+            )
+        )
+        return dict(EMPTY_CLEARANCE_MINUTES)
+    try:
+        result = weighted_clearance_minutes(
+            states, warning_time_s=departure["warning_time_s"]
+        )
+    except ValueError as exc:
+        warnings.append(
+            make_warning(
+                "invalid_clearance_data",
+                f"clearance quantiles are null: {exc}",
                 "evacuation_states.parquet",
             )
         )
-        return empty
-    minutes = values / 60.0
-    return {
-        "p5": _percentile_or_none(minutes, 5),
-        "median": _percentile_or_none(minutes, 50),
-        "p95": _percentile_or_none(minutes, 95),
-    }
+        return dict(EMPTY_CLEARANCE_MINUTES)
+    if all(value is None for value in result.values()):
+        warnings.append(
+            make_warning(
+                "no_measurements",
+                "no arrived records are present; clearance quantiles are null",
+                "evacuation_states.parquet",
+            )
+        )
+    return result
+
+
+def reconcile_stats_clearance(run: RunRef, payload: dict[str, Any]) -> dict[str, Any]:
+    """Reconstruct the stats clearance block from its authoritative artefacts."""
+    result = dict(payload)
+    evacuation = result.get("evacuation")
+    evacuation = dict(evacuation) if isinstance(evacuation, dict) else {}
+    warnings: list[ApiWarning] = []
+    states, read_warnings = read_parquet(
+        artefact_path(run, "evacuation_states.parquet"),
+        columns=["state", "event_time_s", "weight"],
+    )
+    warnings.extend(read_warnings)
+    if states is None:
+        clearance = dict(EMPTY_CLEARANCE_MINUTES)
+    else:
+        clearance = _clearance_times(states, run, warnings)
+    evacuation["clearance_time_minutes"] = clearance
+    result["evacuation"] = evacuation
+    existing = result.get("warnings")
+    result["warnings"] = list(existing) if isinstance(existing, list) else []
+    result["warnings"].extend(warning.model_dump() for warning in warnings)
+    return result
 
 
 def _stages(run: RunRef) -> list[dict[str, Any]]:

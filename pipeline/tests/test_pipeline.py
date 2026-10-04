@@ -654,13 +654,50 @@ def _destinations() -> gpd.GeoDataFrame:
     )
 
 
+@pytest.mark.parametrize(
+    ("states", "expected"),
+    [
+        (pd.DataFrame({"state": ["arrived"] * 3 + ["route_failed"],
+                       "event_time_s": [2100, 900, 1500, -1],
+                       "weight": [0.49, 0.02, 0.49, -5]}),
+         {"p5": 20.0, "median": 20.0, "p95": 30.0}),
+        (pd.DataFrame({"state": ["arrived"] * 4,
+                       "event_time_s": [1800, 900, 1500, 1500],
+                       "weight": [0.4, 0.1, 0.2, 0.3]}),
+         {"p5": 10.0, "median": 20.0, "p95": 25.0}),
+        (pd.DataFrame({"state": ["route_failed"], "event_time_s": [np.nan],
+                       "weight": [0.0]}),
+         {"p5": None, "median": None, "p95": None}),
+    ],
+)
+def test_weighted_clearance_inverse_ecdf_ties_and_no_arrivals(states, expected) -> None:
+    assert evacuation.weighted_clearance_minutes(states, warning_time_s=300) == expected
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "message"),
+    [
+        *[("weight", value, "arrived weight") for value in (0, -1, np.nan, np.inf, "bad")],
+        *[("event_time_s", value, "clearance") for value in (299, np.nan, np.inf, "bad")],
+    ],
+)
+def test_weighted_clearance_rejects_invalid_arrived_values(column, value, message) -> None:
+    data = {"state": ["arrived"], "event_time_s": [600.0], "weight": [1.0]}
+    data[column] = [value]
+    with pytest.raises(ValueError, match=message):
+        evacuation.weighted_clearance_minutes(pd.DataFrame(data), warning_time_s=300.0)
+
+
 def test_every_cohort_member_reaches_exactly_one_terminal_state() -> None:
     cohort = _cohort(20)
-    scenario = evacuation.EvacuationScenario(scenario_id="t", warning_time_s=0)
+    scenario = evacuation.EvacuationScenario(
+        scenario_id="t", warning_time_s=600, warning_reach=1.0, compliance=1.0,
+        preparation_delay_mean_s=0.0, preparation_delay_sd_s=0.0,
+    )
     states, outcomes = evacuation.simulate_evacuation(
         cohort,
         destinations=_destinations(),
-        route_lookup=lambda *args: (600.0, 500.0, ["e1", "e2"]),
+        route_lookup=lambda *args: (60.375, 500.0, ["e1", "e2"]),
         scenario=scenario,
         seed=1,
     )
@@ -668,6 +705,10 @@ def test_every_cohort_member_reaches_exactly_one_terminal_state() -> None:
     assert conservation["passed"], conservation
     assert set(states["state"]) <= set(evacuation.TERMINAL_STATES)
     assert outcomes["cohort_weighted"] == pytest.approx(200.0)
+    expected = evacuation.weighted_clearance_minutes(states, warning_time_s=600.0)
+    assert outcomes["clearance_time_minutes"] == expected
+    reconstructed = (float(states.loc[states["state"] == "arrived", "event_time_s"].iloc[0]) - 600) / 60
+    assert abs(reconstructed - expected["median"]) < 0.01
 
 
 def test_capacity_creates_overflow_not_silent_loss() -> None:

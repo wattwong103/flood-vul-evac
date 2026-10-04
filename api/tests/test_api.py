@@ -90,6 +90,7 @@ def _manifest(run_id: str, created_at: str = "2026-01-01T00:00:00+00:00") -> dic
             "model_version": "0.1",
             "time_step_seconds": 300,
         },
+        "evacuation_scenario": {"departure_model": {"warning_time_s": 0.0}},
         "outputs": [],
         "warnings": [],
     }
@@ -411,7 +412,7 @@ def test_missing_stats_json_yields_nulls_not_zeros(
     assert body["flood"]["model"] == {"name": "synthetic-bma", "version": "0.1"}
 
 
-def test_stats_json_is_served_verbatim_when_present(
+def test_stats_json_keeps_extra_fields_but_rebuilds_clearance(
     client: TestClient, runs_dir: Path
 ) -> None:
     authored = {
@@ -453,11 +454,19 @@ def test_stats_json_is_served_verbatim_when_present(
         "sources": [],
         "field_added_after_contract_freeze": "kept",
     }
-    _write_run(runs_dir, "authored", manifest=_manifest("authored"), json_files={"stats": authored})
+    states = pd.DataFrame(
+        {"state": ["arrived"], "event_time_s": [600.0], "weight": [1.0]}
+    )
+    _write_run(runs_dir, "authored", manifest=_manifest("authored"),
+               tables={"evacuation_states": states}, json_files={"stats": authored})
 
     body = client.get("/v1/runs/authored/stats").json()
-    assert body == authored
-    # Passthrough must not be trimmed to the frozen key set.
+    assert body["evacuation"]["clearance_time_minutes"] == {
+        "p5": 10.0,
+        "median": 10.0,
+        "p95": 10.0,
+    }
+    # Reconciliation must not trim fields beyond the canonical clearance field.
     assert body["field_added_after_contract_freeze"] == "kept"
 
 
@@ -548,25 +557,39 @@ def test_people_present_and_people_exposed_stay_separate(
 def test_stats_clearance_percentiles_are_in_minutes(
     client: TestClient, runs_dir: Path
 ) -> None:
-    """Event times are seconds; the contract field is minutes. A 60x error here
-    would be printed by the site as a fact, so it is asserted directly."""
+    """Both endpoints use warning-relative exact weighted ECDF minutes."""
+    manifest = _manifest("weighted")
+    manifest["evacuation_scenario"]["departure_model"]["warning_time_s"] = 300.0
     states = pd.DataFrame(
         {
-            "person_id": ["p1", "p2", "p3"],
+            "person_id": ["late", "early", "middle"],
             "state": ["arrived", "arrived", "arrived"],
-            "event_time_s": [600.0, 1200.0, 1800.0],
-            "weight": [1.0, 1.0, 1.0],
+            "event_time_s": [2100.0, 900.0, 1500.0],
+            "weight": [0.49, 0.02, 0.49],
+            "dest_id": ["r1", "r1", "r1"],
         }
     )
-    _write_run(
-        runs_dir, "ct", manifest=_manifest("ct"), tables={"evacuation_states": states}
-    )
-    clearance = client.get("/v1/runs/ct/stats").json()["evacuation"][
-        "clearance_time_minutes"
-    ]
-    assert clearance["p5"] == pytest.approx(11.0)
-    assert clearance["median"] == pytest.approx(20.0)
-    assert clearance["p95"] == pytest.approx(29.0)
+    _write_run(runs_dir, "weighted", manifest=manifest, tables={"evacuation_states": states})
+    expected = {"p5": 20.0, "median": 20.0, "p95": 30.0}
+    assert client.get("/v1/runs/weighted/stats").json()["evacuation"]["clearance_time_minutes"] == expected
+    assert client.get("/v1/runs/weighted/evacuation").json()["clearance_time_minutes"] == expected
+
+
+def test_clearance_is_null_and_warns_when_warning_metadata_is_missing(
+    client: TestClient, runs_dir: Path
+) -> None:
+    manifest = _manifest("legacy")
+    manifest.pop("evacuation_scenario")
+    states = pd.DataFrame({"person_id": ["p1"], "state": ["arrived"],
+                           "event_time_s": [600.0], "weight": [1.0], "dest_id": ["r1"]})
+    _write_run(runs_dir, "legacy", manifest=manifest, tables={"evacuation_states": states})
+    stats = client.get("/v1/runs/legacy/stats").json()
+    evacuation = client.get("/v1/runs/legacy/evacuation").json()
+    empty = {"p5": None, "median": None, "p95": None}
+    assert stats["evacuation"]["clearance_time_minutes"] == empty
+    assert evacuation["clearance_time_minutes"] == empty
+    for body in (stats, evacuation):
+        assert any(warning["code"] == "missing_warning_time" for warning in body["warnings"])
 
 
 def test_stats_caches_by_mtime(client: TestClient, runs_dir: Path) -> None:
@@ -1005,12 +1028,10 @@ def test_evacuation_reports_states_percentiles_and_unserved(
     assert distribution["stranded"]["weight"] == 1.0
 
     clearance = body["clearance_time_minutes"]
-    # Arrival at 600, 1200 and 1800 seconds is 10, 20 and 30 minutes. Percentiles
-    # interpolate linearly between the sorted values, so p5 sits a tenth of the
-    # way from 10 to 20 and p95 a tenth short of 30.
-    assert clearance["p5"] == pytest.approx(11.0)
+    # Exact inverse weighted ECDF on 10, 20 and 30 minutes.
+    assert clearance["p5"] == pytest.approx(10.0)
     assert clearance["median"] == pytest.approx(20.0)
-    assert clearance["p95"] == pytest.approx(29.0)
+    assert clearance["p95"] == pytest.approx(30.0)
 
     totals = body["totals"]
     assert totals["cohort_weighted"] == 5.0  # everyone but the ineligible record

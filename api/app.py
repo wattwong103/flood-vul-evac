@@ -73,6 +73,7 @@ from api.tables import (
     load_stats_file,
     make_warning,
     read_parquet,
+    reconcile_stats_clearance,
     resolve_mesh_coordinates,
     wkt_to_geometry,
 )
@@ -441,9 +442,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_stats(run_id: str, ctx: SettingsDep) -> dict[str, Any]:
         """The contract section 4 payload.
 
-        Returned as a documented ``dict`` rather than a response model: when
-        ``stats.json`` exists it is served verbatim, and a model would silently
-        drop any field the pipeline adds before the contract is updated.
+        Returned as a documented ``dict`` rather than a response model so fields
+        added by the pipeline are retained. Clearance is always reconstructed
+        from the saved states and warning metadata.
         """
         run = resolve_run(run_id)
         cache_key = (run.run_id, stats_mtime(run.path))
@@ -456,6 +457,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             pilot, _ = _read_json_object(ctx.pilot_config_path)
             registry, _ = _read_json_object(ctx.source_registry_path)
             payload = assemble_stats(run, pilot, registry)
+        else:
+            payload = reconcile_stats_clearance(run, payload)
         STATS_CACHE.put(cache_key, payload)
         return payload
 
@@ -1042,7 +1045,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         clearance = ClearanceTimes()
         if "event_time_s" in states.columns:
-            times = _clearance_times(states, warnings)
+            times = _clearance_times(states, run, warnings)
             clearance = ClearanceTimes(**times)
         else:
             warnings.append(
