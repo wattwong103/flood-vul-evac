@@ -1,125 +1,110 @@
-# Implementation status against the plan
+# BKK/FLOW project state
 
-**Date:** 30 September 2026
-**Scope:** the plan's §16 acceptance criteria and §19 build slice, executed
-across two scopes — a 5.96 km² pilot and the 1,643.5 km² Bangkok Metropolitan
-Administration — on real, licence-checked open data.
+Updated 4 October 2026. **DONE_WITH_CONCERNS; demonstration only.**
+This page is the shared implementation/evidence handoff. Internal validation
+does not establish empirical validity or operational readiness.
 
-Status vocabulary: **met**, **partly met**, **not met**.
+## Merged implementation and verified run
 
-Everything below is `demonstration` status. No run in this repository has been
-promoted, and nothing here is a forecast or a warning product.
+[PRs #1–#14](https://github.com/wattwong103/flood-vul-evac/pulls?q=is%3Apr+is%3Amerged)
+are human-merged. Main at `9278893` has source tree
+`07708a7f72ae62832bcd00de6b9771df3da1bb6a`, matching tested commit
+`a5dfc51c59df65a27e136cbce594d73e09179181`.
 
-## What the two scopes are
+Immutable city run `be6a4e08-e2d7-4dd9-bf8b-4f2a02a12a81` executed entirely
+at that commit on 4 October: 831 seconds, 8/8 internal checks, zero schema
+issues and 12/12 recorded output hashes verified. Source identity is external
+evidence for this historical run, not a field retrospectively added to its manifest.
+The source-matched test gate was 212 Python/API and 14 frontend tests; build and
+lint passed, with 11 existing lint warnings. No GitHub CI checks are configured.
 
-| | Pilot — Khlong San | City — Bangkok BMA |
+| Result | Verified value | Interpretation |
 |---|---|---|
-| Area | 5.96 km² | 1,643.5 km² |
-| OSM boundary | relation `R3147280`, admin level 7 | relation `R92277`, admin level 4 |
-| Network | 7,514 edges / 6,701 nodes / 169 km | 939,006 edges / 854,628 nodes / 26,744 km |
-| Residents | 115,959 | 10,891,061 |
-| Buildings in AOI | 2,398 | 255,098 |
-| **Flood depth** | scenario (canal-decay) | **not derived** — no defensible DEM |
-| **Evacuation** | full state machine | **not derived** — needs depth |
-| Observed water | — | JRC Global Surface Water, 4 years |
-| Drainage | — | 2,390 km mapped network, 137 basins |
-| Hazard screening | — | connectivity under observed water; drainage-discharge index |
-| Validation | 17/17 checks | 8/8 checks, 0 manifest schema errors |
+| Network | 1,038,811 edges; 949,151 nodes; 30,060.16 km | Complete source extent; OSM completeness is unverified. |
+| Buildings | 272,116; 250,378 unknown height | Tags/levels do not establish structural safety. |
+| Population | 10,891,061.3023; 181,662 source cells | Modelled 2020 residents, not people present during a flood. |
+| Public population grid | 1,693 cells, 1 km | Coarse aggregation, not building occupancy. |
+| Destinations | 1,034 candidates; zero verified | No usable capacity or safe-access guarantee. |
+| Annual water | 157.8473 / 170.7147 / 143.4223 / 173.7170 km² | 2010 / 2011 / 2012 / 2020; about 83% no-observation area. |
+| Depth / city evacuation | Not computed, null with reasons | Terrain, forcing and validation gates remain open. |
 
-The pilot is the only scope with depth and evacuation. The city scope carries
-everything that does not require depth.
+The [README](../README.md#conditional-connectivity) records all 12 independently
+reproduced closure cases. Fixed baseline anchors, 400 m snapping and a 180 minute
+limit are disclosed. Reopening is monotonic, but the worst-ranked year changes
+with the closure fraction. Travel percentiles are unweighted reachable-cell
+summaries, not clearance times. Vehicle one-way restrictions remain unenforced.
 
-## §16 acceptance criteria
+The earlier 114–138 km² JRC table, 2012 anomaly, “2011 flood absent” claim,
+939,006-edge city inventory and roughly 71% reachability figures are withdrawn.
+Older immutable runs remain historical evidence, not the current baseline.
 
-| # | Criterion | Status | Evidence |
-|---|---|---|---|
-| 1 | Scenario, Population, Data Registry, Method views | met | plus Observed & assets, and Run Detail |
-| 2 | Population map toggle and day/evening/night | partly met | the three states share one scenario-derived presence curve, not three evidenced profiles |
-| 3 | Present and exposed named separately | met | never summed; asserted by an API test |
-| 4 | Visible PFLOW stage rail | met | 12 stages in the city run |
-| 5 | Registry carries counts, age/sex, control totals, licences | partly met | all registered; **age/sex and control totals registered but not ingested** |
-| 6 | Manifest requires population model, version, seed | met | 0 schema errors |
-| 7 | Structurally valid person/activity/trip/trajectory/mesh/link/evacuation tables | met | 17/17 pilot checks; 8/8 city checks |
-| 8 | Every real input has URL, retrieval time, checksum, licence | met | `source_versions[]` |
-| 9 | No real individual traces; aggregation enforced | met | synthetic `p_<hex>` ids, 1 km public grid |
-| 10 | Interface labels numeric results as illustrative | met | `validation_status` on every payload |
+## Current concern-fix branch
 
-## Plan exit criteria
+The [accepted task plan](CONCERN_RESOLUTION_PLAN.md) defines this follow-up.
+These changes are proposed through ordered PRs; their presence in this document
+does not mean the human has merged them or that an older run used them.
 
-**Phase 1 — open-data city baseline, map tiles, source attribution, coverage
-dashboard: met at city scale.** A reproducible city run over the whole BMA
-exists, with checksums, licence states, and a 1 km public aggregation.
-
-**Phase 2 — flood runs reproducing known extents, calibrated time-to-flood,
-demonstrated inter-district differences: partly met.** Extent is comparable
-across three independent products and two years; depth and time-to-flood are
-not, so no calibration is possible. Inter-district differences are visible in
-the drainage index and the connectivity screening.
-
-**Phase 3 — validated, reviewed, operational: not met and not attempted.**
-
-## What each source contributes, and what it cannot
-
-| Source | Role | Cannot give |
+| Task | Implemented change | Evidence / remaining limit |
 |---|---|---|
-| OpenStreetMap (ODbL) | network, buildings, water, 1,400 destination candidates | verified refuge capacity, building occupancy |
-| WorldPop 2020 (CC BY 4.0) | resident baseline at 100 m | presence at any moment; control totals |
-| **JRC Global Surface Water** (CC BY 4.0) | **observed water extent 1984–2021** | depth, duration, flow direction, within-year timing |
-| MitrEarth (Chulalongkorn) | mapped flood extent, 2,390 km drainage, basins, overflow paths, 268 villages | DEM accuracy; 2010/2011 extents unusable |
-| AWS terrain tiles | — **not used** | ±5–10 m error exceeds the 0–2 m flood-relevant range |
-| GISTDA open data (Open Data Common) | registered, reachable, **needs a key** | not ingested |
+| BKK-010 | One definition of grid size, snap tolerance and routing cutoff | 43 targeted tests; numerical method unchanged. |
+| BKK-011 | Shared WorldPop URL, explicit missing-source and cross-drive diagnostics | 14 source tests; original hashes/retrieval gates retained. |
+| BKK-012 | Private index build, atomic installation without replacement | 13 index/API tests, including interruption, competing writer and incompatible version. Filesystem must support hard links. |
+| BKK-013 | Statistics gate and actual validation-check display | 17 frontend tests and production build; missing statistics are explained, stale-run map details hidden. |
+| BKK-014 | Source identity in new manifests; detected drift blocks publication | Source-change, Git-unavailable, schema and immutable-pilot tests. Before/after checking cannot detect a transient edit restored between checks or freeze installed dependencies. |
 
-## Findings this build produced
+Independent review and final combined verification are recorded in the linked
+PR descriptions. Generated runs and data stay outside Git. The app serves real
+saved artifacts; it does not fabricate absent hazard or capacity fields.
 
-1. **The 2011 Bangkok flood is invisible in the annual Landsat record.** The
-   JRC record shows no anomaly in 2011 (−0.15 km²) and a clear one in 2012
-   (+23.7 km²). A flood lasting weeks inside a year cannot be captured by an
-   annual composite. This is a property of the observation, not a data gap.
+## External evidence now available
 
-2. **2012 is not reliably the worst year for connectivity.** Closing every
-   water-affected way is an assumption. At 100% and 50% closure 2012 is the
-   worse year; at 25% it is marginally the better one. The ranking does not
-   survive its own sensitivity test, and the code reports
-   `year_ranking_stable_across_assumptions: false` rather than asserting a
-   winner. The absolute reachable share swings 20 percentage points across the
-   assumption range and must be read as assumption-driven.
+The paper audit staged and independently reconciled the official
+[NSO/DOPA registration dataset](https://data.go.th/dataset/0405_01_0005).
+Rechecking its 15,090-row CSV on 4 October reproduced zero reconciliation error:
 
-3. **The MitrEarth DEM is unusable.** +13.8 m at Khlong San where ground is
-   1–2 m, with adjacent 30 m samples swinging 5–31 m across a floodplain with
-   about 1 m of true relief. Same SRTM lineage as the terrain tiles already
-   rejected. Excluded on fitness, independently of the licence decision.
+| Year | Registered Bangkok population | Districts | District sum minus city total |
+|---|---:|---:|---:|
+| 2021 | 5,527,994 | 50 | 0 |
+| 2022 | 5,494,932 | 50 | 0 |
+| 2023 | 5,471,588 | 50 | 0 |
+| 2024 | 5,455,020 | 50 | 0 |
+| 2025 | 5,422,568 | 50 | 0 |
 
-4. **Only 2006 of the three mapped flood-extent years is usable.** 2010 and
-   2011 contain self-intersecting rings whose apparent areas are arbitrary; the
-   pipeline discards them, derives no area for them, and marks both years
-   unreliable. Publishing the 5.0 km² that survived would have been as wrong as
-   the 772 km² the broken ring claimed.
+Source CSV SHA-256:
+`7c24d89223d0709df54baa65f84bd3149fd2d26feeef252b83361237ad372a5a`.
+These are registration controls, not event-time population. Pipeline ingestion,
+boundary matching and choice of population concept remain separate work.
 
-5. **Bangkok's flood-relevant topography is 0–2 m.** Any DEM with errors
-   larger than that range cannot support a depth model, which is why depth is
-   absent at city scale rather than merely uncalibrated.
+The [OTP survey report](https://www.otp.go.th/uploads/tiny_uploads/ProjectOTP/2560/Projcet01/2.2-TDS_Exsum_EN_Final_20180515.pdf)
+provides a 2017 control of 1.97 trips/person/day. The paper's legacy pilot audit
+found 3.712, plus missing modal alternatives. This rejects a calibrated-mobility
+claim; post-hoc multiplication alone cannot repair mode/destination behaviour.
 
-## Open gaps, in priority order
+## Remaining concerns, acceptance gates and owners
 
-1. Resolve the RTARF Central Basin LiDAR lead: prove Bangkok coverage, obtain
-   the underlying 1 m elevation tiles under explicit reuse terms, identify the
-   vertical datum and ground classification, and validate held-out benchmarks.
-   The open download currently exposes only a survey-coverage index.
-2. Obtain event forcing and validation together: reusable rainfall, river/tide
-   levels and time-specific GISTDA or Sentinel-1 flood extent. Terrain alone
-   cannot produce a defensible city depth surface.
-3. A refuge inventory. Until one exists, no destination may be called a
-   refuge and no arrival implies usable shelter.
-4. Ingest the already registered DOPA/NSO administrative controls and report
-   reconciliation by district without relabelling registered residents as
-   people present.
-5. Ingest the registered age/sex marginal and preserve its modelled status.
-6. Destination capacity by class, as a declared scenario rather than an
-   observation.
+Owners below identify the next role; no external organisation has accepted an
+assignment or been contacted on the project's behalf.
 
-## Verification
+| Severity / task | What remains | Next owner and acceptance gate |
+|---|---|---|
+| MEDIUM BKK-009 boundaries | 76.1429 km² of the BMA lies outside the 50 OSM district union; cause unverified | Data steward + North: acquire authoritative geometry with reuse terms and reconcile the difference. The [BMA 50-district catalog](https://data.go.th/en/dataset/50) currently says “License not specified,” so it is a lead, not an admitted input. |
+| MEDIUM BKK-009 population | Controls audited, not ingested or concept-matched | North selects resident/registered/de-facto target; implementer adds district crosswalk, date matching and reconciliation tests. |
+| HIGH scientific gate: terrain/event | Actual bare-earth tiles, datum, forcing and held-out validation absent | Data steward: pursue [RTSD LiDAR catalog](https://data.go.th/en/dataset/lidar-1) and [GISTDA event extent](https://opendata.gistda.or.th/th/dataset/disasters-03). A coverage index or extent product is not depth. |
+| HIGH scientific gate: destinations | No verified capacity, operator, accessibility, inspection date or flood-safe access | North/data steward: obtain district/operator records through [BMA NOW](https://now.bangkok.go.th) and institutional channels; record reuse terms and retrieval evidence. |
+| MEDIUM BKK-015 pilot replay/cost | Legacy pilot replay differs by 53.67 weighted arrivals; open flooded edges use dry cost; percentiles cap weighted repetitions | Implementer + scientific owner: regression-tested impedance and exact weighted statistics, then a fresh source-pinned run and replay. Legacy pilot `a0d11a4d-6c75-4723-90cf-b634e2f2a230` is not submission-ready. |
+| MEDIUM BKK-016 calibration/uncertainty | Two-mode priors, weighted-agent draws and one-at-a-time sensitivity | Scientific owner: define OTP target population, modes/purposes/distributions, weighted-agent interpretation and interaction-aware uncertainty before calibration claims. |
+| MEDIUM BKK-017 driving | City routing is undirected | Implementer: preserve one-way/access restrictions and test direction before publishing vehicle results. Current reported screen is pedestrian. |
+| LOW maintenance | Repeated viewport counts, visibility-toggle refetches, anchor-loop performance, existing lint warnings | Implementer: profile first; preserve public-layer completeness and method semantics. |
 
-The current verification count is recorded by the test commands at release
-time rather than copied into this document. Each run re-validates itself: 17
-checks in the pilot, 8 in the city, and the manifest against the committed JSON
-Schema.
+## Handoff and use
+
+North owns review and merge. The paper session owns manuscript and figure edits;
+it has the immutable run, exact numbers, source tree and caveats. Implementation
+changes do not automatically replace paper results. Historical evidence and
+fresh verification are separately identified in every PR handoff.
+
+Run `python -m pytest pipeline/tests api/tests -q`, then `pnpm test`, `pnpm build`
+and `pnpm lint` from `site/`. Record the actual output and run UUID when promoting
+any new evidence. Internal success alone never promotes a run beyond demonstration.
+
+DONE_WITH_CONCERNS
