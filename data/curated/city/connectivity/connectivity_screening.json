@@ -1,0 +1,152 @@
+{
+  "measures": "network connectivity under observed water presence",
+  "is_evacuation_simulation": false,
+  "severity_note": "Connectivity screening under OBSERVED water presence. Not an evacuation simulation: the hazard is a yearly Landsat water classification, so it carries no depth, duration, flow direction or timing. Water is treated as impassable at any depth, which is conservative and wrong in detail. Destinations are unverified OSM tags carrying no capacity, so arrival means arriving near a tagged destination, not reaching usable shelter.",
+  "years": {
+    "2010": {
+      "source_role": "screening_index",
+      "hazard_role": "observed",
+      "year": 2010,
+      "measures": "network connectivity under observed water presence",
+      "is_evacuation_simulation": false,
+      "severity_note": "Connectivity screening under OBSERVED water presence. Not an evacuation simulation: the hazard is a yearly Landsat water classification, so it carries no depth, duration, flow direction or timing. Water is treated as impassable at any depth, which is conservative and wrong in detail. Destinations are unverified OSM tags carrying no capacity, so arrival means arriving near a tagged destination, not reaching usable shelter.",
+      "water_cells": 1464,
+      "closed_edges": 57836,
+      "total_edges": 939006,
+      "closed_edge_share": 0.061593,
+      "exposed_cells": 1584,
+      "exposed_population": 9710327.76,
+      "reachable_population": 6940367.48,
+      "unreachable_population": 2769960.28,
+      "reachable_share_of_exposed": 0.714741,
+      "no_network_access_cells": 377,
+      "clearance_minutes": {
+        "p5": 10.88,
+        "p50": 42.9,
+        "p95": 126.55
+      },
+      "threshold_minutes_reached": {
+        "within_15min": 947984.06,
+        "within_30min": 2956515.36,
+        "within_60min": 5856457.02,
+        "within_120min": 6784775.37
+      },
+      "designated_destinations": 97,
+      "closure_fraction": 1.0,
+      "elapsed_seconds": 54.5,
+      "warnings": [
+        "only 97 designated destinations could be placed for a population of 9,710,328; travel times depend on that choice",
+        "run: 784ffce7-7ee0-4af8-8a49-2e9844dd487a"
+      ]
+    },
+    "2011": {
+      "source_role": "screening_index",
+      "hazard_role": "observed",
+      "year": 2011,
+      "measures": "network connectivity under observed water presence",
+      "is_evacuation_simulation": false,
+      "severity_note": "Connectivity screening under OBSERVED water presence. Not an evacuation simulation: the hazard is a yearly Landsat water classification, so it carries no depth, duration, flow direction or timing. Water is treated as impassable at any depth, which is conservative and wrong in detail. Destinations are unverified OSM tags carrying no capacity, so arrival means arriving near a tagged destination, not reaching usable shelter.",
+      "water_cells": 1446,
+      "closed_edges": 56545,
+      "total_edges": 939006,
+      "closed_edge_share": 0.060218,
+      "exposed_cells": 1580,
+      "exposed_population": 9644151.39,
+      "reachable_population": 7019911.76,
+      "unreachable_population": 2624239.64,
+      "reachable_share_of_exposed": 0.727893,
+      "no_network_access_cells": 377,
+      "clearance_minutes": {
+        "p5": 10.83,
+        "p50": 43.76,
+        "p95": 114.43
+      },
+      "threshold_minutes_reached": {
+        "within_15min": 952471.64,
+        "within_30min": 2890157.58,
+        "within_60min": 5856937.08,
+        "within_120min": 6955743.81
+      },
+      "designated_destinations": 97,
+      "closure_fraction": 1.0,
+      "elapsed_seconds": 47.8,
+      "warnings": [
+        "only 97 designated destinations could be placed for a population of 9,644,151; travel times depend on that choice",
+        "run: 784ffce7-7ee0-4af8-8a49-2e9844dd487a"
+      ]
+    },
+    "2012": {
+      "source_role": "screening_index",
+      "hazard_role": "observed",
+      "year": 2012,
+      "measures": "network connectivity under observed water presence",
+      "is_evacuation_simulation": false,
+      "severity_note": "Connectivity screening under OBSERVED water presence. Not an evacuation simulation: the hazard is a yearly Landsat water classification, so it carries no depth, duration, flow direction or timing. Water is treated as impassable at any depth, which is conservative and wrong in detail. Destinations are unverified OSM tags carrying no capacity, so arrival means arriving near a tagged destination, not reaching usable shelter.",
+      "water_cells": 1456,
+      "closed_edges": 61743,
+      "total_edges": 939006,
+      "closed_edge_share": 0.065754,
+      "exposed_cells": 1575,
+      "exposed_population": 9575740.64,
+      "reachable_population": 6583211.64,
+      "unreachable_population": 2992529.0,
+      "reachable_share_of_exposed": 0.687489,
+      "no_network_access_cells": 377,
+      "clearance_minutes": {
+        "p5": 10.68,
+        "p50": 41.89,
+        "p95": 110.81
+      },
+      "threshold_minutes_reached": {
+        "within_15min": 907859.03,
+        "within_30min": 2802749.32,
+        "within_60min": 5603791.78,
+        "within_120min": 6508306.7
+      },
+      "designated_destinations": 97,
+      "closure_fraction": 1.0,
+      "elapsed_seconds": 49.0,
+      "warnings": [
+        "only 97 designated destinations could be placed for a population of 9,575,741; travel times depend on that choice",
+        "run: 784ffce7-7ee0-4af8-8a49-2e9844dd487a"
+      ]
+    },
+    "2020": {
+      "source_role": "screening_index",
+      "hazard_role": "observed",
+      "year": 2020,
+      "measures": "network connectivity under observed water presence",
+      "is_evacuation_simulation": false,
+      "severity_note": "Connectivity screening under OBSERVED water presence. Not an evacuation simulation: the hazard is a yearly Landsat water classification, so it carries no depth, duration, flow direction or timing. Water is treated as impassable at any depth, which is conservative and wrong in detail. Destinations are unverified OSM tags carrying no capacity, so arrival means arriving near a tagged destination, not reaching usable shelter.",
+      "water_cells": 1439,
+      "closed_edges": 57532,
+      "total_edges": 939006,
+      "closed_edge_share": 0.061269,
+      "exposed_cells": 1564,
+      "exposed_population": 9382560.14,
+      "reachable_population": 6708142.81,
+      "unreachable_population": 2674417.33,
+      "reachable_share_of_exposed": 0.714959,
+      "no_network_access_cells": 377,
+      "clearance_minutes": {
+        "p5": 11.3,
+        "p50": 43.77,
+        "p95": 121.17
+      },
+      "threshold_minutes_reached": {
+        "within_15min": 935794.4,
+        "within_30min": 2841063.34,
+        "within_60min": 5607789.76,
+        "within_120min": 6575145.27
+      },
+      "designated_destinations": 97,
+      "closure_fraction": 1.0,
+      "elapsed_seconds": 44.3,
+      "warnings": [
+        "only 97 designated destinations could be placed for a population of 9,382,560; travel times depend on that choice",
+        "run: 784ffce7-7ee0-4af8-8a49-2e9844dd487a"
+      ]
+    }
+  },
+  "written_at": "2026-09-30T13:23:58+00:00"
+}

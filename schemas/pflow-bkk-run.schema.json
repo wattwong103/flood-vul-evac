@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bkk-flow.local/schemas/pflow-bkk-run.schema.json",
+  "title": "BKK/FLOW reproducible run manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "created_at",
+    "validation_status",
+    "geography",
+    "source_versions",
+    "population_model",
+    "pflow_contract",
+    "flood_scenario",
+    "evacuation_scenario",
+    "outputs",
+    "warnings"
+  ],
+  "properties": {
+    "run_id": { "type": "string", "format": "uuid" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "validation_status": {
+      "enum": ["demonstration", "research", "reviewed", "operational"]
+    },
+    "geography": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["country", "aoi_id", "aoi_version", "storage_crs", "analysis_crs"],
+      "properties": {
+        "country": { "const": "Thailand" },
+        "aoi_id": { "type": "string", "minLength": 1 },
+        "aoi_version": { "type": "string", "minLength": 1 },
+        "storage_crs": { "const": "OGC:CRS84" },
+        "analysis_crs": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Must be explicitly selected and justified before metric distance, area, buffering or routing-cost work."
+        },
+        "aggregation_geography": { "type": "string" }
+      }
+    },
+    "source_versions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_id", "retrieved_at", "content_sha256", "licence_snapshot"],
+        "properties": {
+          "source_id": { "type": "string" },
+          "retrieved_at": { "type": "string", "format": "date-time" },
+          "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "request_parameters": { "type": "object" },
+          "licence_snapshot": { "type": "string" }
+        }
+      }
+    },
+    "population_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["population_version", "method", "agent_representation", "seed", "control_source_ids", "time_profile", "privacy"],
+      "properties": {
+        "population_version": { "type": "string", "minLength": 1 },
+        "method": { "enum": ["weighted-persons", "integerised-persons", "synthetic-households"] },
+        "agent_representation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["weight_field", "home_spatial_unit", "households_supported"],
+          "properties": {
+            "weight_field": { "type": "string", "minLength": 1 },
+            "home_spatial_unit": { "type": "string", "minLength": 1 },
+            "households_supported": { "type": "boolean" },
+            "building_assignment": { "enum": ["none", "partial", "complete"] }
+          }
+        },
+        "seed": { "type": "integer" },
+        "control_source_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
+        "time_profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "activity_model_version"],
+          "properties": {
+            "status": { "enum": ["illustrative", "calibrated", "validated"] },
+            "activity_model_version": { "type": "string", "minLength": 1 },
+            "external_trip_policy": { "type": "string" }
+          }
+        },
+        "privacy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["public_min_cell_metres", "minimum_reported_count", "real_trajectories_present"],
+          "properties": {
+            "public_min_cell_metres": { "type": "integer", "minimum": 100 },
+            "minimum_reported_count": { "type": "integer", "minimum": 1 },
+            "real_trajectories_present": { "const": false }
+          }
+        }
+      }
+    },
+    "pflow_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "person_generator", "activity_generator", "trip_generator", "trajectory_generator", "aggregation"],
+      "properties": {
+        "contract_version": { "const": "pflow-bkk-v0.1" },
+        "person_generator": { "$ref": "#/$defs/component" },
+        "activity_generator": { "$ref": "#/$defs/component" },
+        "trip_generator": { "$ref": "#/$defs/component" },
+        "trajectory_generator": { "$ref": "#/$defs/component" },
+        "aggregation": { "$ref": "#/$defs/component" }
+      }
+    },
+    "flood_scenario": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["model_name", "model_version", "time_step_seconds", "parameters"],
+      "properties": {
+        "model_name": { "type": "string" },
+        "model_version": { "type": "string" },
+        "time_step_seconds": { "type": "integer", "minimum": 1 },
+        "parameters": { "type": "object" }
+      }
+    },
+    "evacuation_scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seed", "departure_model", "route_choice", "destinations", "mode_thresholds"],
+      "properties": {
+        "seed": { "type": "integer" },
+        "departure_model": { "type": "object" },
+        "route_choice": { "type": "object" },
+        "destinations": { "type": "array", "items": { "type": "object" } },
+        "mode_thresholds": { "type": "object" }
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["role", "uri", "content_sha256"],
+        "properties": {
+          "role": { "type": "string" },
+          "uri": { "type": "string" },
+          "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "row_count": { "type": "integer", "minimum": 0 },
+          "crs": { "type": "string" }
+        }
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "parameters"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "parameters": { "type": "object" }
+      }
+    }
+  }
+}

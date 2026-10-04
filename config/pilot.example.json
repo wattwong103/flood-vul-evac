@@ -1,0 +1,22 @@
+{
+  "decision_status": "required_before_spatial_processing",
+  "country": "Thailand",
+  "aoi": null,
+  "storage_crs": "OGC:CRS84",
+  "analysis_crs": null,
+  "analysis_crs_candidates": [
+    {
+      "crs": "EPSG:32647",
+      "label": "WGS 84 / UTM zone 47N",
+      "recommendation": "Preferred candidate for a Bangkok pilot after staged-source CRS inspection"
+    },
+    {
+      "crs": "source-specific local CRS",
+      "label": "Datum/CRS supplied by an authoritative Bangkok layer",
+      "recommendation": "Use only when metadata and transformation quality are documented"
+    }
+  ],
+  "aggregation_grid": null,
+  "aggregation_candidates": ["projected square grid", "H3", "BMA district reporting only"],
+  "note": "Do not fill analysis_crs or aggregation_grid by guessing from coordinate ranges."
+}

@@ -1,0 +1,68 @@
+{
+  "measures": "sensitivity of connectivity screening to the water-impassable assumption",
+  "is_evacuation_simulation": false,
+  "note": "A yearly water classification has no depth, so treating any water as closing the way is an assumption. The absolute reachable share depends heavily on it and must be read as assumption-driven, not as a measurement.",
+  "rows": [
+    {
+      "year": 2010,
+      "closure_fraction": 1.0,
+      "closed_edge_share": 0.061593,
+      "reachable_share_of_exposed": 0.714741,
+      "clearance_p50_minutes": 42.9
+    },
+    {
+      "year": 2010,
+      "closure_fraction": 0.5,
+      "closed_edge_share": 0.030796,
+      "reachable_share_of_exposed": 0.816736,
+      "clearance_p50_minutes": 41.34
+    },
+    {
+      "year": 2010,
+      "closure_fraction": 0.25,
+      "closed_edge_share": 0.015398,
+      "reachable_share_of_exposed": 0.883458,
+      "clearance_p50_minutes": 39.37
+    },
+    {
+      "year": 2012,
+      "closure_fraction": 1.0,
+      "closed_edge_share": 0.065754,
+      "reachable_share_of_exposed": 0.687489,
+      "clearance_p50_minutes": 41.89
+    },
+    {
+      "year": 2012,
+      "closure_fraction": 0.5,
+      "closed_edge_share": 0.032877,
+      "reachable_share_of_exposed": 0.804181,
+      "clearance_p50_minutes": 42.41
+    },
+    {
+      "year": 2012,
+      "closure_fraction": 0.25,
+      "closed_edge_share": 0.016439,
+      "reachable_share_of_exposed": 0.8857,
+      "clearance_p50_minutes": 40.58
+    }
+  ],
+  "spread_by_year": {
+    "2010": {
+      "reachable_share_min": 0.7147,
+      "reachable_share_max": 0.8835,
+      "range_percentage_points": 16.87
+    },
+    "2012": {
+      "reachable_share_min": 0.6875,
+      "reachable_share_max": 0.8857,
+      "range_percentage_points": 19.82
+    }
+  },
+  "year_ranking_stable_across_assumptions": false,
+  "worst_year_by_assumption": [
+    2012,
+    2012,
+    2010
+  ],
+  "written_at": "2026-09-30T12:32:50+00:00"
+}

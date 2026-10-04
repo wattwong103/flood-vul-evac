@@ -1,0 +1,89 @@
+{
+  "population_version": "bkk-pop-v0.1-khlongsan-2020",
+  "status": "demonstration",
+  "method": "weighted-persons",
+  "seed": 29092026,
+  "resident_baseline": {
+    "source_id": "worldpop-global2-tha-100m-r2025a",
+    "dataset_popyear": 2020,
+    "base_cell_metres": 100,
+    "meaning": "estimated usual residents in the 100 m cell; not time-of-day occupancy",
+    "aoi_id": "khlong-san-district"
+  },
+  "controls": [
+    {
+      "source_id": "dopa-nha-subdistrict-population-houses-2568",
+      "dimensions": ["total_population", "sex", "houses"],
+      "geography": "subdistrict",
+      "status": "registered_but_not_ingested",
+      "note": "The DOPA/NHA aggregate control was not retrievable from the build environment. Reconciliation to an external control total is therefore NOT performed and the QA report records the control error as unavailable."
+    },
+    {
+      "source_id": "worldpop-tha-age-sex-2026-r2025a",
+      "dimensions": ["age_band", "sex"],
+      "status": "registered_but_not_ingested",
+      "note": "Country age/sex rasters were out of scope for the AOI-scoped pull. age_band is therefore 'unknown' for every person rather than an invented distribution."
+    }
+  ],
+  "agent_representation": {
+    "weight_field": "weight",
+    "home_spatial_unit": "100m_grid",
+    "households_supported": false,
+    "building_assignment": "none",
+    "scenario_fields": ["vehicle_access", "assistance_need", "warning_reach", "compliance"]
+  },
+  "mobility_profiles": [
+    {
+      "label": "walk_only",
+      "share": 0.46,
+      "vehicle_access": "none",
+      "assistance_share": 0.0,
+      "source": "scenario"
+    },
+    {
+      "label": "motorcycle_access",
+      "share": 0.28,
+      "vehicle_access": "motorcycle",
+      "assistance_share": 0.0,
+      "source": "scenario"
+    },
+    {
+      "label": "car_access",
+      "share": 0.17,
+      "vehicle_access": "car",
+      "assistance_share": 0.0,
+      "source": "scenario"
+    },
+    {
+      "label": "reduced_mobility",
+      "share": 0.09,
+      "vehicle_access": "none",
+      "assistance_share": 1.0,
+      "source": "scenario"
+    }
+  ],
+  "sex_split": {
+    "male": 0.489,
+    "female": 0.511,
+    "source": "scenario_prior_default_balance",
+    "note": "A national-level sex ratio was used because no Bangkok subdistrict sex control was ingested. This is a prior, not a measurement, and is listed as a sensitivity parameter."
+  },
+  "mobility_sample": {
+    "max_agents": 1200,
+    "status": "sampled",
+    "note": "Activity, trip and trajectory stages run on a weighted sample. Each sampled row keeps its weight so aggregates re-expand; the sampling factor is recorded in the manifest."
+  },
+  "privacy": {
+    "public_min_cell_metres": 1000,
+    "minimum_reported_count": 20,
+    "real_trajectories_present": false
+  },
+  "warnings": [
+    "Resident counts are a 2020 modelled surface, not a count of people present at any moment.",
+    "No external administrative control total was ingested, so population control error is unverified.",
+    "Age structure is unknown for every person; no age-structure source passed the licence gate.",
+    "Sex split is a declared prior, not a measured Bangkok marginal.",
+    "Household membership, vehicle access and assistance needs are scenario fields, not observations.",
+    "Mobility behaviour parameters are uncalibrated priors; results remain demonstration status."
+  ]
+}

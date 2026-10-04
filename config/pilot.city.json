@@ -1,0 +1,55 @@
+{
+  "decision_status": "resolved_for_city_baseline",
+  "resolved_at": "2026-09-30",
+  "country": "Thailand",
+  "scale": "city",
+  "aoi": {
+    "aoi_id": "bangkok-bma",
+    "name": "กรุงเทพมหานคร",
+    "name_en": "Bangkok",
+    "admin_level": "4",
+    "geometry_source": "OpenStreetMap relation R92277 via Nominatim lookup",
+    "geometry_licence": "ODbL 1.0",
+    "attribution": "(c) OpenStreetMap contributors",
+    "area_km2": 1643.5357,
+    "bbox_wgs84": [
+      100.3279,
+      13.2191,
+      100.9386,
+      13.9552
+    ],
+    "rationale": "The Bangkok Metropolitan Administration, the full administrative extent the project plan names as the post-pilot target. Admin level 4, not a hand-drawn box, so population, network and reporting geographies all refer to the same place."
+  },
+  "osm_extract": {
+    "source_id": "geofabrik-thailand-osm-20260929",
+    "resource_url": "https://download.geofabrik.de/asia/thailand-260929.osm.pbf",
+    "byte_count": 327965278,
+    "content_sha256": "to be recorded per run from the staged file",
+    "coverage_url": "https://download.geofabrik.de/asia/thailand.poly",
+    "rationale": "A dated country extract covers the complete BMA source extent. The publisher polygon is checked against the AOI before reuse; source coverage does not prove mapping completeness."
+  },
+  "storage_crs": "OGC:CRS84",
+  "analysis_crs": "EPSG:32647",
+  "analysis_crs_decision": {
+    "chosen": "EPSG:32647",
+    "justification": "Unchanged from the pilot. UTM zone 47N covers the whole BMA at a point scale factor within 0.1 percent, so one projected CRS serves both the pilot district and the city without re-projection artefacts at the seam.",
+    "note": "Bangkok is far larger than the pilot, so the scale factor varies more across the city than across the district. Lengths and areas remain metric and usable for screening."
+  },
+  "aggregation_grid": {
+    "internal_metres": 100,
+    "public_population_metres": 1000,
+    "public_mobility_metres": 1000,
+    "mesh_reporting_metres": 1000,
+    "note": "Public aggregation is fixed at 1 km across the city. At 1,643 km2 the 100 m mesh produces tens of millions of rows with no analytical benefit and a real disclosure risk in sparse outer districts."
+  },
+  "scale_limits": {
+    "mobility_sample_max_agents": 1500,
+    "routing": "Destination-centric Dijkstra over a compressed routing index, not per-person A*",
+    "flood": "NOT DERIVED at city scale in this build. See docs/CITY_SCALE_LIMITATIONS.md.",
+    "reason": "The only reachable open terrain source has a vertical error of roughly 5-10 m in Bangkok, which is larger than the entire flood-relevant elevation range of 0-2 m. A stage-based depth surface derived from it would be noise."
+  },
+  "notes": [
+    "The Khlong San pilot remains the reference case for anything requiring flood depth or evacuation.",
+    "City artefacts and pilot artefacts are separate runs; a city run never silently substitutes for a pilot result."
+  ]
+}
