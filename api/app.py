@@ -1540,7 +1540,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         run = resolve_run(run_id)
         warnings: list[ApiWarning] = []
         frame, read_warnings = read_parquet(
-            ctx.data_dir / "curated" / "city" / "observed_water_cells.parquet"
+            artefact_path(run, "observed_water_cells.parquet")
         )
         warnings.extend(read_warnings)
         if frame is None:
@@ -1551,8 +1551,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "warnings": [
                     make_warning(
                         "artefact_missing",
-                        "no observed_water_cells.parquet has been staged; run "
-                        "pipeline/build_observed_cells.py to build it from the cached tiles",
+                        "this run has no immutable observed-water cell snapshot; regenerate the run",
                         "observed_water_cells.parquet",
                     )
                 ],
@@ -1560,20 +1559,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         years = sorted(int(value) for value in frame["year"].unique())
         available_years = years
-        if year is not None:
-            if year not in years:
-                warnings.append(
-                    make_warning(
-                        "year_not_available",
-                        f"{year} is not among the staged years {years}; the wettest staged year is used",
-                        "observed_water_cells.parquet",
-                    )
-                )
-            else:
-                frame = frame[frame["year"] == year]
-        if frame.empty:
-            frame = pd.read_parquet(ctx.data_dir / "curated" / "city" / "observed_water_cells.parquet")
-            frame = frame[frame["year"] == max(years)]
+        if not years or (year is not None and year not in years):
+            return {
+                "type": "FeatureCollection", "features": [], "available": False,
+                "run_id": run.run_id, "year": year, "available_years": years,
+                "warnings": [make_warning("year_not_available",
+                    f"No water-cell snapshot for requested year {year}; available years: {years}. No year is substituted.",
+                    "observed_water_cells.parquet")],
+            }
+        selected_year = year if year is not None else max(years)
+        frame = frame[frame["year"] == selected_year]
 
         filtered = frame[frame["water_share"] >= min_share]
         if filtered.empty:
@@ -1980,7 +1975,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         run = resolve_run(run_id)
         warnings: list[ApiWarning] = []
         frame, read_warnings = read_parquet(
-            ctx.data_dir / "curated" / "city" / "destinations.parquet"
+            artefact_path(run, "destinations.parquet")
         )
         warnings.extend(read_warnings)
         if frame is None:
@@ -1995,8 +1990,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "warnings": [
                     make_warning(
                         "artefact_missing",
-                        "destination candidates are staged in data/curated/city/destinations.parquet "
-                        "and were not produced for this run",
+                        "this run has no immutable destination-candidate snapshot",
                         "destinations.parquet",
                     )
                 ],

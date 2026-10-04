@@ -306,6 +306,23 @@
         "Contour lines derived from it (fitness)"
       ],
       "used_in_runs": true
+    },
+    {
+      "source_id": "geofabrik-thailand-osm-20260929",
+      "agency": "OpenStreetMap contributors / Geofabrik",
+      "dataset": "Thailand OSM extract dated 2026-09-29",
+      "model_role": "Full-BMA roads, buildings, water and unverified destination candidates",
+      "resource_url": "https://download.geofabrik.de/asia/thailand-260929.osm.pbf",
+      "format": "OSM PBF",
+      "spatial_resolution": "Mapped features",
+      "temporal_resolution": "Snapshot",
+      "authentication": "None",
+      "licence": "ODbL 1.0",
+      "licence_url": "https://www.openstreetmap.org/copyright",
+      "attribution": "OpenStreetMap contributors, Geofabrik",
+      "status": "approved",
+      "reviewed_at": "2026-10-01",
+      "notes": "Dated country extract replaces the incomplete BBBike city rectangle. Require archived publisher extraction polygon to cover the BMA before staging. Geometric source coverage is not OSM mapping completeness."
     }
   ]
 }

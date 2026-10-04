@@ -40,6 +40,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
@@ -234,10 +235,10 @@ def edges_in_water(
     return wet.any(axis=0)
 
 
-def _water_cell_geometries(year: int) -> gpd.GeoDataFrame:
-    frame = _load(CURATED_DIR / "city" / "observed_water_cells.parquet")
+def _water_cell_geometries(year: int, run_dir: Path) -> gpd.GeoDataFrame:
+    frame = _load(run_dir / "observed_water_cells.parquet")
     if frame is None:
-        return gpd.GeoDataFrame(geometry=[], crs="EPSG:32647")
+        raise FileNotFoundError(run_dir / "observed_water_cells.parquet")
     selected = frame[frame["year"] == year]
     if selected.empty:
         return gpd.GeoDataFrame(geometry=[], crs="EPSG:32647")
@@ -278,6 +279,7 @@ def select_designated_destinations(
 
 def run_connectivity_screening(
     *,
+    run_dir: Path,
     year: int = 2012,
     analysis_crs: str = "EPSG:32647",
     designated: int = DESIGNATED_DESTINATIONS,
@@ -294,11 +296,11 @@ def run_connectivity_screening(
     started = time.time()
     warnings: list[str] = []
 
-    run_dir = latest_run_dir()
+    run_dir = Path(run_dir)
     edges = _load(run_dir / "network_edges.parquet")
     grid = pd.read_parquet(run_dir / "population_grid_1km.parquet")
-    water = _water_cell_geometries(year)
-    destinations = _load(CURATED_DIR / "city" / "destinations.parquet")
+    water = _water_cell_geometries(year, run_dir)
+    destinations = _load(run_dir / "destinations.parquet")
 
     if edges is None:
         return ScreeningResult(
@@ -326,7 +328,9 @@ def run_connectivity_screening(
         closed_mask = edges_in_water(edges, year)
     else:
         closed_mask = np.zeros(len(edges), dtype=bool)
-    if 0.0 < closure_fraction < 1.0:
+    if not 0.0 <= closure_fraction <= 1.0:
+        raise ValueError("closure_fraction must be between 0 and 1")
+    if 0.0 <= closure_fraction < 1.0:
         wet = np.flatnonzero(closed_mask)
         if wet.size:
             keep = np.random.default_rng(20260930).choice(
@@ -384,15 +388,16 @@ def run_connectivity_screening(
 
     cell_points = np.column_stack([grid["x"].to_numpy(), grid["y"].to_numpy()])
     nodes = np.array(
-        [index.nearest_node(x, y, index.coords) or -1 for x, y in cell_points], dtype="int64"
+        [(node if node is not None else -1)
+         for x, y in cell_points
+         for node in [index.nearest_node(x, y, index.coords)]], dtype="int64"
     )
     no_access = int((nodes < 0).sum())
     valid = nodes >= 0
 
-    if matrix.size:
-        best = matrix[:, nodes].min(axis=0) if valid.any() else np.zeros(len(grid))
-    else:
-        best = np.full(len(grid), np.inf)
+    best = np.full(len(grid), np.inf)
+    if matrix.size and valid.any():
+        best[valid] = matrix[:, nodes[valid]].min(axis=0)
 
     reachable = valid & np.isfinite(best)
     population = grid["pop"].to_numpy(dtype="float64")
@@ -442,12 +447,12 @@ def run_connectivity_screening(
     )
 
 
-def compare_years(years: tuple[int, ...] = (2010, 2011, 2012, 2020)) -> dict[str, Any]:
+def compare_years(years: tuple[int, ...] = (2010, 2011, 2012, 2020), *, run_dir: Path) -> dict[str, Any]:
     """Run the screening for several observed years, for a sensitivity view."""
     results = {}
     for year in years:
-        results[str(year)] = run_connectivity_screening(year=year).as_dict()
-    target = ensure_dir(CURATED_DIR / "city" / "connectivity")
+        results[str(year)] = run_connectivity_screening(year=year, run_dir=run_dir).as_dict()
+    target = Path(run_dir)
     write_json(
         target / "connectivity_screening.json",
         {
@@ -464,7 +469,7 @@ def compare_years(years: tuple[int, ...] = (2010, 2011, 2012, 2020)) -> dict[str
 CLOSURE_FRACTIONS = (1.0, 0.5, 0.25)
 
 
-def closure_sensitivity(years: tuple[int, ...] = (2010, 2012)) -> dict[str, Any]:
+def closure_sensitivity(years: tuple[int, ...] = (2010, 2011, 2012, 2020), *, run_dir: Path) -> dict[str, Any]:
     """How much of the result is assumption rather than observation.
 
     "Any water closes the way" is a choice, not a measurement. This re-runs
@@ -475,7 +480,7 @@ def closure_sensitivity(years: tuple[int, ...] = (2010, 2012)) -> dict[str, Any]
     rows: list[dict[str, Any]] = []
     for year in years:
         for fraction in CLOSURE_FRACTIONS:
-            result = run_connectivity_screening(year=year, closure_fraction=fraction)
+            result = run_connectivity_screening(year=year, closure_fraction=fraction, run_dir=run_dir)
             rows.append(
                 {
                     "year": year,

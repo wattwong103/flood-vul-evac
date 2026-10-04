@@ -153,6 +153,26 @@ def test_health_returns_200(client: TestClient, runs_dir: Path) -> None:
     assert body["run_count"] == 0
 
 
+@pytest.mark.parametrize("endpoint,table", [("observed-water/cells", "observed_water_cells"),
+                                            ("destinations", "destinations")])
+def test_city_layers_use_only_the_selected_runs_snapshot(client, runs_dir, tmp_path, monkeypatch, endpoint, table):
+    shared = tmp_path / "data" / "curated" / "city"
+    shared.mkdir(parents=True)
+    monkeypatch.setenv("BKKFLOW_DATA_DIR", str(tmp_path / "data"))
+    def rows(label):
+        return pd.DataFrame([{"cell_id": label, "year": 2020, "water_share": 0.5,
+            "water_km2": 0.5, "lon": 100.5, "lat": 13.7, "destination_id": label,
+            "destination_class": "education", "verified": False}])
+    rows("shared-other-run").to_parquet(shared / f"{table}.parquet", index=False)
+    _write_run(runs_dir, "snapshot", tables={table: rows("selected-run")})
+    _write_run(runs_dir, "legacy-no-snapshot")
+    result = client.get(f"/v1/runs/snapshot/{endpoint}")
+    assert result.status_code == 200
+    assert "selected-run" in result.text and "shared-other-run" not in result.text
+    old = client.get(f"/v1/runs/legacy-no-snapshot/{endpoint}").json()
+    assert old["available"] is False
+
+
 def test_health_reports_missing_runs_directory(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1113,3 +1133,14 @@ def test_export_does_not_hash_large_files(
     # Computing a digest here would mean reading hundreds of megabytes.
     assert by_path["persons.parquet"]["sha256"] is None
     assert by_path["persons.parquet"]["size_bytes"] == 5000
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_water_cells_never_substitute_an_unavailable_year(client, runs_dir, empty):
+    rows = pd.DataFrame([{"cell_id": "old-water", "year": 2010, "water_share": .5,
+        "water_km2": .5, "lon": 100.5, "lat": 13.7}])
+    _write_run(runs_dir, "water-years", tables={"observed_water_cells": rows.iloc[:0] if empty else rows})
+    response = client.get("/v1/runs/water-years/observed-water/cells?year=2020")
+    assert response.status_code == 200
+    assert response.json()["features"] == []
+    assert response.json()["available"] is False

@@ -37,7 +37,7 @@ import rasterio
 from rasterio.mask import mask as rio_mask
 
 from ..http import HttpClient
-from ..util import STAGED_DIR, ensure_dir, sha256_file, utc_now_iso, write_json
+from ..util import STAGED_DIR, ensure_dir, sha256_file, read_json, utc_now_iso, write_json
 
 SOURCE_ID = "jrc-global-surface-water-v1.4"
 BASE = (
@@ -229,10 +229,12 @@ def fetch_years(
     for year in years:
         name = tile_name_for(year, bounds)
         destination = target_dir / name
-        if not destination.is_file():
+        sidecar = destination.with_suffix(".provenance.json")
+        resource_url = f"{BASE}/yearlyClassification{year}/{name}"
+        if not destination.is_file() or not sidecar.is_file():
             try:
                 result = client.get(
-                    f"{BASE}/yearlyClassification{year}/{name}", use_cache=True, retries=2, timeout=900
+                    resource_url, use_cache=True, retries=2, timeout=900
                 )
             except Exception as error:  # noqa: BLE001 - recorded, not fatal
                 # The downloadable set does not necessarily span every year the
@@ -241,9 +243,13 @@ def fetch_years(
                 unavailable.append({"year": year, "tile": name, "error": str(error)[:200]})
                 continue
             destination.write_bytes(result.body)
-            retrieved_at = result.retrieved_at
-        else:
-            retrieved_at = utc_now_iso()
+            write_json(sidecar, {"resource_url": resource_url,
+                "retrieved_at": result.retrieved_at, "content_sha256": sha256_file(destination)})
+        metadata = read_json(sidecar)
+        if (metadata.get("resource_url") != resource_url or not metadata.get("retrieved_at")
+                or metadata.get("content_sha256") != sha256_file(destination)):
+            raise ValueError("JRC tile provenance does not match the staged source")
+        retrieved_at = metadata["retrieved_at"]
         records.append(
             measure_year(
                 year, name, destination, bounds,

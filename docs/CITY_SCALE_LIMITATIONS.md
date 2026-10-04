@@ -7,8 +7,10 @@ Bangkok Metropolitan Administration (1,643.5 km²)
 
 ## Summary
 
-The city baseline is real and complete: the network, the buildings and the
-population are all available and were built. **Flood depth is not**, and this
+The city baseline contains mapped network, buildings and modelled population.
+The former BBBike extract did not cover the full BMA. New runs require a
+Geofabrik Thailand source polygon that covers the AOI; this verifies source
+coverage, not completeness of OSM mapping. **Flood depth is not**, and this
 document records why, so that the absence is a decision on the record rather
 than a gap nobody noticed.
 
