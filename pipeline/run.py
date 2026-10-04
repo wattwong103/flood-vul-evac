@@ -26,6 +26,7 @@ from bkkflow.http import HttpClient  # noqa: E402
 from bkkflow.runner import execute_run  # noqa: E402
 from bkkflow.sources import osm  # noqa: E402
 from bkkflow.sources import population_source  # noqa: E402
+from bkkflow.sources.pilot_stage import stage_pilot  # noqa: E402
 from bkkflow.sources.registry import load_registry  # noqa: E402
 from bkkflow.util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, write_json  # noqa: E402
 
@@ -118,6 +119,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0 if summary["validation_passed"] else 2
 
 
+def cmd_stage_pilot(args: argparse.Namespace) -> int:
+    summary = stage_pilot(args.pilot)
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
 def cmd_ingest_city(args: argparse.Namespace) -> int:
     """Stage the whole-city OSM extract and the city population grid."""
     import geopandas as gpd
@@ -194,6 +201,10 @@ def main() -> int:
     )
     sub.add_parser("city", help="execute the city baseline run").set_defaults(func=cmd_city)
     sub.add_parser("registry", help="print the source registry").set_defaults(func=cmd_registry)
+
+    stage = sub.add_parser("stage-pilot", help="stage one named pilot from verified regional sources")
+    stage.add_argument("--pilot", required=True, help="named AOI configuration")
+    stage.set_defaults(func=cmd_stage_pilot)
 
     run = sub.add_parser("run", help="execute one full run")
     run.add_argument("--baseline", action="store_true", help="disable the flood scenario")

@@ -309,3 +309,173 @@ def _verify_inputs(
         raise ValueError("OSM coverage polygon hash mismatch")
     return city_record, osm_meta, aoi, population_meta
 
+
+def stage_pilot(
+    pilot_id: str,
+    *,
+    config_dir: str | Path = CONFIG_DIR,
+    curated_dir: str | Path = CURATED_DIR,
+    city_dir: str | Path = CITY_DIR,
+    pbf_path: str | Path = PBF_PATH,
+    coverage_path: str | Path = COVERAGE_PATH,
+    population_path: str | Path = POPULATION_PATH,
+) -> dict[str, Any]:
+    """Stage one named AOI atomically; validate rather than overwrite an existing stage."""
+    curated_dir = Path(curated_dir)
+    bundle = load_pilot_bundle(pilot_id, config_dir=config_dir, curated_dir=curated_dir)
+    root = bundle.input_root
+    if root.exists():
+        return {**validate_staged_pilot(root, expected_bundle=bundle), "reused": True}
+
+    city_dir = Path(city_dir)
+    pbf_path = Path(pbf_path)
+    coverage_path = Path(coverage_path)
+    population_path = Path(population_path)
+    city_record, osm_meta, aoi, population_meta = _verify_inputs(
+        bundle,
+        city_dir=city_dir,
+        pbf_path=pbf_path,
+        coverage_path=coverage_path,
+        population_path=population_path,
+    )
+
+    root.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{pilot_id}.staging-", dir=root.parent))
+    (staging / "osm").mkdir()
+    (staging / "population").mkdir()
+    outputs: dict[str, dict[str, Any]] = {}
+
+    aoi_path = staging / "aoi.parquet"
+    aoi.to_parquet(aoi_path, index=False)
+    geometry = aoi.geometry.iloc[0]
+    relation_id = int(bundle.pilot["aoi"]["osm_relation_id"])
+    aoi_provenance = {
+        "aoi_id": pilot_id,
+        "source_id": bundle.sources["osm"],
+        "retrieved_at": osm_meta["retrieved_at"],
+        "content_sha256": osm_meta["content_sha256"],
+        "osm_id": relation_id,
+        "geometry_sha256": geometry_sha256(geometry),
+        "analysis_crs": bundle.pilot["analysis_crs"],
+        "area_km2": round(float(aoi.to_crs(bundle.pilot["analysis_crs"]).area.iloc[0]) / 1e6, 4),
+    }
+    aoi_provenance_path = staging / "aoi.provenance.json"
+    write_json(aoi_provenance_path, aoi_provenance)
+    outputs["aoi"] = _output(staging, aoi_path, rows=1, crs=aoi.crs.to_string(), kind="geoparquet")
+    outputs["aoi_provenance"] = _output(staging, aoi_provenance_path, rows=None, crs=None, kind="json")
+
+    layer_names = (("roads", "roads"), ("buildings", "buildings"), ("water_lines", "water"))
+    fetches = []
+    layer_records = {}
+    for source_name, output_name in layer_names:
+        source = gpd.read_parquet(city_dir / f"{source_name}.parquet")
+        if source.crs is None or source.crs.to_epsg() != 4326:
+            raise ValueError(f"City cached {source_name} must declare EPSG:4326")
+        scoped, geometry_diagnostics = _scope_layer(source, geometry)
+        if scoped.empty:
+            raise ValueError(f"Pilot {pilot_id} has no {source_name} features")
+        target = staging / "osm" / f"{output_name}.parquet"
+        scoped.to_parquet(target, index=False)
+        role = output_name
+        outputs[role] = _output(
+            staging, target, rows=len(scoped), crs=scoped.crs.to_string(), kind="geoparquet"
+        )
+        layer_records[role] = {**outputs[role], "geometry_diagnostics": geometry_diagnostics}
+        fetches.append({
+            "retrieved_at": osm_meta["retrieved_at"],
+            "content_sha256": osm_meta["content_sha256"],
+            "query_sha256": stable_hash({
+                "aoi_id": pilot_id,
+                "geometry_sha256": aoi_provenance["geometry_sha256"],
+                "layer": source_name,
+                "predicate": "intersects",
+            }),
+        })
+    osm_provenance_path = staging / "osm/provenance.json"
+    write_json(osm_provenance_path, {
+        "aoi_id": pilot_id,
+        "source_id": bundle.sources["osm"],
+        "retrieved_at": osm_meta["retrieved_at"],
+        "content_sha256": osm_meta["content_sha256"],
+        "coverage_sha256": (city_record.get("coverage") or {})["sha256"],
+        "geometry_sha256": aoi_provenance["geometry_sha256"],
+        "layers": layer_records,
+        "fetches": fetches,
+    })
+    outputs["osm_provenance"] = _output(
+        staging, osm_provenance_path, rows=None, crs=None, kind="json"
+    )
+
+    polygon = geometry.geoms[0] if geometry.geom_type == "MultiPolygon" else geometry
+    clip_path = staging / "population/source_clip.tif"
+    clip_stats = population_source.clip_to_aoi(population_path, polygon, clip_path)
+    cells = population_module.build_population_cells(
+        clip_path,
+        aoi,
+        population_version=bundle.versions["population"],
+        analysis_crs=bundle.pilot["analysis_crs"],
+    )
+    retained = float(cells["pop_count"].sum())
+    if abs(retained - float(clip_stats["clip_total_population"])) > 1e-6:
+        raise ValueError("Population cell threshold discarded source-native counts")
+    cells_path = staging / "population/population_cells.parquet"
+    cells.to_parquet(cells_path, index=False)
+    population_provenance_path = staging / "population/provenance.json"
+    write_json(population_provenance_path, {
+        "aoi_id": pilot_id,
+        "source_id": bundle.sources["population"],
+        "retrieved_at": population_meta["retrieved_at"],
+        "content_sha256": population_meta["content_sha256"],
+        "population_version": bundle.versions["population"],
+        "resource_url": population_meta["resource_url"],
+        "geometry_sha256": aoi_provenance["geometry_sha256"],
+        "pixel_policy": "center-in-polygon; no resampling; native nodata excluded; float64 sum",
+        "positive_cells": int(len(cells)),
+        "positive_residents": retained,
+        "discarded_le_0_5_residents": 0.0,
+    })
+    outputs["population_clip"] = _output(staging, clip_path, rows=None, crs=None, kind="raster")
+    outputs["population_cells"] = _output(
+        staging, cells_path, rows=len(cells), crs=cells.crs.to_string(), kind="geoparquet"
+    )
+    outputs["population_provenance"] = _output(
+        staging, population_provenance_path, rows=None, crs=None, kind="json"
+    )
+
+    manifest = {
+        "state": "complete",
+        "aoi_id": pilot_id,
+        "sources": bundle.sources,
+        "source_sha256": bundle.pilot["source_sha256"],
+        "analysis_crs": bundle.pilot["analysis_crs"],
+        "inputs": {
+            "osm": {
+                "source_id": bundle.sources["osm"],
+                "content_sha256": osm_meta["content_sha256"],
+                "retrieved_at": osm_meta["retrieved_at"],
+                "resource_url": city_record["resource_url"],
+                "coverage_sha256": (city_record.get("coverage") or {})["sha256"],
+                "cached_layer_sha256": {
+                    name: record["sha256"] for name, record in city_record["layers"].items()
+                },
+            },
+            "population": {
+                "source_id": bundle.sources["population"],
+                "content_sha256": population_meta["content_sha256"],
+                "retrieved_at": population_meta["retrieved_at"],
+                "resource_url": population_meta["resource_url"],
+            },
+        },
+        "geometry": {
+            "osm_relation_id": relation_id,
+            "content_sha256": aoi_provenance["geometry_sha256"],
+            "source_crs": "EPSG:4326",
+            "analysis_crs": bundle.pilot["analysis_crs"],
+            "area_km2": aoi_provenance["area_km2"],
+        },
+        "outputs": outputs,
+    }
+    write_json(staging / "stage_manifest.json", manifest)
+    validate_staged_pilot(staging, expected_bundle=bundle)
+    staging.rename(root)
+    return {**manifest, "reused": False}
