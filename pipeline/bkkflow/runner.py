@@ -115,9 +115,10 @@ def _write_parquet(context: RunContext, name: str, frame: pd.DataFrame | gpd.Geo
 def register_output(
     context: RunContext, role: str, path: Path, *, rows: int | None = None, crs: str | None = None
 ) -> None:
-    context.outputs.append(
-        manifest_module.output_entry(role, path, row_count=rows, crs=crs)
-    )
+    entry = manifest_module.output_entry(role, path, row_count=rows, crs=crs)
+    if any(existing.get("uri") == entry["uri"] for existing in context.outputs):
+        raise ValueError(f"Duplicate output URI: {entry['uri']}")
+    context.outputs.append(entry)
 
 
 def execute_run(
@@ -368,8 +369,6 @@ def execute_run(
         seed=seed,
         mobility_profiles=sample.set_index("person_id")["mobility_profile"],
     )
-    trips_path = _write_parquet(context, "trips.parquet", trips)
-    register_output(context, "trips", trips_path, rows=len(trips))
     context.record("trips", time.time() - stage_start, rows=len(trips))
 
     stage_start = time.time()
@@ -743,6 +742,7 @@ def _finish_run(
     schema_problems = manifest_module.validate_manifest(manifest)
     if schema_problems:
         manifest["warnings"].append(f"manifest schema problems: {len(schema_problems)}")
+    manifest_module.verify_output_integrity(context.run_dir, manifest["outputs"])
     write_json(context.run_dir / "manifest.json", manifest)
 
     stats = _build_stats(

@@ -178,6 +178,20 @@ def test_named_pilot_rejects_tampered_stage_before_run(pilot_inputs):
     assert not pilot_inputs.exists()
 
 
+def test_output_integrity_failure_blocks_manifest_publication(pilot_inputs, monkeypatch):
+    def fail_publication(*_args, **_kwargs):
+        raise ValueError("final output integrity failed")
+
+    monkeypatch.setattr(runner.manifest_module, "verify_output_integrity", fail_publication)
+    with pytest.raises(ValueError, match="final output integrity failed"):
+        runner.execute_run(pilot_id="khlong-san-district", max_agents=10)
+
+    run_dirs = list(pilot_inputs.iterdir())
+    assert len(run_dirs) == 1
+    assert not (run_dirs[0] / "manifest.json").exists()
+    assert read_json(run_dirs[0] / "run_state.json")["state"] != "published"
+
+
 @pytest.mark.parametrize("check_number", [1, 2])
 def test_pilot_drift_at_either_publication_check_stays_failed(pilot_inputs, monkeypatch, check_number):
     verify = runner.verify_code_identity

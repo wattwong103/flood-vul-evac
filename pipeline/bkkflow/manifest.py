@@ -92,3 +92,25 @@ def output_entry(role: str, path: str | Path, *, row_count: int | None = None, c
     if crs:
         entry["crs"] = crs
     return entry
+
+
+def verify_output_integrity(run_dir: str | Path, outputs: list[dict[str, Any]]) -> None:
+    """Require unique in-run URIs whose declared hashes match final file bytes."""
+    root = Path(run_dir).resolve()
+    seen: set[str] = set()
+    for entry in outputs:
+        uri = entry.get("uri")
+        if not isinstance(uri, str) or not uri:
+            raise ValueError("Output URI is missing")
+        if uri in seen:
+            raise ValueError(f"Duplicate output URI: {uri}")
+        seen.add(uri)
+
+        relative = Path(uri)
+        target = (root / relative).resolve()
+        if relative.is_absolute() or not target.is_relative_to(root):
+            raise ValueError(f"Output URI escapes run directory: {uri}")
+        if not target.is_file():
+            raise ValueError(f"Output file is missing: {uri}")
+        if entry.get("content_sha256") != sha256_file(target):
+            raise ValueError(f"Output hash mismatch: {uri}")
