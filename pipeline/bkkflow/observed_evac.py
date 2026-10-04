@@ -46,11 +46,10 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from .city_network import CityRoutingIndex
+from .city_network import CityRoutingIndex, SNAP_TOLERANCE_M
 from .util import CURATED_DIR, ensure_dir, utc_now_iso, write_json
 
 DESIGNATED_DESTINATIONS = 150
-SNAP_TOLERANCE_M = 700.0
 CLEARANCE_THRESHOLDS_MIN = (15.0, 30.0, 60.0, 120.0)
 
 SEVERITY_TEXT = (
@@ -105,6 +104,12 @@ class ScreeningResult:
             "threshold_minutes_reached": self.thresholds,
             "designated_destinations": self.designated_destinations,
             "closure_fraction": self.closure_fraction,
+            "access_anchors": "baseline walking graph, fixed across closures",
+            "snap_tolerance_m": SNAP_TOLERANCE_M,
+            "routing_cutoff_minutes": 180,
+            "closure_selection": "seeded permutation of sorted wet-edge IDs, nested prefixes",
+            "exposure_method": "positive area overlap of 1 km population and water-containing cells",
+            "travel_percentiles_weighting": "unweighted reachable exposed cells",
             "elapsed_seconds": round(self.elapsed_seconds, 1),
             "warnings": self.warnings,
         }
@@ -152,7 +157,7 @@ def _load(path) -> gpd.GeoDataFrame | None:
     return frame
 
 
-WATER_MASK_CACHE: dict[int, Any] = {}
+WATER_MASK_CACHE: dict[tuple, Any] = {}
 
 
 def water_mask(year: int):
@@ -165,11 +170,6 @@ def water_mask(year: int):
     finding. The 30 m classification is the resolution at which "is this road
     wet" is a meaningful question.
     """
-    if year in WATER_MASK_CACHE:
-        return WATER_MASK_CACHE[year]
-
-    from pathlib import Path as _Path
-
     import rasterio
     from rasterio.mask import mask as rio_mask
 
@@ -178,10 +178,10 @@ def water_mask(year: int):
 
     aoi = load_aoi("bangkok-bma")
     bounds = tuple(float(value) for value in aoi.geometry.union_all().bounds)
-    path = _Path("data/staged/gsw") / gsw_module.tile_name_for(year, bounds)
-    if not path.is_file():
-        WATER_MASK_CACHE[year] = None
-        return None
+    path, metadata = gsw_module.staged_tile(year, bounds)
+    key = (str(path.resolve()), metadata["content_sha256"], aoi.geometry.union_all().wkb)
+    if key in WATER_MASK_CACHE:
+        return WATER_MASK_CACHE[key]
     with rasterio.open(path) as dataset:
         data, transform = rio_mask(
             dataset,
@@ -192,7 +192,7 @@ def water_mask(year: int):
         )
         crs = dataset.crs
     result = (gsw_module.is_water(data[0]), transform, crs)
-    WATER_MASK_CACHE[year] = result
+    WATER_MASK_CACHE[key] = result
     return result
 
 
@@ -228,10 +228,12 @@ def edges_in_water(
         ys.append(points[:, 1])
     mask_x, mask_y = to_mask.transform(np.concatenate(xs), np.concatenate(ys))
     rows, cols = rowcol(transform, mask_x, mask_y)
-    rows = np.clip(np.asarray(rows, dtype="int64"), 0, mask.shape[0] - 1)
-    cols = np.clip(np.asarray(cols, dtype="int64"), 0, mask.shape[1] - 1)
+    rows, cols = np.asarray(rows, dtype="int64"), np.asarray(cols, dtype="int64")
+    inside = (rows >= 0) & (rows < mask.shape[0]) & (cols >= 0) & (cols < mask.shape[1])
+    sampled = np.zeros(len(rows), dtype=bool)
+    sampled[inside] = mask[rows[inside], cols[inside]]
     # Concatenation groups by sample fraction, not by edge.
-    wet = mask[rows, cols].reshape(samples_per_edge, len(edges))
+    wet = sampled.reshape(samples_per_edge, len(edges))
     return wet.any(axis=0)
 
 
@@ -275,6 +277,38 @@ def select_designated_destinations(
         step = max(len(frame) // count, 1)
         frame = frame.iloc[::step].head(count)
     return frame
+
+
+def exposed_cells(grid: pd.DataFrame, water: gpd.GeoDataFrame) -> np.ndarray:
+    """Cell-footprint co-location, counting each population cell at most once.
+
+    Grids may have different origins. This is a coarse exposure proxy, not the
+    number of residents within the 30 m water pixels of an intersecting cell.
+    """
+    import shapely
+    exposed = np.zeros(len(grid), dtype=bool)
+    if water.empty or grid.empty:
+        return exposed
+    def footprints(x, y):
+        return shapely.box(x - 500., y - 500., x + 500., y + 500.)
+    population_boxes = footprints(grid["x"].to_numpy(), grid["y"].to_numpy())
+    water_boxes = footprints(water.geometry.x.to_numpy(), water.geometry.y.to_numpy())
+    rows, columns = shapely.STRtree(water_boxes).query(population_boxes, predicate="intersects")
+    overlap = shapely.area(shapely.intersection(population_boxes[rows], water_boxes[columns]))
+    exposed[rows[overlap > 0]] = True
+    return exposed
+
+
+def closure_mask(wet_mask: np.ndarray, edge_ids: np.ndarray, fraction: float) -> np.ndarray:
+    """Nested, reproducible closures, independent of source row order."""
+    if not 0.0 <= fraction <= 1.0:
+        raise ValueError("closure_fraction must be between 0 and 1")
+    wet = np.flatnonzero(wet_mask)
+    ordered = wet[np.argsort(np.asarray(edge_ids)[wet], kind="stable")]
+    priority = np.random.default_rng(20260930).permutation(ordered)
+    result = np.zeros_like(wet_mask, dtype=bool)
+    result[priority[:int(round(len(wet) * fraction))]] = True
+    return result
 
 
 def run_connectivity_screening(
@@ -328,17 +362,7 @@ def run_connectivity_screening(
         closed_mask = edges_in_water(edges, year)
     else:
         closed_mask = np.zeros(len(edges), dtype=bool)
-    if not 0.0 <= closure_fraction <= 1.0:
-        raise ValueError("closure_fraction must be between 0 and 1")
-    if 0.0 <= closure_fraction < 1.0:
-        wet = np.flatnonzero(closed_mask)
-        if wet.size:
-            keep = np.random.default_rng(20260930).choice(
-                wet, size=int(round(wet.size * closure_fraction)), replace=False
-            )
-            reduced = np.zeros_like(closed_mask)
-            reduced[keep] = True
-            closed_mask = reduced
+    closed_mask = closure_mask(closed_mask, edges["edge_id"].to_numpy(), closure_fraction)
     closed_edges = int(closed_mask.sum())
     total_edges = int(len(edges))
 
@@ -350,6 +374,7 @@ def run_connectivity_screening(
         edges,
         open_mask,
         edges["speed_walk_mps"].fillna(1.25).to_numpy(),
+        anchor_mask=edges["walk_allowed"].to_numpy(dtype=bool),
     )
 
     targets = (
@@ -374,17 +399,7 @@ def run_connectivity_screening(
     else:
         matrix = np.vstack(fields)
 
-    # Exposed population: cells that hold observed water.
-    water_points = water.geometry.values
-    exposed = np.zeros(len(grid), dtype=bool)
-    if len(water_points) and "x" in grid.columns:
-        from scipy.spatial import cKDTree
-
-        tree_points = np.column_stack([np.asarray([p.x for p in water_points]), np.asarray([p.y for p in water_points])])
-        lookup = cKDTree(tree_points)
-        distance, _ = lookup.query(np.column_stack([grid["x"].to_numpy(), grid["y"].to_numpy()]))
-        # A 1 km cell is exposed if its centre is within half a cell diagonal.
-        exposed = distance <= 707.0
+    exposed = exposed_cells(grid, water)
 
     cell_points = np.column_stack([grid["x"].to_numpy(), grid["y"].to_numpy()])
     nodes = np.array(

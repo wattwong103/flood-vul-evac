@@ -37,6 +37,7 @@ import rasterio
 from rasterio.mask import mask as rio_mask
 
 from ..http import HttpClient
+from ..provenance import verify_source
 from ..util import STAGED_DIR, ensure_dir, sha256_file, read_json, utc_now_iso, write_json
 
 SOURCE_ID = "jrc-global-surface-water-v1.4"
@@ -132,6 +133,13 @@ def tile_name_for(year: int, bounds: tuple[float, float, float, float]) -> str:
     return f"yearlyClassification{year}-{lat_offset:010d}-{lon_offset:010d}.tif"
 
 
+def staged_tile(year: int, bounds: tuple[float, float, float, float]) -> tuple[Path, dict]:
+    """One gate for standalone raster consumers, including cached masks."""
+    name = tile_name_for(year, bounds)
+    path = STAGED_DIR / "gsw" / name
+    return path, verify_source(path, f"{BASE}/yearlyClassification{year}/{name}")
+
+
 def fetch_year(
     client: HttpClient,
     year: int,
@@ -147,9 +155,11 @@ def fetch_year(
         result = client.get(f"{BASE}/yearlyClassification{year}/{name}", use_cache=True,
                             retries=3, timeout=900)
         destination.write_bytes(result.body)
-        retrieved_at = result.retrieved_at
-    else:
-        retrieved_at = utc_now_iso()
+        write_json(destination.with_suffix(".provenance.json"), {
+            "resource_url": f"{BASE}/yearlyClassification{year}/{name}",
+            "retrieved_at": result.retrieved_at, "content_sha256": sha256_file(destination)})
+    retrieved_at = verify_source(destination, f"{BASE}/yearlyClassification{year}/{name}",
+                                cache_dir=getattr(client, "cache_dir", None))["retrieved_at"]
 
     return measure_year(year, name, destination, bounds, aoi_geometry=None, retrieved_at=retrieved_at)
 
@@ -172,11 +182,14 @@ def measure_year(
                 series = geometry.geometry
                 geometry = series.union_all() if hasattr(series, "union_all") else series.unary_union
             geometries = [geometry]
-            data, _ = rio_mask(dataset, geometries, crop=True, filled=False)
-            array = data[0].compressed()
+            from rasterio.mask import raster_geometry_mask
+            outside, _, window = raster_geometry_mask(dataset, geometries, crop=True)
+            array = dataset.read(1, window=window, masked=False)[~outside]
         else:
             window = dataset.window(*bounds)
-            array = dataset.read(1, window=window, boundless=True, masked=True).compressed()
+            # Read in-bounds source codes without applying the TIFF nodata tag:
+            # class zero is a reportable no-observation class, not outside AOI.
+            array = dataset.read(1, window=window, masked=False).ravel()
 
         water = int(is_water(array).sum())
         pixel_area_km2 = (PIXEL_DEGREES * 111.32) ** 2 * np.cos(np.radians(np.mean(bounds[1::2])))
@@ -231,7 +244,7 @@ def fetch_years(
         destination = target_dir / name
         sidecar = destination.with_suffix(".provenance.json")
         resource_url = f"{BASE}/yearlyClassification{year}/{name}"
-        if not destination.is_file() or not sidecar.is_file():
+        if not destination.is_file():
             try:
                 result = client.get(
                     resource_url, use_cache=True, retries=2, timeout=900
@@ -245,10 +258,7 @@ def fetch_years(
             destination.write_bytes(result.body)
             write_json(sidecar, {"resource_url": resource_url,
                 "retrieved_at": result.retrieved_at, "content_sha256": sha256_file(destination)})
-        metadata = read_json(sidecar)
-        if (metadata.get("resource_url") != resource_url or not metadata.get("retrieved_at")
-                or metadata.get("content_sha256") != sha256_file(destination)):
-            raise ValueError("JRC tile provenance does not match the staged source")
+        metadata = verify_source(destination, resource_url, cache_dir=getattr(client, "cache_dir", None))
         retrieved_at = metadata["retrieved_at"]
         records.append(
             measure_year(

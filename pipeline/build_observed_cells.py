@@ -3,7 +3,8 @@
 The observed extent is the only measured hazard layer in the project, so it
 should be visible on the map rather than only as a table of numbers. Rendering
 it at the source 30 m would mean serving hundreds of thousands of points, so it
-is aggregated to the same fixed 1 km public grid the population uses.
+is aggregated to a fixed 1 km projected grid. The population grid can have a
+different origin; screening compares the full cell footprints.
 
 This reads tiles that are already staged, so it does not require re-running the
 city pipeline.
@@ -50,10 +51,11 @@ def build(*, out_dir: Path | None = None) -> dict:
 
     for year in YEARS:
         name = gsw.tile_name_for(year, bounds)
-        path = Path("data/staged/gsw") / name
+        path = gsw.STAGED_DIR / "gsw" / name
         if not path.is_file():
             per_year[year] = {"status": "tile_not_staged"}
             continue
+        path, source = gsw.staged_tile(year, bounds)
         with rasterio.open(path) as dataset:
             data, transform = rio_mask(
                 dataset, [aoi_wgs84], crop=True, filled=True, nodata=gsw.CODE_NO_OBSERVATIONS
@@ -105,6 +107,7 @@ def build(*, out_dir: Path | None = None) -> dict:
             )
         per_year[year] = {
             "status": "ok",
+            "source": source,
             "cells_with_water": int(len(grouped)),
             "water_km2": float(grouped["w"].sum() * area_per_px),
         }
