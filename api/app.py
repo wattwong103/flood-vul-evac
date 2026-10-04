@@ -2040,14 +2040,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         after: Annotated[int, Query(ge=0, le=9223372036854775806)] = 0,
     ) -> dict[str, Any]:
         """Stable pages of public features intersecting a WGS84 viewport."""
-        from pipeline.bkkflow.map_index import query_map_index
+        from pipeline.bkkflow.map_index import MapIndexUnavailable, query_map_index
         run = resolve_run(run_id)
         try:
             bounds = tuple(float(value) for value in bbox.split(","))
             return query_map_index(run.path, layer, bounds, limit=limit, after=after)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        except (OSError, sqlite3.DatabaseError):
+        except (OSError, sqlite3.DatabaseError, MapIndexUnavailable):
             return {"type": "FeatureCollection", "run_id": run.run_id, "layer": layer,
                 "available": False, "features": [], "returned": 0, "next_cursor": None,
                 "truncated": False, "warnings": [make_warning("map_index_unavailable",

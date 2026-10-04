@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString, box
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from bkkflow.map_index import build_map_index, query_map_index
+from bkkflow.map_index import MapIndexUnavailable, build_map_index, query_map_index
 
 
 def make_run(tmp_path):
@@ -44,7 +44,7 @@ def test_run_identity_bounds_and_layers_are_enforced(tmp_path):
     other = tmp_path / "other"
     other.mkdir()
     (other / "map.sqlite").write_bytes((tmp_path / "map.sqlite").read_bytes())
-    with pytest.raises(ValueError, match="run identity"):
+    with pytest.raises(MapIndexUnavailable, match="run identity"):
         query_map_index(other, "network", (100, 13, 101, 14))
     for bbox in [(101, 13, 100, 14), (100, 13, float("nan"), 14)]:
         with pytest.raises(ValueError):
@@ -60,3 +60,31 @@ def test_projected_geometry_is_served_in_wgs84(tmp_path):
     build_map_index(tmp_path, "EPSG:32647")
     page = query_map_index(tmp_path, "network", (100.4, 13.6, 100.6, 13.8))
     assert page["features"][0]["geometry"]["coordinates"][0] == pytest.approx([100.5, 13.7])
+
+
+def test_failed_build_is_not_visible_and_can_be_retried(tmp_path, monkeypatch):
+    from bkkflow import map_index
+    original = map_index.shapely.from_wkt
+    def interrupted(*args):
+        assert not (tmp_path / "map.sqlite").exists()
+        raise RuntimeError("interrupted")
+    monkeypatch.setattr(map_index.shapely, "from_wkt", interrupted)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        make_run(tmp_path)
+    assert not (tmp_path / "map.sqlite").exists()
+    monkeypatch.setattr(map_index.shapely, "from_wkt", original)
+    # A file left by a hard process kill is private and does not prevent retry.
+    (tmp_path / ".map-abandoned.sqlite").write_bytes(b"unfinished")
+    assert build_map_index(tmp_path, "EPSG:4326")["rows"] == 4
+
+
+def test_competing_writer_cannot_replace_final_index(tmp_path, monkeypatch):
+    from bkkflow import map_index
+    original = map_index.shapely.from_wkt
+    def competitor(*args):
+        (tmp_path / "map.sqlite").write_bytes(b"another completed writer")
+        return original(*args)
+    monkeypatch.setattr(map_index.shapely, "from_wkt", competitor)
+    with pytest.raises(FileExistsError):
+        make_run(tmp_path)
+    assert (tmp_path / "map.sqlite").read_bytes() == b"another completed writer"
