@@ -572,16 +572,22 @@ def _finish_run(
     )
     register_output(context, "refuges", refuges_path, rows=len(destinations))
 
-    # Build the peak-time walk graph once: ways closed at the peak are not in
-    # the graph at all, so routing cannot traverse them.
+    # Build the peak-time walk graph once. Zero multipliers remove closed ways;
+    # every open way uses its depth-adjusted speed in the routing cost.
     peak_walk = edge_states[
         (edge_states["time_s"] == scenario.peak_time_s)
         & (edge_states["mode"] == mobility_module.MODE_WALK)
     ]
-    closed_edge_ids = set(peak_walk[peak_walk["closed"]]["edge_id"])
+    if peak_walk["edge_id"].duplicated().any():
+        raise ValueError("duplicate peak walking edge state")
+    peak_speed_multipliers = dict(
+        zip(peak_walk["edge_id"], peak_walk["speed_multiplier"])
+    )
     evacuation_index = mobility_module.NetworkIndex(
         mobility_module.build_routing_graph(
-            edges, mobility_module.MODE_WALK, excluded_edge_ids=closed_edge_ids
+            edges,
+            mobility_module.MODE_WALK,
+            speed_multipliers=peak_speed_multipliers,
         ),
         analysis_crs,
     )

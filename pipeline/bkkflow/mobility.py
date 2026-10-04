@@ -15,6 +15,7 @@ What matters for correctness here:
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -101,6 +102,7 @@ def build_routing_graph(
     mode: int,
     *,
     excluded_edge_ids: set[str] | None = None,
+    speed_multipliers: Mapping[str, float] | None = None,
 ) -> nx.Graph:
     """Build a single-mode cost graph from the noded edge table.
 
@@ -109,6 +111,12 @@ def build_routing_graph(
     deleting edges afterwards: parallel ways between the same node pair collapse
     to one edge, so a later removal would close a connection that is still open
     on another way.
+
+    When ``speed_multipliers`` is supplied, it must cover every routable edge.
+    A zero multiplier removes an edge; an open edge costs
+    ``length / (dry_speed * multiplier)``. Applying the multiplier before
+    parallel ways collapse ensures the graph retains the least-cost wet edge,
+    not merely the edge that was fastest when dry.
     """
     allowed = PEDESTRIAN_ALLOWED if mode == MODE_WALK else VEHICLE_ALLOWED
     speed_column = "speed_walk_mps" if mode == MODE_WALK else "speed_vehicle_mps"
@@ -117,9 +125,21 @@ def build_routing_graph(
         subset = subset[~subset["edge_id"].isin(excluded_edge_ids)]
     graph = nx.Graph()
     for row in subset.itertuples():
-        speed = float(getattr(row, speed_column.replace(".", "_")))
-        if speed <= 0:
+        dry_speed = float(getattr(row, speed_column.replace(".", "_")))
+        if dry_speed <= 0:
             continue
+        multiplier = 1.0
+        if speed_multipliers is not None:
+            if row.edge_id not in speed_multipliers:
+                raise ValueError(f"missing speed multiplier for edge {row.edge_id}")
+            multiplier = float(speed_multipliers[row.edge_id])
+            if not np.isfinite(multiplier) or not 0.0 <= multiplier <= 1.0:
+                raise ValueError(
+                    f"speed multiplier for edge {row.edge_id} must be between 0 and 1"
+                )
+            if multiplier == 0.0:
+                continue
+        speed = dry_speed * multiplier
         # Each edge geometry is a two-point segment, so the endpoints carry
         # the node coordinates the routing index needs.
         start_x, start_y = row.geometry.coords[0]
@@ -128,20 +148,20 @@ def build_routing_graph(
             if node_id not in graph.nodes:
                 graph.add_node(node_id, x=float(x), y=float(y))
         cost = float(row.length_m) / speed
+        attributes = {
+            "cost": cost,
+            "length_m": float(row.length_m),
+            "edge_id": row.edge_id,
+            "dry_speed_mps": dry_speed,
+            "speed_multiplier": multiplier,
+            "speed_mps": speed,
+        }
         if graph.has_edge(row.u, row.v):
-            # Parallel ways: keep the faster one, and remember both edge ids.
+            # Parallel ways: retain every attribute from the least-cost edge.
             if cost < graph[row.u][row.v]["cost"]:
-                graph[row.u][row.v]["cost"] = cost
-                graph[row.u][row.v]["edge_id"] = row.edge_id
+                graph[row.u][row.v].update(attributes)
         else:
-            graph.add_edge(
-                row.u,
-                row.v,
-                cost=cost,
-                length_m=float(row.length_m),
-                edge_id=row.edge_id,
-                speed_mps=speed,
-            )
+            graph.add_edge(row.u, row.v, **attributes)
     return graph
 
 

@@ -400,6 +400,10 @@ def test_closed_way_becomes_a_routable_line() -> None:
 # --------------------------------------------------------------------------
 
 
+def _routing_edges(records: list[dict]) -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame(records, geometry="geometry", crs="EPSG:32647")
+
+
 def test_excluded_edges_are_absent_from_the_routing_graph() -> None:
     build = network.build_network(_roads(), analysis_crs="EPSG:32647", network_version="t")
     closed = set(build.edges.loc[build.edges["highway"] == "primary", "edge_id"])
@@ -410,6 +414,195 @@ def test_excluded_edges_are_absent_from_the_routing_graph() -> None:
     assert reduced.number_of_edges() < full.number_of_edges()
     remaining = {data["edge_id"] for _, _, data in reduced.edges(data=True)}
     assert not (remaining & closed)
+
+
+def test_flood_multiplier_changes_cost_and_speed_attributes() -> None:
+    edges = _routing_edges([
+        {
+            "edge_id": "slow",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 100.0,
+            "speed_walk_mps": 2.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+        }
+    ])
+
+    graph = mobility.build_routing_graph(
+        edges, mobility.MODE_WALK, speed_multipliers={"slow": 0.5}
+    )
+
+    edge = graph[0][1]
+    assert edge["cost"] == pytest.approx(100.0)
+    assert edge["dry_speed_mps"] == pytest.approx(2.0)
+    assert edge["speed_multiplier"] == pytest.approx(0.5)
+    assert edge["speed_mps"] == pytest.approx(1.0)
+
+
+def test_zero_flood_multiplier_removes_edge() -> None:
+    edges = _routing_edges(
+        [
+            {
+                "edge_id": "closed",
+                "u": 0,
+                "v": 1,
+                "highway": "residential",
+                "length_m": 80.0,
+                "speed_walk_mps": 2.0,
+                "speed_vehicle_mps": 10.0,
+                "geometry": LineString([(0.0, 0.0), (80.0, 0.0)]),
+            },
+            {
+                "edge_id": "open-parallel",
+                "u": 0,
+                "v": 1,
+                "highway": "residential",
+                "length_m": 100.0,
+                "speed_walk_mps": 1.0,
+                "speed_vehicle_mps": 10.0,
+                "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+            },
+        ]
+    )
+
+    graph = mobility.build_routing_graph(
+        edges,
+        mobility.MODE_WALK,
+        speed_multipliers={"closed": 0.0, "open-parallel": 1.0},
+    )
+
+    assert graph.number_of_edges() == 1
+    assert graph[0][1]["edge_id"] == "open-parallel"
+
+
+@pytest.mark.parametrize("multiplier", [-0.1, 1.1, np.nan])
+def test_flood_multiplier_rejects_values_outside_closed_open_domain(
+    multiplier: float,
+) -> None:
+    edges = _routing_edges([
+        {
+            "edge_id": "invalid",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 100.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+        }
+    ])
+
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        mobility.build_routing_graph(
+            edges, mobility.MODE_WALK, speed_multipliers={"invalid": multiplier}
+        )
+
+
+def test_flood_multiplier_must_cover_every_routable_edge() -> None:
+    edges = _routing_edges([
+        {
+            "edge_id": "missing",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 100.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+        }
+    ])
+
+    with pytest.raises(ValueError, match="missing speed multiplier"):
+        mobility.build_routing_graph(
+            edges, mobility.MODE_WALK, speed_multipliers={}
+        )
+
+
+def test_route_selection_uses_flood_adjusted_cost() -> None:
+    edges = _routing_edges([
+        {
+            "edge_id": "direct",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 100.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+        },
+        {
+            "edge_id": "detour-a",
+            "u": 0,
+            "v": 2,
+            "highway": "residential",
+            "length_m": 60.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (50.0, 50.0)]),
+        },
+        {
+            "edge_id": "detour-b",
+            "u": 2,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 60.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(50.0, 50.0), (100.0, 0.0)]),
+        },
+    ])
+    multipliers = {"direct": 0.2, "detour-a": 1.0, "detour-b": 1.0}
+    index = mobility.NetworkIndex(
+        mobility.build_routing_graph(
+            edges, mobility.MODE_WALK, speed_multipliers=multipliers
+        ),
+        "EPSG:32647",
+    )
+
+    path, cost = index.route(0, 1)
+
+    assert path == [0, 2, 1]
+    assert cost == pytest.approx(120.0)
+
+
+def test_parallel_edge_selection_keeps_adjusted_winner_attributes() -> None:
+    edges = _routing_edges([
+        {
+            "edge_id": "dry-fast",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 100.0,
+            "speed_walk_mps": 2.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+        },
+        {
+            "edge_id": "wet-fast",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 90.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (90.0, 0.0)]),
+        },
+    ])
+    graph = mobility.build_routing_graph(
+        edges,
+        mobility.MODE_WALK,
+        speed_multipliers={"dry-fast": 0.2, "wet-fast": 1.0},
+    )
+
+    edge = graph[0][1]
+    assert edge["edge_id"] == "wet-fast"
+    assert edge["cost"] == pytest.approx(90.0)
+    assert edge["length_m"] == pytest.approx(90.0)
+    assert edge["dry_speed_mps"] == pytest.approx(1.0)
+    assert edge["speed_multiplier"] == pytest.approx(1.0)
+    assert edge["speed_mps"] == pytest.approx(1.0)
 
 
 def test_routing_graph_nodes_carry_coordinates() -> None:

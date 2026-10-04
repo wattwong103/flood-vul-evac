@@ -5,6 +5,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pytest
 import rasterio
 from rasterio.transform import from_origin
@@ -167,6 +168,33 @@ def test_pilot_publishes_verified_source_identity(pilot_inputs, flood_enabled):
     assert manifest["evacuation_scenario"]["seed"] == 29092026
     assert all(len(source["content_sha256"]) == 64 for source in manifest["source_versions"])
     assert runner.manifest_module.validate_manifest(manifest) == []
+
+
+def test_flooded_pilot_routes_with_peak_speed_multipliers(pilot_inputs, monkeypatch):
+    captured = []
+    build_graph = runner.mobility_module.build_routing_graph
+
+    def capture_graph(edges, mode, **kwargs):
+        multipliers = kwargs.get("speed_multipliers")
+        if multipliers is not None:
+            captured.append(dict(multipliers))
+        return build_graph(edges, mode, **kwargs)
+
+    monkeypatch.setattr(runner.mobility_module, "build_routing_graph", capture_graph)
+
+    result = runner.execute_run(
+        pilot_id="khlong-san-district", flood_enabled=True, max_agents=10
+    )
+
+    run = Path(result["run_dir"])
+    states = pd.read_parquet(run / "edge_states.parquet")
+    manifest = read_json(run / "manifest.json")
+    peak_time = manifest["flood_scenario"]["parameters"]["peak_time_s"]
+    peak_walk = states[(states["time_s"] == peak_time) & (states["mode"] == 0)]
+    expected = dict(zip(peak_walk["edge_id"], peak_walk["speed_multiplier"]))
+
+    assert captured == [expected]
+    assert all(0.0 <= value <= 1.0 for value in captured[0].values())
 
 
 def test_named_pilot_rejects_mismatched_scoped_provenance(pilot_inputs):
