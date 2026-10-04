@@ -174,8 +174,9 @@ This distinction is the point of the project, so it is stated everywhere.
   declared priors**, not measurements.
 - **Pilot destinations are hypothetical; city candidates are unverified OSM
   records.** Neither is an operational shelter inventory.
-- **Building height is unknown for 96.9%** of footprints in the AOI; the rest is
-  tagged or derived from `building:levels` at an assumed 3.0 m per storey.
+- **At city scale, height is unknown for 250,378 of 272,116 footprints (92.0%).**
+  The remaining 8.0% is tagged or derived from `building:levels` at an assumed
+  3.0 m per storey. These shares describe the city inventory, not the pilot.
 
 ## Product principles
 

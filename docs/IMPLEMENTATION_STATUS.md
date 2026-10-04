@@ -56,6 +56,18 @@ Independent review and final combined verification are recorded in the linked
 PR descriptions. Generated runs and data stay outside Git. The app serves real
 saved artifacts; it does not fabricate absent hazard or capacity fields.
 
+Final combined verification on 4 October passed 230 Python/API tests and 17
+frontend tests; production build and lint passed (11 existing lint warnings).
+Fresh city run `4ecad6e0-c072-46e5-b818-6c4f3f259eaf` completed in 857.3 seconds
+at source `0ecf18a2107631a23442da3c3274cea3dbe6507d`, tree
+`638ba97c225669cc759992f333e8b70c6d59cb4f`. Its manifest records clean scoped
+source and `matched_before_publication`, with source digest
+`6e5fd057a252eab56a3400868a7ef0f1d7226ab6649cda6c49fc0d3aa56d24eb`.
+It passed 8/8 internal checks with zero schema issues. This is a new run;
+the historical evidence above remains attributed to its original source.
+Later README/status edits only document this result and correct city height
+coverage to 92.0% unknown; they do not change the executable source.
+
 ## External evidence now available
 
 The paper audit staged and independently reconciled the official
@@ -94,6 +106,8 @@ assignment or been contacted on the project's behalf.
 | MEDIUM BKK-015 pilot replay/cost | Legacy pilot replay differs by 53.67 weighted arrivals; open flooded edges use dry cost; percentiles cap weighted repetitions | Implementer + scientific owner: regression-tested impedance and exact weighted statistics, then a fresh source-pinned run and replay. Legacy pilot `a0d11a4d-6c75-4723-90cf-b634e2f2a230` is not submission-ready. |
 | MEDIUM BKK-016 calibration/uncertainty | Two-mode priors, weighted-agent draws and one-at-a-time sensitivity | Scientific owner: define OTP target population, modes/purposes/distributions, weighted-agent interpretation and interaction-aware uncertainty before calibration claims. |
 | MEDIUM BKK-017 driving | City routing is undirected | Implementer: preserve one-way/access restrictions and test direction before publishing vehicle results. Current reported screen is pedestrian. |
+| MEDIUM BKK-018 failed-run visibility | New source-tracked runs are intentionally hidden until published; manifest-bearing failures appear in API `skipped`, but the warning lacks the failure reason | Implementer: expose operator-facing failure state/reason without serving unfinished scientific results. Runs without a manifest still require local diagnostics. |
+| LOW BKK-019 display consistency | City stage table is complete, but the rail uses pilot stage names; an error phase with no error object would display loading | Implementer: use scale-specific stage names and preserve the error-state invariant. Current statistics hook supplies an error object on failure. |
 | LOW maintenance | Repeated viewport counts, visibility-toggle refetches, anchor-loop performance, existing lint warnings | Implementer: profile first; preserve public-layer completeness and method semantics. |
 
 ## Handoff and use
