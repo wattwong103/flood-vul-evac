@@ -54,3 +54,23 @@ def test_standalone_cells_and_cached_masks_reject_changed_source(tmp_path, monke
         observed_evac.water_mask(2020)
     with pytest.raises(ValueError, match="provenance"):
         build_observed_cells.build(out_dir=tmp_path / "output")
+
+
+def test_population_download_records_provenance_and_reuses_offline(tmp_path):
+    from types import SimpleNamespace
+    from bkkflow.sources.population_source import download_count_raster
+    calls = []
+    def download(url, destination):
+        calls.append(url)
+        destination.write_bytes(b"fresh download")
+        return {"content_sha256": sha256_file(destination), "byte_count": destination.stat().st_size}
+    client = SimpleNamespace(download_large=download, cache_dir=tmp_path / "cache")
+    dataset = {"data_file": "GIS/Population/test.tif"}
+    path, first = download_count_raster(client, dataset, tmp_path)
+    assert path.with_suffix(".provenance.json").is_file()
+    _, reused = download_count_raster(client, dataset, tmp_path)
+    assert reused["retrieved_at"] == first["retrieved_at"]
+    assert len(calls) == 1
+    path.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="provenance"):
+        download_count_raster(client, dataset, tmp_path)

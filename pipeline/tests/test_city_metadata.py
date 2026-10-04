@@ -35,12 +35,13 @@ def test_population_version_uses_own_verified_download(tmp_path, monkeypatch):
 
 
 def test_coverage_manifest_ref_is_small_and_hashes_separate_geometry(tmp_path):
-    coverage = {"polygon_wkt": box(100, 13, 101, 14).wkt, "covers_aoi": True,
+    coverage = {"polygon_wkt": box(100, 13, 101, 14).wkt, "covers_aoi": True, "path": "/private/local/cache.poly",
                 "sha256": "source-poly-hash", "crs": "EPSG:4326"}
     result = city_runner.save_coverage(coverage, tmp_path)
     assert "polygon_wkt" not in result
     assert result["geometry_sha256"] == sha256_file(tmp_path / result["geometry_uri"])
     assert read_json(tmp_path / result["geometry_uri"])["polygon_wkt"] == coverage["polygon_wkt"]
+    assert "path" not in read_json(tmp_path / result["geometry_uri"])
 
 
 @pytest.mark.parametrize("body", ["name\n1\n100 13\nEND\nEND", "name\n1\nx y\nEND\nEND",
