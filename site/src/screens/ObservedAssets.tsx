@@ -131,7 +131,7 @@ export function ObservedAssets({ reducedMotion }: { reducedMotion: boolean }) {
       : runId
         ? destinationsPath(runId)
         : null;
-  const networkPathValue = runId ? networkPath(runId, 50) : null;
+  const networkPathValue = runId ? `${networkPath(runId)}?summary_only=true` : null;
   const populationGridPathValue = runId ? populationGridPath(runId) : null;
   const connectivityRecordPathValue = runId ? connectivityPath(runId) : null;
   const drainagePathValue = runId ? drainagePath(runId) : null;
@@ -491,6 +491,7 @@ export function ObservedAssets({ reducedMotion }: { reducedMotion: boolean }) {
                       <div className="lab-map">
                         <MapView
                           bundle={bundle}
+                          spatialRunId={stats.data?.scale === "city" ? runId : null}
                           layers={layerState}
                           modelTime={null}
                           areaName={`the ${shownYear} observed water classification`}
