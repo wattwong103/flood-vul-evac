@@ -3,11 +3,13 @@
 An open-data flood exposure, building and evacuation research platform for
 Bangkok, built on the PFLOW people–activities–trips–trajectories contract.
 
-> **Status: `demonstration`.** Every number this repository produces is
-> modelled demonstration output built from a *declared flood scenario* and
-> *uncalibrated behavioural priors*. It is not a forecast, not an early-warning
-> product, and not evacuation advice. No building in this build is a verified
-> refuge.
+> **Status: `demonstration` — DONE_WITH_CONCERNS.** The city run provides
+> observed annual water and conditional connectivity screening. The pilot uses
+> declared flood scenarios and uncalibrated behaviour. Neither is a forecast,
+> warning product or evacuation recommendation. No destination is verified.
+>
+> See [current project status and owners](docs/IMPLEMENTATION_STATUS.md) for
+> merged work, verified results, pending fixes and evidence gates.
 
 ## What is here
 
@@ -42,82 +44,67 @@ never silently substitutes for a pilot result.
 |---|---|
 | Area of interest | Bangkok (กรุงเทพมหานคร), admin level 4, OSM relation `R92277` |
 | Area | **1,643.5 km²** |
-| OSM source | one 42 MB regional PBF (BBBike), read locally via GDAL — no tiled Overpass, no rate limits |
-| Network | 215,770 ways → **939,006 edges, 854,628 nodes, 26,744 km** |
-| Buildings | **424,420** OSM footprints with height evidence recoverable |
-| Resident baseline | WorldPop 2020 clipped to the BMA: **10,891,062 residents**, 181,662 cells |
-| Public aggregation | 1 km fixed |
-| Routing | compressed CSR index; a **full-city travel-time field takes ~2 s** and reaches 98.3% of nodes |
+| OSM source | complete Thailand Geofabrik extract dated 2026-09-29; its source polygon covers the BMA |
+| Network | 235,678 ways → **1,038,811 edges, 949,151 nodes, 30,060.16 km** |
+| Buildings | **272,116** footprints; height tagged for 577, derived from levels for 21,161, unknown for 250,378 |
+| Resident baseline | WorldPop 2020: **10,891,061 modelled residents**, 181,662 raster cells |
+| Public aggregation | 1 km, 1,693 population cells |
+| Connectivity | pedestrian screening with fixed baseline anchors, 400 m snap tolerance and a 180 minute routing limit |
 
-**Observed hazard layer (new):** JRC Global Surface Water v1.4, Landsat-derived
-yearly water classification 1984-2021, ingested for 2010, 2011, 2012 and 2020.
-This is the **first genuinely observational hazard data in the project** — every
-other input is either a modelled surface or a declared scenario.
+These results belong to immutable run
+`be6a4e08-e2d7-4dd9-bf8b-4f2a02a12a81`, executed on 4 October 2026 at
+`a5dfc51c59df65a27e136cbce594d73e09179181`. Merged `main` at `9278893`
+has the same source tree. The run passed 8 internal checks; all 12 recorded
+output hashes were verified. Source identity for this historical run is
+externally recorded, not embedded in its manifest.
 
-| year | observed water | share of classified area | excess vs 2010 |
+### Observed annual surface water
+
+JRC Global Surface Water v1.4 distinguishes no observations (0), non-water (1),
+seasonal water (2) and permanent water (3). The following replaces the withdrawn
+pre-correction values and the unsupported claim that the 2011 flood was absent.
+
+| Year | Water area | Classified area | Water share of classified area |
 |---|---:|---:|---:|
-| 2010 | 114.2 km² | 7.63% | baseline |
-| 2011 | 114.0 km² | 7.68% | −0.15 km² |
-| **2012** | **137.8 km²** | **9.12%** | **+23.7 km²** |
-| 2020 | 114.3 km² | 7.72% | +0.12 km² |
+| 2010 | 157.8473 km² | 272.0265 km² | 58.03% |
+| 2011 | 170.7147 km² | 284.7396 km² | 59.95% |
+| 2012 | 143.4223 km² | 281.2608 km² | 50.99% |
+| 2020 | 173.7170 km² | 288.0152 km² | 60.32% |
 
-The 2012 signal is a real anomaly. **2011's flood is absent from this record**,
-which is the product behaving as documented: an annual Landsat composite cannot
-capture a flood lasting weeks. Every year here is a lower bound on extent.
+About 83% of the BMA has no observations in each of these annual classifications.
+It must not be counted as dry land. These are annual surface-water classifications,
+including permanent water, not event-specific flood footprints or depth.
 
-**Destination candidates (new):** 1,400 records recovered from the OSM points
-layer — 343 shelter tags, 296 health care, 296 education, 58 emergency service,
-312 community facilities, 95 commerce. **Zero are verified.** A shelter tag is
-someone's mapping decision, not an operator, a capacity or an inspection.
+### Conditional connectivity
 
-### Hazard screening (new)
+Reachable share of modelled residents in population cells overlapping a
+water-containing 1 km cell, under nested closure subsets of water-affected edges:
 
-Two city-scale screening layers, both driven by real data and both labelled as
-screening rather than simulation.
-
-**Connectivity under observed water.** The ways that held water in each observed
-year are removed from the network, measured at the source 30 m classification,
-and the question becomes whether exposed population can still reach a
-destination on foot.
-
-| year | ways closed | reachable | p50 |
+| Year | 100% wet-edge closure | 50% closure | 25% closure |
 |---|---:|---:|---:|
-| 2010 | 57,836 (6.16%) | 71.5% | 42.9 min |
-| 2011 | 56,545 (6.02%) | 72.8% | 43.8 min |
-| 2012 | 61,743 (6.58%) | 68.7% | 41.9 min |
-| 2020 | 57,532 (6.13%) | 71.5% | 43.8 min |
+| 2010 | 96.4737% | 97.2481% | 97.7858% |
+| 2011 | 95.8942% | 96.5484% | 97.6087% |
+| 2012 | 96.7831% | 97.0658% | 97.4778% |
+| 2020 | 95.5462% | 96.9035% | 97.5644% |
 
-This is **not** an evacuation simulation: a yearly Landsat classification has
-no depth, duration, flow direction or timing, and water is treated as
-impassable at any depth.
+All 12 cases were reproduced on 4 October. Reopening roads never decreases
+reachability; the worst-ranked year changes with the closure assumption. These
+percentages are not evacuation success rates. Routing is undirected; vehicle
+one-way restrictions are not enforced. Foot access and snapping remain assumptions.
 
-**How much of that is the assumption?** Closing every water-affected way is a
-choice. Re-running at 25% and 50% closure swings the absolute reachable share
-across **20 percentage points**, and the year ranking does not survive: 2012 is
-the worse year at 100% and 50% closure but marginally the better one at 25%. The
-code reports year_ranking_stable_across_assumptions: false rather than
-asserting a winner.
+There are **1,034 unverified destination candidates**: 236 shelter tags,
+232 education, 225 health, 207 community, 83 commerce and 51 emergency records.
+They provide neither usable capacity nor a guarantee of safe access.
 
-**Drainage-discharge index.** A relative index over the 1,693 grid cells built
-from the mapped drainage network, basins and overflow paths. Monotonicity is
-verified on real data (rho of drainage density against risk −0.78, distance
-against risk +0.64). It is a screening index from infrastructure geometry only:
-not a hydraulic model, not a depth, and blind to rainfall, river stage, tide,
-pumping and gate operations.
+Source coverage is not mapping completeness. The 50 OSM district polygons leave
+76.1429 km² of the BMA geometry unreconciled; its cause is unverified. The saved
+water inventory has 4,681 features and 3,242.94 km of line geometry. The drainage
+index is an infrastructure-geometry screen, not a hydraulic model.
 
-**This run has no flood *depth* layer and no evacuation outcomes.** That is a decision
-on the record, not an omission: the only reachable open terrain source carries
-roughly 5–10 m of vertical error across a floodplain whose flood-relevant
-elevation range is 0–2 m, so a stage-based depth surface would be a noise field
-wearing the costume of a flood map. Measured evidence, including a transect
-across the Chao Phraya in which the river channel is not resolved at all, is in
-[`docs/CITY_SCALE_LIMITATIONS.md`](docs/CITY_SCALE_LIMITATIONS.md). Every
-hazard field in the city statistics is `null` with a reason attached; a zero
-would read as "no flooding", which is a different and false claim.
-
-Routing is *not* the blocker — at 2 seconds per city-wide travel-time field,
-evacuation at city scale becomes tractable the moment a defensible depth surface
-exists.
+**City flood depth and evacuation outcomes remain null with explicit reasons.**
+Terrain, datum, hydraulic forcing, event validation and operator-verified
+capacity are still required. See [limitations](docs/CITY_SCALE_LIMITATIONS.md)
+and [the current evidence gates](docs/IMPLEMENTATION_STATUS.md).
 
 
 ## Quick start
@@ -151,9 +138,11 @@ cd site; pnpm install; pnpm dev
 Tests:
 
 ```powershell
-python -m pytest pipeline/tests -q   # 37 tests
-python -m pytest api/tests -q         # 42 tests
-cd site; pnpm build
+python -m pytest pipeline/tests api/tests -q
+cd site
+pnpm test
+pnpm build
+pnpm lint
 ```
 
 ## What the data is real, and what it is not
@@ -172,20 +161,19 @@ This distinction is the point of the project, so it is stated everywhere.
 
 - **Flood depth** is a *scenario*: a distance-to-water decay, because no
   rainfall, river-stage or depth measurement passed the project's licence
-  gate and the GISTDA host did not resolve from the build environment. There is
-  no observed flood layer in this build.
+  gate and the GISTDA host did not resolve from the build environment. The city separately provides observed annual water extent, not event depth.
 - **Population is a resident baseline**, not a daytime or event-time
   population. Presence comes from scenario activity priors.
-- **No external control total was ingested**, so population control error is
-  recorded as *unavailable* rather than passing quietly.
+- **No external control total is ingested by the run pipeline.** The paper audit
+  independently reconciled NSO/DOPA controls for all 50 districts; those counts
+  are comparison evidence, not a replacement for modelled or event-time residents.
 - **Age structure is unknown for every person.** No age-structure source passed
   the licence gate, so `age_band` is `unknown` rather than an invented
   distribution.
 - **Sex split, mobility, warning reach, compliance and preparation delay are
   declared priors**, not measurements.
-- **Every destination is hypothetical and unverified.** There is no refuge
-  inventory, so the model aims at labelled synthetic targets and makes no
-  shelter claim.
+- **Pilot destinations are hypothetical; city candidates are unverified OSM
+  records.** Neither is an operational shelter inventory.
 - **Building height is unknown for 96.9%** of footprints in the AOI; the rest is
   tagged or derived from `building:levels` at an assumed 3.0 m per storey.
 
@@ -196,8 +184,9 @@ This distinction is the point of the project, so it is stated everywhere.
    starts.
 2. Observations, predictions and scenario assumptions stay visually and
    structurally distinct. `source_role` is a required column, not a caption.
-3. Every run is reproducible from its manifest: immutable inputs, checksums,
-   seeds, parameters, component versions, and a schema-validated manifest.
+3. Manifests record inputs, checksums, seeds, parameters and component versions.
+   New runners also record source identity and check for source drift; legacy
+   manifests lack that field. This supports auditing, not a blanket replay guarantee.
 4. Building height is an exposure and capacity input — never proof that a
    building is a safe shelter. Height and refuge eligibility are separate
    fields with separate confidences.
@@ -223,14 +212,17 @@ This distinction is the point of the project, so it is stated everywhere.
   their Bangkok coverage have not been obtained.
 - **No reusable event rainfall or water-level forcing.** JRC annual observed
   water extent is available, but it has no within-year timing and no depth.
-- **No calibrated mobility.** No licensable Bangkok travel diary was available,
-  so activity timing, mode choice and destination choice are priors. The run
-  cannot be promoted above `demonstration`.
-- **No refuge inventory.** Destinations are hypothetical.
+- **No calibrated mobility.** OTP aggregate controls are available and expose
+  substantial trip-rate and modal mismatch. The two-mode generator is not
+  calibrated; activity, destination and behaviour parameters remain priors.
+- **No verified refuge inventory.** Pilot destinations are hypothetical and city
+  tags are unverified.
 - **No building-level address or entrance network.** Buildings are exposed, not
   entered.
-- **Single scenario per run.** The sensitivity matrix in `config/scenario.json`
-  is declared but not yet executed as an ensemble.
+- **One scenario per run.** City closure sensitivities were reproduced; the paper
+  separately ran pilot one-at-a-time, seed and sampling checks. Neither is an
+  interaction-aware uncertainty analysis. Pilot replay, open-flooded-edge cost
+  and weighted-agent semantics still need resolution.
 
 ## Attribution and data policy
 
