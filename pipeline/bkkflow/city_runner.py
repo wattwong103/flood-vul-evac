@@ -149,7 +149,8 @@ def execute_city_run(
 ) -> dict[str, Any]:
     """Build the city baseline and publish one immutable run."""
     run_id = run_id or str(uuid.uuid4())
-    run_dir = ensure_dir(RUNS_DIR / run_id)
+    run_dir = RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
     started = time.time()
 
     config = load_config("pilot.city.json")
@@ -272,7 +273,7 @@ def execute_city_run(
 
     # ---- destination candidates ------------------------------------------
     stage_start = time.time()
-    destination_record = destinations_source.extract_destinations()
+    destination_record = destinations_source.extract_destinations(out_dir=run_dir, aoi_frame=aoi_frame)
     warnings.append(
         f"{destination_record['rows']:,} destination candidates are extracted from OSM "
         f"tags, including {destination_record['shelter_candidates']} tagged shelters. "
@@ -366,7 +367,10 @@ def execute_city_run(
 
     # ---- observed-hazard connectivity screening --------------------------
     stage_start = time.time()
-    screening = observed_evac_module.compare_years((2010, 2011, 2012, 2020))
+    from build_observed_cells import build as build_observed_cells
+    observed_cells = build_observed_cells(out_dir=run_dir)
+    write_json(run_dir / "observed_water_cells.provenance.json", observed_cells)
+    screening = observed_evac_module.compare_years((2010, 2011, 2012, 2020), run_dir=run_dir)
     worst = min(
         screening.values(), key=lambda entry: entry["reachable_share_of_exposed"]
     )
@@ -401,7 +405,7 @@ def execute_city_run(
     # ---- drainage-discharge screening index -------------------------------
     extra_outputs: list[dict[str, Any]] = []
     stage_start = time.time()
-    drainage_result = drainage_module.build_drainage_index()
+    drainage_result = drainage_module.build_drainage_index(grid_path=run_dir / "population_grid_1km.parquet")
     drainage = drainage_result.as_dict() if hasattr(drainage_result, "as_dict") else dict(drainage_result)
     if drainage.get("status") == "ok":
         warnings.append(
@@ -627,6 +631,8 @@ def execute_city_run(
         },
         outputs=[
             *extra_outputs,
+            manifest_module.output_entry("observed_water_cells", run_dir / "observed_water_cells.parquet", row_count=observed_cells["rows"], crs="OGC:CRS84"),
+            manifest_module.output_entry("connectivity_screening", run_dir / "connectivity_screening.json", row_count=len(screening)),
             manifest_module.output_entry("network_edges", edges_path, row_count=len(edges), crs=analysis_crs),
             manifest_module.output_entry("buildings", buildings_path, row_count=len(building_table), crs=analysis_crs),
             manifest_module.output_entry("persons", persons_path, row_count=len(persons)),
