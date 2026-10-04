@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+from itertools import accumulate
 from typing import Any
 
 import numpy as np
@@ -12,7 +14,11 @@ EMPTY_CLEARANCE_MINUTES: dict[str, float | None] = {
     "median": None,
     "p95": None,
 }
-_QUANTILES = (("p5", 0.05), ("median", 0.50), ("p95", 0.95))
+_QUANTILES = (
+    ("p5", Decimal("0.05")),
+    ("median", Decimal("0.50")),
+    ("p95", Decimal("0.95")),
+)
 
 
 def weighted_clearance_minutes(
@@ -24,6 +30,8 @@ def weighted_clearance_minutes(
     arrived rows participate. Each quantile is the first observed clearance
     whose cumulative strictly-positive weight reaches ``q * total_weight``;
     values are never replicated, rounded by weight, or interpolated.
+    Weights use their persisted decimal text values for deterministic Decimal
+    accumulation, avoiding binary-float drift at exact cumulative boundaries.
     """
     try:
         warning = float(warning_time_s)
@@ -51,10 +59,13 @@ def weighted_clearance_minutes(
 
     order = np.argsort(clearances, kind="stable")
     sorted_clearances = clearances[order]
-    cumulative = np.cumsum(weights[order])
-    total_weight = float(cumulative[-1])
+    cumulative = tuple(accumulate(Decimal(str(value)) for value in weights[order]))
+    total_weight = cumulative[-1]
     return {
-        label: float(sorted_clearances[np.searchsorted(cumulative, q * total_weight)])
-        / 60.0
+        label: float(
+            sorted_clearances[
+                next(index for index, weight in enumerate(cumulative) if weight >= q * total_weight)
+            ]
+        ) / 60.0
         for label, q in _QUANTILES
     }
