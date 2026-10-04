@@ -15,6 +15,7 @@ explicitly rather than being silently lost.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -129,7 +130,8 @@ def source_coverage(path: Path, aoi: gpd.GeoDataFrame) -> dict[str, Any]:
     polygon = union_all(positive).difference(union_all(negative))
     if polygon.is_empty or not polygon.is_valid or not polygon.covers(aoi.to_crs("EPSG:4326").geometry.union_all()):
         raise ValueError("OSM source polygon does not cover the complete city AOI")
-    return {"covers_aoi": True, "sha256": sha256_file(path), "path": str(path.resolve()),
+    return {"covers_aoi": True, "sha256": sha256_file(path),
+            "path": os.path.relpath(path.resolve(), REPO_ROOT).replace(os.sep, "/"),
             "polygon_wkt": polygon.wkt, "crs": "EPSG:4326",
             "note": "Source coverage, not proof of mapping completeness."}
 
@@ -154,6 +156,8 @@ def validate_cached_ingest(record: dict, aoi: gpd.GeoDataFrame, target: Path) ->
     load_registry().require_approved([SOURCE_ID])
     metadata = source_provenance(Path(record["pbf_path"]), record["resource_url"])
     coverage_path = Path(record["coverage"].get("path", REPO_ROOT / DEFAULT_COVERAGE))
+    if not coverage_path.is_absolute():
+        coverage_path = REPO_ROOT / coverage_path
     coverage = source_coverage(coverage_path, aoi)
     if (metadata["content_sha256"] != record["content_sha256"]
             or coverage["sha256"] != record["coverage"]["sha256"]):

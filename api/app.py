@@ -11,12 +11,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import pandas as pd
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -2030,11 +2031,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "warnings": warnings,
         }
 
+    @app.get("/v1/runs/{run_id}/map/{layer}")
+    def get_map_page(
+        run_id: str,
+        layer: Literal["network", "buildings"],
+        bbox: Annotated[str, Query(max_length=150)],
+        limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+        after: Annotated[int, Query(ge=0, le=9223372036854775806)] = 0,
+    ) -> dict[str, Any]:
+        """Stable pages of public features intersecting a WGS84 viewport."""
+        from pipeline.bkkflow.map_index import query_map_index
+        run = resolve_run(run_id)
+        try:
+            bounds = tuple(float(value) for value in bbox.split(","))
+            return query_map_index(run.path, layer, bounds, limit=limit, after=after)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except (OSError, sqlite3.DatabaseError):
+            return {"type": "FeatureCollection", "run_id": run.run_id, "layer": layer,
+                "available": False, "features": [], "returned": 0, "next_cursor": None,
+                "truncated": False, "warnings": [make_warning("map_index_unavailable",
+                    "This run has no readable spatial map index. Generate a new city run to view detailed layers.",
+                    "map.sqlite")]}
+
     @app.get("/v1/runs/{run_id}/network")
     def get_network(
         run_id: str,
         ctx: SettingsDep,
         limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_MESH_ROW_LIMIT,
+        summary_only: bool = False,
     ) -> dict[str, Any]:
         """Network summary, plus a bounded, evenly spaced sample of edges.
 
@@ -2047,6 +2072,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         stats_payload, stats_warnings = load_stats_file(run)
         warnings.extend(stats_warnings)
         network_block = (stats_payload or {}).get("network", {})
+        if summary_only:
+            return {"type": "FeatureCollection", "run_id": run.run_id,
+                "available": bool(network_block), "summary": jsonable(network_block),
+                "matched_rows": network_block.get("edges", 0), "returned": 0,
+                "features": [], "summary_only": True, "sample_is_spatial_subset": False,
+                "warnings": warnings}
 
         frame, read_warnings = read_parquet(artefact_path(run, "network_edges.parquet"))
         warnings.extend(read_warnings)

@@ -35,6 +35,7 @@ from . import validate as validate_module
 from . import drainage as drainage_module
 from . import observed_evac as observed_evac_module
 from .provenance import verify_source
+from .map_index import build_map_index
 from .sources.registry import load_registry
 from .sources import city_osm, destinations as destinations_source, gsw, mitrearth
 from .util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
@@ -158,7 +159,7 @@ def population_source_version(aoi_id: str) -> dict:
 
 def save_coverage(coverage: dict, run_dir: Path) -> dict:
     path = run_dir / "osm_source_coverage.json"
-    write_json(path, coverage)
+    write_json(path, {key: value for key, value in coverage.items() if key != "path"})
     return {key: value for key, value in coverage.items() if key not in {"polygon_wkt", "path"}} | {
         "geometry_uri": path.name, "geometry_sha256": sha256_file(path)}
 
@@ -545,6 +546,11 @@ def execute_city_run(
     record("validate", time.time() - stage_start, rows=report.as_dict()["checks_total"],
            note=f"{report.as_dict()['checks_failed']} failed")
 
+    stage_start = time.time()
+    map_index = build_map_index(run_dir, analysis_crs)
+    record("map_index", time.time() - stage_start, rows=map_index["rows"],
+           note="public roads and buildings, WGS84 viewport index")
+
     # ---- manifest --------------------------------------------------------
     source_versions = [
         {
@@ -649,6 +655,7 @@ def execute_city_run(
         },
         outputs=[
             *extra_outputs,
+            manifest_module.output_entry("map_index", run_dir / "map.sqlite", row_count=map_index["rows"], crs="OGC:CRS84"),
             manifest_module.output_entry("osm_source_coverage", run_dir / "osm_source_coverage.json", crs="EPSG:4326"),
             manifest_module.output_entry("water_features", run_dir / "water_features.parquet", row_count=water_stats["features"], crs=analysis_crs),
             manifest_module.output_entry("observed_water_cells", run_dir / "observed_water_cells.parquet", row_count=observed_cells["rows"], crs="OGC:CRS84"),

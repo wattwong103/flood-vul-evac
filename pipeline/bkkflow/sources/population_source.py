@@ -22,6 +22,7 @@ from rasterio.windows import from_bounds
 from shapely.geometry import box, mapping
 
 from ..http import HttpClient
+from ..provenance import verify_source
 from ..util import STAGED_DIR, ensure_dir, utc_now_iso, write_json
 
 REST_BASE = "https://www.worldpop.org/rest/data"
@@ -89,14 +90,25 @@ def download_count_raster(
     url = f"{DOWNLOAD_BASE}/{dataset['data_file']}"
     name = Path(dataset["data_file"]).name
     destination = target_dir / name
+    if destination.is_file():
+        metadata = verify_source(destination, url, cache_dir=getattr(client, "cache_dir", None))
+        return destination, {**metadata, "url": url, "byte_count": destination.stat().st_size,
+                             "already_present": True}
     meta = client.download_large(url, destination)
-    return destination, {
+    if meta.get("already_present"):
+        metadata = verify_source(destination, url, cache_dir=getattr(client, "cache_dir", None))
+        return destination, {**metadata, "url": url, "byte_count": destination.stat().st_size,
+                             "already_present": True}
+    metadata = {
         "url": url,
         "content_sha256": meta["content_sha256"],
         "retrieved_at": utc_now_iso(),
         "byte_count": meta["byte_count"],
         "already_present": meta.get("already_present", False),
     }
+    write_json(destination.with_suffix(".provenance.json"), metadata)
+    verify_source(destination, url)
+    return destination, metadata
 
 
 def clip_to_aoi(
