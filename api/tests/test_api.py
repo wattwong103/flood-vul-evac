@@ -95,6 +95,22 @@ def _manifest(run_id: str, created_at: str = "2026-01-01T00:00:00+00:00") -> dic
     }
 
 
+@pytest.mark.parametrize("state", [None, "validating_outputs", "failed_source_changed", "published"])
+def test_source_tracked_runs_are_visible_only_after_publication(tmp_path, monkeypatch, state):
+    run = tmp_path / "tracked-run"
+    run.mkdir()
+    manifest = _manifest(run.name)
+    manifest["code_identity"] = {"verification": "matched_before_publication"}
+    (run / "manifest.json").write_text(json.dumps(manifest))
+    if state:
+        (run / "run_state.json").write_text(json.dumps({"state": state}))
+    monkeypatch.setenv("BKKFLOW_RUNS_DIR", str(tmp_path))
+    client = TestClient(create_app())
+    assert client.get("/v1/runs/tracked-run").status_code == (200 if state == "published" else 404)
+    listed = client.get("/v1/runs").json()["runs"]
+    assert len(listed) == (1 if state == "published" else 0)
+
+
 def _run_state(stage: str = "completed") -> dict:
     return {
         "stage": stage,

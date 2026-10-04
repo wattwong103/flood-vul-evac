@@ -36,6 +36,18 @@ runs/<run_id>/
 `run_id` is a UUID4 string. Every artefact is immutable once written; a changed
 input produces a new `run_id`, never an edited file.
 
+New pilot and city manifests include `code_identity`: Git commit/tree, scoped
+working-tree status, a SHA-256 over source paths and bytes, file count and
+verification status. Legacy manifests without this field remain readable and
+must not be retrospectively described as source-pinned. Without Git, commit and
+tree are null and status is `unavailable`; a dirty checkout is explicit.
+
+Source/configuration bytes are checked before execution and again before
+publication. Detected drift writes `failed_source_changed` and refuses publication.
+This is not process isolation: a transient edit restored between checks is not
+detected, and installed dependencies are not frozen by the digest. Release runs
+must use a quiescent checkout and record their environment separately.
+
 ## 2. Validation status vocabulary
 
 `demonstration | research | reviewed | operational`

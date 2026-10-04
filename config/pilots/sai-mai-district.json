@@ -1,0 +1,27 @@
+{
+  "input_scope": "sai-mai-district",
+  "analysis_crs": "EPSG:32647",
+  "aoi": {
+    "aoi_id": "sai-mai-district",
+    "name": "เขตสายไหม",
+    "name_en": "Sai Mai",
+    "admin_level": "6",
+    "osm_relation_id": 2938035,
+    "area_km2": 43.3383
+  },
+  "versions": {
+    "population": "bkk-pop-v0.2-sai-mai-district-2020",
+    "network": "osm-sai-mai-district",
+    "buildings": "osm-buildings-sai-mai-district"
+  },
+  "sources": {
+    "osm": "geofabrik-thailand-osm-20260929",
+    "population": "worldpop-global-2000-2020-tha-100m"
+  },
+  "source_sha256": {
+    "osm": "cf33cb8b0eec6fc902aedc22633674b11642557670324ded0c4d8880351418a4",
+    "population": "fb39d85dd150c45c7b25771f29bcd548e611afa0967224ac6d8ca05727230e20",
+    "geometry": "e562fd5b484bd6002757a68413d29a0b172e13afa4982d1d05d2a63506fa6083"
+  },
+  "flood_scenario_id": "bangkok-moderate-distance-to-water"
+}

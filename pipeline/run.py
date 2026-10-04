@@ -4,6 +4,7 @@
     python pipeline/run.py ingest      # fetch and stage licensed sources
     python pipeline/run.py run         # execute one full run
     python pipeline/run.py run --baseline   # dry run for comparison
+    python pipeline/run.py run --pilot sai-mai-district
     python pipeline/run.py validate    # re-validate the newest run
 
 Everything downloaded or derived is written under data/ and runs/, both of
@@ -25,6 +26,7 @@ from bkkflow.http import HttpClient  # noqa: E402
 from bkkflow.runner import execute_run  # noqa: E402
 from bkkflow.sources import osm  # noqa: E402
 from bkkflow.sources import population_source  # noqa: E402
+from bkkflow.sources.pilot_stage import stage_pilot  # noqa: E402
 from bkkflow.sources.registry import load_registry  # noqa: E402
 from bkkflow.util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, write_json  # noqa: E402
 
@@ -105,12 +107,22 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    summary = execute_run(flood_enabled=not args.baseline, max_agents=args.max_agents)
+    summary = execute_run(
+        flood_enabled=not args.baseline,
+        max_agents=args.max_agents,
+        pilot_id=args.pilot,
+    )
     print(json.dumps({key: value for key, value in summary.items() if key != "stats"}, indent=2))
     print(json.dumps(summary["stats"]["population"], indent=2))
     print(json.dumps(summary["stats"]["flood"], indent=2))
     print(json.dumps(summary["stats"]["evacuation"], indent=2)[:1500])
     return 0 if summary["validation_passed"] else 2
+
+
+def cmd_stage_pilot(args: argparse.Namespace) -> int:
+    summary = stage_pilot(args.pilot)
+    print(json.dumps(summary, indent=2))
+    return 0
 
 
 def cmd_ingest_city(args: argparse.Namespace) -> int:
@@ -190,9 +202,18 @@ def main() -> int:
     sub.add_parser("city", help="execute the city baseline run").set_defaults(func=cmd_city)
     sub.add_parser("registry", help="print the source registry").set_defaults(func=cmd_registry)
 
+    stage = sub.add_parser("stage-pilot", help="stage one named pilot from verified regional sources")
+    stage.add_argument("--pilot", required=True, help="named AOI configuration")
+    stage.set_defaults(func=cmd_stage_pilot)
+
     run = sub.add_parser("run", help="execute one full run")
     run.add_argument("--baseline", action="store_true", help="disable the flood scenario")
     run.add_argument("--max-agents", type=int, default=None)
+    run.add_argument(
+        "--pilot",
+        default=None,
+        help="named AOI configuration; omit for the legacy Khlong San invocation",
+    )
     run.set_defaults(func=cmd_run)
 
     validate = sub.add_parser("validate", help="re-validate a run")

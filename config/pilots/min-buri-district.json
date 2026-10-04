@@ -1,0 +1,27 @@
+{
+  "input_scope": "min-buri-district",
+  "analysis_crs": "EPSG:32647",
+  "aoi": {
+    "aoi_id": "min-buri-district",
+    "name": "เขตมีนบุรี",
+    "name_en": "Min Buri",
+    "admin_level": "6",
+    "osm_relation_id": 3146413,
+    "area_km2": 59.9852
+  },
+  "versions": {
+    "population": "bkk-pop-v0.2-min-buri-district-2020",
+    "network": "osm-min-buri-district",
+    "buildings": "osm-buildings-min-buri-district"
+  },
+  "sources": {
+    "osm": "geofabrik-thailand-osm-20260929",
+    "population": "worldpop-global-2000-2020-tha-100m"
+  },
+  "source_sha256": {
+    "osm": "cf33cb8b0eec6fc902aedc22633674b11642557670324ded0c4d8880351418a4",
+    "population": "fb39d85dd150c45c7b25771f29bcd548e611afa0967224ac6d8ca05727230e20",
+    "geometry": "7f3565d2611f25afb18156ec1f2ef804392bd40015815fa7038ab349318d0579"
+  },
+  "flood_scenario_id": "bangkok-moderate-distance-to-water"
+}
