@@ -159,7 +159,7 @@ def population_source_version(aoi_id: str) -> dict:
 
 def save_coverage(coverage: dict, run_dir: Path) -> dict:
     path = run_dir / "osm_source_coverage.json"
-    write_json(path, coverage)
+    write_json(path, {key: value for key, value in coverage.items() if key != "path"})
     return {key: value for key, value in coverage.items() if key not in {"polygon_wkt", "path"}} | {
         "geometry_uri": path.name, "geometry_sha256": sha256_file(path)}
 
