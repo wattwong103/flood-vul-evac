@@ -415,6 +415,7 @@ def execute_run(
         building_table=building_table,
         indices=indices,
         flood_enabled=flood_enabled,
+        sample_cap=limit,
         total_residents=total_residents,
         routed_trips=routed,
     )
@@ -441,6 +442,7 @@ def _finish_run(
     building_table: gpd.GeoDataFrame,
     indices: dict[int, mobility_module.NetworkIndex],
     flood_enabled: bool,
+    sample_cap: int,
     total_residents: float,
     routed_trips: int,
 ) -> dict[str, Any]:
@@ -718,7 +720,11 @@ def _finish_run(
             ),
             "activity_generator": manifest_module.component(
                 "bkk-scenario-activity-chain", "0.1.0",
-                {"status": "scenario_prior_uncalibrated", "sampled_agents": int(len(sample))},
+                {
+                    "status": "scenario_prior_uncalibrated",
+                    "sample_cap": int(sample_cap),
+                    "sampled_agents": int(len(sample)),
+                },
             ),
             "trip_generator": manifest_module.component(
                 "bkk-adjacent-activity-trips", "0.1.0",
@@ -741,7 +747,9 @@ def _finish_run(
     )
     schema_problems = manifest_module.validate_manifest(manifest)
     if schema_problems:
-        manifest["warnings"].append(f"manifest schema problems: {len(schema_problems)}")
+        raise ValueError(
+            "Manifest schema validation failed: " + "; ".join(schema_problems)
+        )
     manifest_module.verify_output_integrity(context.run_dir, manifest["outputs"])
     write_json(context.run_dir / "manifest.json", manifest)
 

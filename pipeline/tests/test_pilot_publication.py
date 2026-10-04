@@ -157,6 +157,15 @@ def test_pilot_publishes_verified_source_identity(pilot_inputs, flood_enabled):
     assert manifest["population_model"]["population_version"] == (
         "bkk-pop-v0.2-khlong-san-district-2020"
     )
+    assert manifest["population_model"]["seed"] == 29092026
+    activity_parameters = manifest["pflow_contract"]["activity_generator"]["parameters"]
+    assert activity_parameters["sample_cap"] == 10
+    assert 0 < activity_parameters["sampled_agents"] <= activity_parameters["sample_cap"]
+    assert manifest["flood_scenario"]["parameters"]["scenario_id"] == (
+        "bangkok-moderate-distance-to-water"
+    )
+    assert manifest["evacuation_scenario"]["seed"] == 29092026
+    assert all(len(source["content_sha256"]) == 64 for source in manifest["source_versions"])
     assert runner.manifest_module.validate_manifest(manifest) == []
 
 
@@ -184,6 +193,21 @@ def test_output_integrity_failure_blocks_manifest_publication(pilot_inputs, monk
 
     monkeypatch.setattr(runner.manifest_module, "verify_output_integrity", fail_publication)
     with pytest.raises(ValueError, match="final output integrity failed"):
+        runner.execute_run(pilot_id="khlong-san-district", max_agents=10)
+
+    run_dirs = list(pilot_inputs.iterdir())
+    assert len(run_dirs) == 1
+    assert not (run_dirs[0] / "manifest.json").exists()
+    assert read_json(run_dirs[0] / "run_state.json")["state"] != "published"
+
+
+def test_schema_failure_blocks_manifest_publication(pilot_inputs, monkeypatch):
+    monkeypatch.setattr(
+        runner.manifest_module,
+        "validate_manifest",
+        lambda _manifest: ["outputs/0: broken schema"],
+    )
+    with pytest.raises(ValueError, match="Manifest schema validation failed"):
         runner.execute_run(pilot_id="khlong-san-district", max_agents=10)
 
     run_dirs = list(pilot_inputs.iterdir())
