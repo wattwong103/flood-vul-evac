@@ -176,7 +176,10 @@ def select_cohort(
     cohort["cohort_reason"] = "scenario_independent_fixed_order_area"
 
     geometry_rule = "WGS84 degree distance <= order_radius_m / 111320"
-    presence_rule = "input rows present at scenario_time_s before cohort construction"
+    presence_rule = (
+        "if activities exist: sampled person IDs with start_time_s <= scenario_time_s < end_time_s; "
+        "otherwise full sample; order area uses stored person/home lon-lat"
+    )
     sample_rule = (
         "numpy.default_rng(seed).choice over full person row order without replacement; "
         "selected indices sorted; cap=min(full rows, max_agents)"

@@ -187,6 +187,8 @@ def test_pilot_pair_reuses_saved_fixed_cohort_and_rejects_mismatch(pilot_inputs)
     assert dry_meta["cohort_digest"] == wet_meta["cohort_digest"]
     assert (dry_meta["seed"], dry_meta["max_agents"]) == (29092026, 10)
     assert dry_meta["order_geometry_rule"] and dry_meta["presence_rule"]
+    assert "start_time_s <=" in dry_meta["presence_rule"]
+    assert "stored person/home" in dry_meta["presence_rule"]
     assert dry_meta["sample_rule"] and dry_meta["sample_digest"]
     assert wet_meta["reference_run_id"] == "pair-dry"
     assert dry_meta["exposed_weighted"] == 0.0 and not dry_cohort["exposed"].any()
