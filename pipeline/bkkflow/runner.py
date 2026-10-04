@@ -338,6 +338,7 @@ def execute_run(
 
     return _finish_run(
         context=context,
+        code_identity=code_identity,
         aoi_frame=aoi_frame,
         aoi_provenance=aoi_provenance,
         persons=persons,
@@ -363,6 +364,7 @@ def json_note(payload: dict[str, Any]) -> str:
 def _finish_run(
     *,
     context: RunContext,
+    code_identity: dict[str, Any],
     aoi_frame: gpd.GeoDataFrame,
     aoi_provenance: dict[str, Any],
     persons: pd.DataFrame,
@@ -597,7 +599,7 @@ def _finish_run(
     # ---- U1 publish ------------------------------------------------------
     stage_start = time.time()
     manifest = manifest_module.build_manifest(
-        code_identity=verify_code_identity(code_identity, run_dir),
+        code_identity=verify_code_identity(code_identity, context.run_dir),
         run_id=context.run_id,
         geography={
             "country": "Thailand",
@@ -684,7 +686,7 @@ def _finish_run(
     write_json(context.run_dir / "stats.json", stats)
     context.record("publish", time.time() - stage_start, rows=len(context.outputs))
 
-    verify_code_identity(code_identity, run_dir)
+    verify_code_identity(code_identity, context.run_dir)
     context.write_state("published" if report.passed else "failed_validation")
     return {
         "run_id": context.run_id,
