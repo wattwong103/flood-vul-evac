@@ -54,8 +54,10 @@ def build_manifest(
     warnings: list[str],
     validation_status: str = "demonstration",
     created_at: str | None = None,
+    code_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
+        **({"code_identity": code_identity} if code_identity is not None else {}),
         "run_id": run_id,
         "created_at": created_at or utc_now_iso(),
         "validation_status": validation_status,

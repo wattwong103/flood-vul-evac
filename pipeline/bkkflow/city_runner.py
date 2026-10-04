@@ -36,6 +36,7 @@ from . import drainage as drainage_module
 from . import observed_evac as observed_evac_module
 from .provenance import verify_source
 from .map_index import build_map_index
+from .code_identity import capture_code_identity, verify_code_identity
 from .city_method import PUBLIC_GRID_M
 from .sources.registry import load_registry
 from .sources.population_source import CITY_DATASET, CITY_SOURCE_ID, count_raster_url
@@ -187,6 +188,7 @@ def execute_city_run(
     run_id = run_id or str(uuid.uuid4())
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
+    code_identity = capture_code_identity()
     started = time.time()
 
     config = load_config("pilot.city.json")
@@ -571,6 +573,7 @@ def execute_city_run(
         source_versions.append(observed_source)
 
     manifest = manifest_module.build_manifest(
+        code_identity=verify_code_identity(code_identity, run_dir),
         run_id=run_id,
         geography={
             "country": "Thailand",
@@ -774,6 +777,7 @@ def execute_city_run(
         "elapsed_seconds": round(time.time() - started, 1),
     }
     write_json(run_dir / "stats.json", stats)
+    verify_code_identity(code_identity, run_dir)
     write_json(
         run_dir / "run_state.json",
         {

@@ -35,6 +35,7 @@ from . import network as network_module
 from . import population as population_module
 from . import validate as validate_module
 from .sources import population_source
+from .code_identity import capture_code_identity, verify_code_identity
 from .sources.registry import load_registry
 from .util import (
     CURATED_DIR,
@@ -122,7 +123,9 @@ def execute_run(
 ) -> dict[str, Any]:
     """Run the full pipeline once and return the published run summary."""
     run_id = run_id or str(uuid.uuid4())
-    run_dir = ensure_dir(RUNS_DIR / run_id)
+    run_dir = RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+    code_identity = capture_code_identity()
 
     pilot = load_config("pilot.json")
     population_config = load_config("population.json")
@@ -594,6 +597,7 @@ def _finish_run(
     # ---- U1 publish ------------------------------------------------------
     stage_start = time.time()
     manifest = manifest_module.build_manifest(
+        code_identity=verify_code_identity(code_identity, run_dir),
         run_id=context.run_id,
         geography={
             "country": "Thailand",
@@ -680,6 +684,7 @@ def _finish_run(
     write_json(context.run_dir / "stats.json", stats)
     context.record("publish", time.time() - stage_start, rows=len(context.outputs))
 
+    verify_code_identity(code_identity, run_dir)
     context.write_state("published" if report.passed else "failed_validation")
     return {
         "run_id": context.run_id,

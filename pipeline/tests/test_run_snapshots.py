@@ -7,22 +7,23 @@ import pandas as pd
 import pytest
 from shapely.geometry import box
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from bkkflow import city_runner, observed_evac
+from bkkflow import city_runner, observed_evac, runner
 from bkkflow.sources import gsw
 from test_observed import raster_fixture
 
 
-def test_existing_run_is_never_overwritten(tmp_path, monkeypatch):
-    monkeypatch.setattr(city_runner, "RUNS_DIR", tmp_path)
+@pytest.mark.parametrize("module,execute", [(city_runner, "execute_city_run"), (runner, "execute_run")])
+def test_existing_run_is_never_overwritten(tmp_path, monkeypatch, module, execute):
+    monkeypatch.setattr(module, "RUNS_DIR", tmp_path)
     run = tmp_path / "saved"
     run.mkdir()
     sentinel = run / "stats.json"
     sentinel.write_text("saved results")
     def stop_before_processing(*args):
         raise AssertionError("an existing run reached source processing")
-    monkeypatch.setattr(city_runner, "load_config", stop_before_processing)
+    monkeypatch.setattr(module, "load_config", stop_before_processing)
     with pytest.raises(FileExistsError):
-        city_runner.execute_city_run(run_id="saved")
+        getattr(module, execute)(run_id="saved")
     assert sentinel.read_text() == "saved results"
 
 
