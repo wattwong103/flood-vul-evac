@@ -18,5 +18,10 @@
     "osm": "geofabrik-thailand-osm-20260929",
     "population": "worldpop-global-2000-2020-tha-100m"
   },
+  "source_sha256": {
+    "osm": "cf33cb8b0eec6fc902aedc22633674b11642557670324ded0c4d8880351418a4",
+    "population": "fb39d85dd150c45c7b25771f29bcd548e611afa0967224ac6d8ca05727230e20",
+    "geometry": "2877e05bf57ea3d46bb12c19b7c39746b16d5f10ce5e450993f0c3e82db3683b"
+  },
   "flood_scenario_id": "bangkok-moderate-distance-to-water"
 }

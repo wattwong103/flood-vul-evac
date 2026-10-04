@@ -33,6 +33,8 @@ def test_named_pilots_have_isolated_inputs_and_versions():
         assert bundle.aoi_id in bundle.population["population_version"]
         assert bundle.aoi_id in bundle.versions["network"]
         assert bundle.aoi_id in bundle.versions["buildings"]
+        assert set(bundle.pilot["source_sha256"]) == {"osm", "population", "geometry"}
+        assert all(len(value) == 64 for value in bundle.pilot["source_sha256"].values())
         assert "2011" not in bundle.scenario["flood"]["scenario_id"]
 
     common = [

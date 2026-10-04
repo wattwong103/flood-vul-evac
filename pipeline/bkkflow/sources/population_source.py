@@ -158,7 +158,8 @@ def clip_to_aoi(
         with rasterio.open(target, "w", **profile) as writer:
             writer.write(data[0], 1)
 
-        window_total = float(np.nansum(data[0][data[0] > 0]))
+        positive = data[0][data[0] > 0].astype("float64")
+        window_total = float(positive.sum())
         stats = {
             "source": str(source),
             "clip": str(target),
@@ -173,7 +174,7 @@ def clip_to_aoi(
             "clip_nonzero_cells": int((data[0] > 0).sum()),
             "clip_max_cell": float(data[0].max()) if data[0].size else 0.0,
             "clip_mean_positive": (
-                float(data[0][data[0] > 0].mean()) if (data[0] > 0).any() else 0.0
+                float(positive.mean()) if positive.size else 0.0
             ),
             "clipped_at": utc_now_iso(),
             "method": "window clip in source CRS; no resampling",
