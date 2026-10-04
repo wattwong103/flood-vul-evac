@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import type { MapBundle } from "@/components/MapView";
 import { loadViewportLayer, type ViewportBounds, type ViewportResult } from "@/lib/client";
+import { isRefugeRecord } from "@/lib/map-refuges";
 
 const EMPTY = { type: "FeatureCollection" as const, features: [] };
 
@@ -39,15 +40,16 @@ export function useViewportLayers(
     });
     return () => controller.abort();
   }, [key, runId, viewport, detailed, network, buildings]);
-  if (!runId) return { bundle: source, note: null };
   const current = loaded?.key === key ? loaded : null;
   const footprints = current?.buildings ?? EMPTY;
+  const bundle = useMemo(() => !runId ? source : {
+      ...source, links: current?.network ?? EMPTY, buildings: footprints,
+      refuges: { ...EMPTY, features: footprints.features.filter(f => isRefugeRecord(f.properties)) } },
+    [runId, source, current?.network, footprints]);
   return {
-    bundle: { ...source, links: current?.network ?? EMPTY, buildings: footprints,
-      refuges: { ...EMPTY, features: footprints.features.filter(f =>
-        f.properties?.refuge_verified === true || f.properties?.refuge_status === "osm_tagged_candidate_unverified") } },
-    note: !network && !buildings ? null : !detailed
-      ? "Zoom in to level 13 for detailed roads and buildings. The city overview shows aggregated layers."
+    bundle,
+    note: !runId || (!network && !buildings) ? null : !detailed
+      ? "Road and building details are hidden at this scale. Zoom in to level 13 to load them."
       : current?.note ?? "Loading roads and buildings in this viewport…",
   };
 }
