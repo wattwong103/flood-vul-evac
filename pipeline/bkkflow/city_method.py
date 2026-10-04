@@ -4,7 +4,7 @@ Grid origins may differ, so exposure compares full footprints rather than IDs.
 These are scenario assumptions, not calibrated Bangkok evacuation parameters.
 """
 
-PUBLIC_GRID_M = 1000.0
+PUBLIC_GRID_M = 1000
 SNAP_TOLERANCE_M = 400.0
 ROUTING_CUTOFF_MINUTES = 180
 
