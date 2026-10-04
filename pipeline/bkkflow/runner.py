@@ -121,6 +121,52 @@ def register_output(
     context.outputs.append(entry)
 
 
+def _validate_cohort_reference(payload: Any, expected_run_id: str) -> dict[str, Any]:
+    """Reject an explicit pair reference unless its canonical identity is complete."""
+    if not isinstance(payload, dict):
+        raise ValueError("cohort reference metadata must be a JSON object")
+    required = {*evacuation_module.COHORT_IDENTITY_FIELDS, "run_id", "reference_run_id"}
+    missing = sorted(required - payload.keys())
+    if missing:
+        raise ValueError(f"cohort reference metadata missing fields: {', '.join(missing)}")
+    text_fields = ("run_id", "aoi_id", "order_geometry_rule", "presence_rule", "sample_rule")
+    if any(not isinstance(payload[key], str) or not payload[key].strip() for key in text_fields):
+        raise ValueError("cohort reference metadata has an invalid text identity field")
+    if payload["run_id"] != expected_run_id:
+        raise ValueError("cohort reference metadata run_id does not match its directory")
+    if payload["cohort_rule_version"] != evacuation_module.COHORT_RULE_VERSION:
+        raise ValueError("cohort reference metadata has an unsupported rule version")
+    if payload["reference_run_id"] is not None and (
+        not isinstance(payload["reference_run_id"], str) or not payload["reference_run_id"].strip()
+    ):
+        raise ValueError("cohort reference metadata has an invalid reference_run_id")
+    for key in ("seed", "max_agents", "scenario_time_s"):
+        if type(payload[key]) is not int:
+            raise ValueError(f"cohort reference metadata has invalid {key}")
+    if payload["seed"] < 0 or not 0 < payload["max_agents"] <= evacuation_module.COHORT_CAP:
+        raise ValueError("cohort reference metadata has invalid seed or sample cap")
+    if payload["scenario_time_s"] < 0:
+        raise ValueError("cohort reference metadata has invalid scenario_time_s")
+    for key in ("order_radius_m", "sampling_probability"):
+        value = payload[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+            raise ValueError(f"cohort reference metadata has invalid {key}")
+    if payload["order_radius_m"] <= 0 or not 0 <= payload["sampling_probability"] <= 1:
+        raise ValueError("cohort reference metadata has invalid radius or sampling probability")
+    centres = (payload["order_centre_lon"], payload["order_centre_lat"])
+    if centres != (None, None) and (
+        any(isinstance(value, bool) or not isinstance(value, (int, float))
+            or not np.isfinite(value) for value in centres)
+        or not -180 <= centres[0] <= 180 or not -90 <= centres[1] <= 90
+    ):
+        raise ValueError("cohort reference metadata has invalid order centre")
+    for key in ("sample_digest", "cohort_digest"):
+        value = payload[key]
+        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError(f"cohort reference metadata has invalid {key}")
+    return payload
+
+
 def execute_run(
     *,
     run_id: str | None = None,
@@ -138,14 +184,20 @@ def execute_run(
             bundle.input_root, expected_bundle=bundle
         )
     cohort_reference: dict[str, Any] | None = None
-    if cohort_from_run:
+    if cohort_from_run is not None:
+        if not isinstance(cohort_from_run, str) or not cohort_from_run.strip():
+            raise ValueError("cohort reference run ID must be a non-empty string")
         reference_dir = (RUNS_DIR / cohort_from_run).resolve()
         if reference_dir.parent != RUNS_DIR.resolve():
             raise ValueError("cohort reference run must be a direct child of runs/")
         reference_path = reference_dir / "cohort_metadata.json"
         if not reference_path.is_file():
             raise ValueError(f"cohort reference has no cohort_metadata.json: {cohort_from_run}")
-        cohort_reference = read_json(reference_path)
+        try:
+            loaded_reference = read_json(reference_path)
+        except (OSError, ValueError) as exc:
+            raise ValueError("cohort reference metadata is not valid JSON") from exc
+        cohort_reference = _validate_cohort_reference(loaded_reference, cohort_from_run)
     run_id = run_id or str(uuid.uuid4())
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=False)

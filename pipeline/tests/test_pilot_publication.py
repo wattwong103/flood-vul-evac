@@ -200,6 +200,25 @@ def test_pilot_pair_reuses_saved_fixed_cohort_and_rejects_mismatch(pilot_inputs)
     assert (dry_dir / "cohort_metadata.json").read_bytes() == reference_bytes
 
 
+@pytest.mark.parametrize(("reference_id", "payload"), [
+    ("null-reference", None),
+    ("array-reference", []),
+    ("incomplete-reference", {"run_id": "incomplete-reference"}),
+])
+def test_pilot_pair_rejects_invalid_reference_before_run_creation(
+    pilot_inputs, reference_id, payload
+):
+    reference_dir = pilot_inputs / reference_id
+    reference_dir.mkdir(parents=True)
+    write_json(reference_dir / "cohort_metadata.json", payload)
+    rejected_dir = pilot_inputs / f"rejected-{reference_id}"
+    with pytest.raises(ValueError, match="cohort reference metadata"):
+        runner.execute_run(
+            run_id=rejected_dir.name, pilot_id="khlong-san-district",
+            flood_enabled=True, max_agents=10, cohort_from_run=reference_id)
+    assert not rejected_dir.exists()
+
+
 def test_flooded_pilot_routes_with_peak_speed_multipliers(pilot_inputs, monkeypatch):
     captured = []
     build_graph = runner.mobility_module.build_routing_graph

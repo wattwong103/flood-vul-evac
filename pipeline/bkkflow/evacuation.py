@@ -38,6 +38,11 @@ TERMINAL_STATES = (
 COHORT_RULE_VERSION = "fixed-order-area-v1"
 COHORT_SEED = 29092026
 COHORT_CAP = 1200
+COHORT_IDENTITY_FIELDS = (
+    "cohort_rule_version", "aoi_id", "seed", "max_agents", "order_radius_m",
+    "scenario_time_s", "order_centre_lon", "order_centre_lat", "order_geometry_rule",
+    "presence_rule", "sample_rule", "sample_digest", "sampling_probability", "cohort_digest",
+)
 
 
 @dataclass
@@ -212,7 +217,8 @@ def select_cohort(
         "cohort_digest": cohort_digest,
     }
     if expected_metadata is not None:
-        mismatches = [key for key, value in identity.items() if expected_metadata.get(key) != value]
+        mismatches = [key for key in COHORT_IDENTITY_FIELDS
+                      if expected_metadata.get(key) != identity[key]]
         if mismatches:
             raise ValueError(f"fixed cohort mismatch: {', '.join(mismatches)}")
 
