@@ -74,3 +74,15 @@ def test_population_download_records_provenance_and_reuses_offline(tmp_path):
     path.write_bytes(b"tampered")
     with pytest.raises(ValueError, match="provenance"):
         download_count_raster(client, dataset, tmp_path)
+
+
+def test_city_raster_identity_matches_downloader():
+    from bkkflow import city_runner
+    from bkkflow.sources.population_source import count_raster_url, CITY_DATASET
+    assert count_raster_url(CITY_DATASET) == city_runner.WORLDPOP_URL
+    assert Path(CITY_DATASET["data_file"]).name == city_runner.WORLDPOP_RASTER.name
+
+
+def test_missing_source_bytes_have_a_clear_diagnostic(tmp_path):
+    with pytest.raises(ValueError, match="Missing staged source: missing.tif"):
+        provenance.verify_source(tmp_path / "missing.tif", "https://example.test/missing.tif")

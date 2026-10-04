@@ -38,13 +38,14 @@ from .provenance import verify_source
 from .map_index import build_map_index
 from .city_method import PUBLIC_GRID_M
 from .sources.registry import load_registry
+from .sources.population_source import CITY_DATASET, CITY_SOURCE_ID, count_raster_url
 from .sources import city_osm, destinations as destinations_source, gsw, mitrearth
 from .util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
-WORLDPOP_RASTER = Path(__file__).resolve().parents[2] / "data/staged/population/tha_ppp_2020.tif"
-WORLDPOP_SOURCE_ID = "worldpop-global-2000-2020-tha-100m"
-WORLDPOP_URL = "https://data.worldpop.org/GIS/Population/Global_2000_2020/2020/THA/tha_ppp_2020.tif"
+WORLDPOP_RASTER = Path(__file__).resolve().parents[2] / "data/staged/population" / Path(CITY_DATASET["data_file"]).name
+WORLDPOP_SOURCE_ID = CITY_SOURCE_ID
+WORLDPOP_URL = count_raster_url(CITY_DATASET)
 
 FLOOD_NOT_COMPUTED = (
     "not_computed_insufficient_dem_vertical_accuracy"

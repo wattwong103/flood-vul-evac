@@ -28,6 +28,13 @@ from ..util import STAGED_DIR, ensure_dir, utc_now_iso, write_json
 REST_BASE = "https://www.worldpop.org/rest/data"
 DOWNLOAD_BASE = "https://data.worldpop.org"
 SOURCE_ID = "worldpop-global2-tha-100m-r2025a"
+CITY_SOURCE_ID = "worldpop-global-2000-2020-tha-100m"
+CITY_DATASET = {"popyear": "2020", "data_file": "GIS/Population/Global_2000_2020/2020/THA/tha_ppp_2020.tif"}
+
+
+def count_raster_url(dataset: dict[str, Any]) -> str:
+    """Use the same resource identity for download verification and manifests."""
+    return f"{DOWNLOAD_BASE}/{dataset['data_file'].lstrip('/')}"
 
 
 @dataclass
@@ -87,7 +94,7 @@ def download_count_raster(
 ) -> tuple[Path, dict[str, Any]]:
     """Download the count GeoTIFF with resume and a verified byte count."""
     target_dir = ensure_dir(Path(out_dir or STAGED_DIR / "population"))
-    url = f"{DOWNLOAD_BASE}/{dataset['data_file']}"
+    url = count_raster_url(dataset)
     name = Path(dataset["data_file"]).name
     destination = target_dir / name
     if destination.is_file():

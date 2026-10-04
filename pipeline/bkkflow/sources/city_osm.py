@@ -130,8 +130,12 @@ def source_coverage(path: Path, aoi: gpd.GeoDataFrame) -> dict[str, Any]:
     polygon = union_all(positive).difference(union_all(negative))
     if polygon.is_empty or not polygon.is_valid or not polygon.covers(aoi.to_crs("EPSG:4326").geometry.union_all()):
         raise ValueError("OSM source polygon does not cover the complete city AOI")
+    try:
+        reference = os.path.relpath(path.resolve(), REPO_ROOT).replace(os.sep, "/")
+    except ValueError:  # Windows cannot express relative paths across drives.
+        reference = path.resolve().as_posix()
     return {"covers_aoi": True, "sha256": sha256_file(path),
-            "path": os.path.relpath(path.resolve(), REPO_ROOT).replace(os.sep, "/"),
+            "path": reference,
             "polygon_wkt": polygon.wkt, "crs": "EPSG:4326",
             "note": "Source coverage, not proof of mapping completeness."}
 
