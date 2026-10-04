@@ -49,6 +49,7 @@ def extract_destinations(
     *,
     pbf_path: str | Path = DEFAULT_PBF,
     out_dir: str | Path | None = None,
+    aoi_frame=None,
 ) -> dict[str, Any]:
     """Extract destination candidates from the OSM points layer.
 
@@ -56,13 +57,16 @@ def extract_destinations(
     recovered from the ``other_tags`` fragment.
     """
     import pyogrio
+    from ..aoi import load_aoi
 
+    aoi = (load_aoi("bangkok-bma") if aoi_frame is None else aoi_frame).to_crs("EPSG:4326")
     source = Path(pbf_path)
     points = pyogrio.read_dataframe(
         source,
         layer="points",
         use_arrow=True,
         columns=["osm_id", "name", "other_tags"],
+        bbox=tuple(aoi.total_bounds),
     )
     tags = points["other_tags"].map(parse_other_tags)
     amenity = tags.map(lambda item: item.get("amenity"))
@@ -71,6 +75,8 @@ def extract_destinations(
 
     selected["amenity"] = amenity[keep]
     selected["destination_class"] = selected["amenity"].map(DESTINATION_AMENITIES)
+    selected = selected.to_crs(aoi.crs)
+    selected = selected[selected.geometry.intersects(aoi.geometry.union_all())].copy()
     selected["verified"] = False
     selected["status"] = "osm_tagged_candidate_unverified"
     selected["operator"] = None

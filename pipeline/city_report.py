@@ -112,7 +112,7 @@ def figure_city_baseline(run_id: str, report_dir: Path) -> Path:
         axis.set_ylabel("water extent (km2)")
         axis.text(
             0.02, 0.95,
-            "2011's flood is absent here: an annual\nLandsat composite cannot capture it.",
+            "Annual water classes do not resolve\nflood-event timing or peak extent.",
             transform=axis.transAxes, fontsize=7.5, va="top", color="#b91c1c",
         )
         axis.tick_params(axis="x", labelsize=8)
@@ -160,7 +160,7 @@ def write_city_summary(run_id: str, report_dir: Path, figure: Path) -> Path:
         f"# BKK/FLOW city baseline run `{run_id}`",
         "",
         "**Validation status: demonstration.** This run covers the whole Bangkok "
-        "Metropolitan Administration. It contains **no flood layer and no evacuation "
+        "Metropolitan Administration. It contains **no flood depth layer and no evacuation "
         "outcomes**, deliberately, for the reason recorded below.",
         "",
         "## Geography",
@@ -176,8 +176,7 @@ def write_city_summary(run_id: str, report_dir: Path, figure: Path) -> Path:
         f"- Total length: {stats['network']['total_length_km']:,.0f} km "
         f"(walkable {stats['network']['walk_length_km']:,.0f} km, "
         f"vehicle {stats['network']['vehicle_length_km']:,.0f} km)",
-        "- Routing: a compressed routing index; a full-city travel-time field takes about "
-        "2 seconds and reaches 98.3% of nodes.",
+        "- Routing uses a compressed network index. Connectivity is scenario-dependent.",
         "",
         "## Population",
         "",
@@ -205,15 +204,15 @@ def write_city_summary(run_id: str, report_dir: Path, figure: Path) -> Path:
         "|---|---:|---:|---:|",
     ]
     for entry in stats["flood"]["observed_extent"]["years"]:
+        share = "unobserved" if entry["water_share"] is None else f"{100 * entry['water_share']:.2f}%"
         lines.append(
             f"| {entry['year']} | {entry['water_km2']:.1f} | "
-            f"{100 * entry['water_share']:.2f}% | {entry['excess_km2_vs_baseline']:+.1f} |"
+            f"{share} | {entry['excess_km2_vs_baseline']:+.1f} |"
         )
     lines += [
         "",
-        "2011s flood does not appear here: an annual Landsat composite cannot capture",
-        "a flood lasting weeks inside a single year. Every year here is a lower bound.",
-        "lasts weeks inside a year. Every year here is a lower bound on flood extent.",
+        "Annual classifications do not resolve event timing or peak flood extent. No observations",
+        "is not dry land. Shares refer to classified pixels, not the entire city area.",
         "",
         "## Flood depth and evacuation",
         "",
@@ -286,7 +285,7 @@ def _plot_observed_water(axis, aoi, stats) -> None:
         return
     geometry = aoi.to_crs("OGC:CRS84").geometry.union_all()
     with rasterio.open(path) as dataset:
-        data, transform = rio_mask(dataset, [geometry], crop=True, filled=True, nodata=gsw.CODE_NO_DATA_LAND)
+        data, transform = rio_mask(dataset, [geometry], crop=True, filled=True, nodata=gsw.CODE_NO_OBSERVATIONS)
     array = data[0]
     rows, cols = array.shape
     # Compute cell centres from the affine transform directly; rasterio's xy()
@@ -296,7 +295,7 @@ def _plot_observed_water(axis, aoi, stats) -> None:
     xs = transform.c + transform.a * (col_index + 0.5)
     ys = transform.f + transform.e * (row_index + 0.5)
     sampled = array[row_index, col_index]
-    water = sampled == gsw.CODE_WATER
+    water = gsw.is_water(sampled)
     # The mask transform is in the raster CRS (WGS84); the axes are in the
     # analysis CRS, so the sampled points have to be reprojected too.
     from pyproj import Transformer
@@ -304,9 +303,10 @@ def _plot_observed_water(axis, aoi, stats) -> None:
     to_analysis = Transformer.from_crs(dataset.crs, aoi.crs, always_xy=True)
     px, py = to_analysis.transform(xs[water], ys[water])
     axis.scatter(px, py, s=0.6, c="#1d4ed8", marker="s", linewidths=0)
+    share = "unobserved" if wettest["water_share"] is None else f"{100 * wettest['water_share']:.1f}% of classified area"
     axis.text(
         0.02, 0.02,
-        f"{wettest['year']}: {wettest['water_km2']:.0f} km2 ({100*wettest['water_share']:.1f}% of classified area)",
+        f"{wettest['year']}: {wettest['water_km2']:.0f} km2 ({share})",
         transform=axis.transAxes, fontsize=7.5,
     )
     _draw_outline(axis, aoi)

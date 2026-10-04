@@ -12,15 +12,21 @@
     "geometry_licence": "ODbL 1.0",
     "attribution": "(c) OpenStreetMap contributors",
     "area_km2": 1643.5357,
-    "bbox_wgs84": [100.3279, 13.2191, 100.9386, 13.9552],
+    "bbox_wgs84": [
+      100.3279,
+      13.2191,
+      100.9386,
+      13.9552
+    ],
     "rationale": "The Bangkok Metropolitan Administration, the full administrative extent the project plan names as the post-pilot target. Admin level 4, not a hand-drawn box, so population, network and reporting geographies all refer to the same place."
   },
   "osm_extract": {
-    "source_id": "bbbike-bangkok-osm-extract",
-    "resource_url": "https://download.bbbike.org/osm/bbbike/Bangkok/Bangkok.osm.pbf",
-    "byte_count": 42216312,
+    "source_id": "geofabrik-thailand-osm-20260929",
+    "resource_url": "https://download.geofabrik.de/asia/thailand-260929.osm.pbf",
+    "byte_count": 327965278,
     "content_sha256": "to be recorded per run from the staged file",
-    "rationale": "A single regional extract replaces tiled Overpass queries. Overpass is the right tool for one district and the wrong tool for 1,643 km2; the extract is read locally with GDAL's OSM driver, so no osmium dependency and no API rate limiting."
+    "coverage_url": "https://download.geofabrik.de/asia/thailand.poly",
+    "rationale": "A dated country extract covers the complete BMA source extent. The publisher polygon is checked against the AOI before reuse; source coverage does not prove mapping completeness."
   },
   "storage_crs": "OGC:CRS84",
   "analysis_crs": "EPSG:32647",

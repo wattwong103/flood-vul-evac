@@ -34,7 +34,7 @@ def cell_id(x: float, y: float) -> str:
     return f"ow_{int(x)}_{int(y)}"
 
 
-def build() -> dict:
+def build(*, out_dir: Path | None = None) -> dict:
     aoi = aoi_module.load_aoi("bangkok-bma")
     aoi_wgs84 = aoi.geometry.iloc[0]
     bounds = tuple(float(value) for value in aoi_wgs84.bounds)
@@ -42,7 +42,7 @@ def build() -> dict:
     poly = projected.geometry.union_all()
     minx, miny, maxx, maxy = poly.bounds
 
-    target = ensure_dir(CURATED_DIR / "city")
+    target = ensure_dir(out_dir or CURATED_DIR / "city")
     destination = target / "observed_water_cells.parquet"
 
     records: list[dict] = []
@@ -56,7 +56,7 @@ def build() -> dict:
             continue
         with rasterio.open(path) as dataset:
             data, transform = rio_mask(
-                dataset, [aoi_wgs84], crop=True, filled=True, nodata=gsw.CODE_NO_DATA_LAND
+                dataset, [aoi_wgs84], crop=True, filled=True, nodata=gsw.CODE_NO_OBSERVATIONS
             )
         array = data[0]
         rows, cols = array.shape
@@ -75,7 +75,7 @@ def build() -> dict:
         gx = (np.floor(px / GRID_M) * GRID_M).astype("int64")
         gy = (np.floor(py / GRID_M) * GRID_M).astype("int64")
 
-        water = (array == gsw.CODE_WATER).ravel()
+        water = gsw.is_water(array).ravel()
         land = (~np.isin(array.ravel(), gsw.CODE_NODATA)).ravel()
 
         paired = pd.DataFrame({"gx": gx, "gy": gy, "w": water.astype("int64"), "c": land.astype("int64")})
@@ -110,7 +110,9 @@ def build() -> dict:
         }
         print(f"  {year}: {len(grouped)} 1 km cells contain observed water")
 
-    frame = pd.DataFrame.from_records(records)
+    columns = ["cell_id", "year", "x", "y", "lon", "lat", "water_px", "classified_px",
+               "water_share", "water_km2", "source_role", "measures"]
+    frame = pd.DataFrame.from_records(records, columns=columns)
     if not frame.empty:
         frame = gpd.GeoDataFrame(
             frame, geometry=gpd.points_from_xy(frame["x"], frame["y"]), crs="EPSG:32647"
@@ -123,7 +125,7 @@ def build() -> dict:
         frame["lat"] = wgs84.geometry.y
         frame = frame[["cell_id", "year", "x", "y", "lon", "lat", "water_px", "classified_px",
                        "water_share", "water_km2", "source_role", "measures"]]
-        frame.to_parquet(destination, index=False)
+    frame.to_parquet(destination, index=False)
 
     return {
         "path": str(destination),
@@ -134,9 +136,9 @@ def build() -> dict:
         "sha256": sha256_file(destination) if destination.is_file() else None,
         "written_at": utc_now_iso(),
         "note": (
-            "Aggregated to the 1 km public grid to match the population layer. "
-            "Extent only: no depth, no duration, no direction. Every year is a lower "
-            "bound because an annual Landsat composite under-detects short-lived flooding."
+            "Aggregated to a 1 km projected grid. Extent only: no depth, duration or "
+            "direction. Annual classes do not resolve flood-event timing or peak extent; "
+            "no observations is not dry land."
         ),
     }
 

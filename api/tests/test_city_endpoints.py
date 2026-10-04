@@ -28,6 +28,7 @@ from api.app import app  # noqa: E402
 
 def _city_run_id() -> str | None:
     matches = glob.glob(str(REPO_ROOT / "runs" / "*" / "observed_water.json"))
+    matches = [p for p in matches if (Path(p).parent / "manifest.json").is_file()]
     if not matches:
         return None
     return os.path.basename(os.path.dirname(max(matches, key=os.path.getmtime)))
@@ -78,12 +79,12 @@ def test_observed_water_is_flagged_as_observation_and_not_depth(client: TestClie
 
 
 @needs_run
-def test_observed_water_records_the_missing_2011_signal(client: TestClient) -> None:
-    """The absence of the 2011 flood is a finding, not a gap to hide."""
+def test_observed_water_states_annual_observation_limits(client: TestClient) -> None:
+    """Annual water classes cannot establish whether an event was absent."""
     body = client.get(f"/v1/runs/{RUN_ID}/observed-water").json()
     notes = " ".join(body.get("interpretation_notes", [])).lower()
-    assert "2011" in notes
-    assert "lower bound" in notes
+    assert "annual water classes" in notes
+    assert "no observations is not dry land" in notes
 
 
 @needs_run
@@ -105,11 +106,13 @@ def test_observed_water_cells_are_geojson_with_extent_only_properties(client: Te
 
 
 @needs_run
-def test_observed_water_cells_fall_back_when_a_year_is_absent(client: TestClient) -> None:
+def test_observed_water_cells_do_not_substitute_an_absent_year(client: TestClient) -> None:
     body = client.get(
         f"/v1/runs/{RUN_ID}/observed-water/cells", params={"year": 1999, "limit": 50}
     ).json()
-    assert body["year"] in body["available_years"]
+    assert body["year"] == 1999
+    assert body["available"] is False
+    assert body["features"] == []
     assert any(warning.get("code") == "year_not_available" for warning in body["warnings"])
 
 
