@@ -36,6 +36,7 @@ from . import drainage as drainage_module
 from . import observed_evac as observed_evac_module
 from .provenance import verify_source
 from .map_index import build_map_index
+from .city_method import PUBLIC_GRID_M
 from .sources.registry import load_registry
 from .sources import city_osm, destinations as destinations_source, gsw, mitrearth
 from .util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
@@ -375,7 +376,7 @@ def execute_city_run(
            note=f"{total_residents:,.0f} weighted residents")
 
     stage_start = time.time()
-    grid = _agglomerate_cells(cells, crs=analysis_crs, cell_size_m=1000.0)
+    grid = _agglomerate_cells(cells, crs=analysis_crs, cell_size_m=PUBLIC_GRID_M)
     grid_out = grid.copy()
     grid_out["geometry_wkt"] = grid.geometry.to_wkt()
     grid_out.drop(columns="geometry").to_parquet(run_dir / "population_grid_1km.parquet", index=False)
@@ -599,7 +600,7 @@ def execute_city_run(
                 "external_trip_policy": "boundary_flows_not_modelled",
             },
             "privacy": {
-                "public_min_cell_metres": 1000,
+                "public_min_cell_metres": PUBLIC_GRID_M,
                 "minimum_reported_count": 20,
                 "real_trajectories_present": False,
             },
@@ -623,7 +624,7 @@ def execute_city_run(
                 {"reason": "mobility stages are not part of the city baseline run"},
             ),
             "aggregation": manifest_module.component(
-                "bkk-grid-aggregate", "0.1.0", {"public_grid_metres": 1000},
+                "bkk-grid-aggregate", "0.1.0", {"public_grid_metres": PUBLIC_GRID_M},
             ),
         },
         flood_scenario_entry={
