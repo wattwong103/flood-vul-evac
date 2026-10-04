@@ -772,19 +772,22 @@ def _eligible_people(rows: int = 8) -> pd.DataFrame:
 
 def test_dry_and_wet_share_fixed_cohort_while_exposure_stays_separate() -> None:
     persons = _eligible_people()
+    persons.loc[7, "lon"] = 100.6  # flooded and present, but outside the order area
     common = {"aoi_id": "aoi-a", "seed": 29092026, "max_agents": 1200}
     dry, dry_meta = evacuation.select_cohort(
         persons, surface_depth_at=lambda *_: 9.0, scenario_time_s=0,
         min_depth_m=0.0, **common)
     wet, wet_meta = evacuation.select_cohort(
-        persons, surface_depth_at=lambda lon, _: 0.5 if lon > 100.5003 else 0.0,
+        persons, surface_depth_at=lambda lon, _: 0.5 if lon > 100.55 else 0.0,
         scenario_time_s=0, min_depth_m=0.15, expected_metadata=dry_meta, **common)
     columns = ["person_id", "order_id", "weight", "sampling_probability"]
     pd.testing.assert_frame_equal(dry[columns], wet[columns])
     assert dry_meta["cohort_digest"] == wet_meta["cohort_digest"]
     assert dry["exposed"].sum() == 0 and dry_meta["exposed_weighted"] == 0.0
-    assert 0 < wet["exposed"].sum() < len(wet)
-    assert len(wet) == len(dry) == len(persons)
+    assert wet["exposed"].sum() == 0 and wet_meta["exposed_weighted"] == persons.loc[7, "weight"]
+    assert wet_meta["present_weighted"] == dry_meta["present_weighted"] == persons["weight"].sum()
+    assert persons.loc[7, "person_id"] not in set(wet["person_id"])
+    assert len(wet) == len(dry) == len(persons) - 1
 
 
 def test_fixed_cohort_sampling_is_deterministic_capped_and_aoi_scoped() -> None:

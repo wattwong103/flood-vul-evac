@@ -215,14 +215,17 @@ def select_cohort(
 
     if min_depth_m > 0:
         depths = np.array([
-            surface_depth_at(lon, lat) for lon, lat in zip(cohort["lon"], cohort["lat"])
+            surface_depth_at(lon, lat) for lon, lat in zip(persons["lon"], persons["lat"])
         ])
-        cohort["scenario_depth_m"] = np.round(depths, 4)
-        cohort["exposed"] = cohort["scenario_depth_m"] >= min_depth_m
+        persons["scenario_depth_m"] = np.round(depths, 4)
+        persons["exposed"] = persons["scenario_depth_m"] >= min_depth_m
     else:
-        cohort["scenario_depth_m"] = 0.0
-        cohort["exposed"] = False
-    exposed_weight = float(cohort.loc[cohort["exposed"], "weight"].sum())
+        persons["scenario_depth_m"] = 0.0
+        persons["exposed"] = False
+    cohort[["scenario_depth_m", "exposed"]] = persons.loc[
+        cohort.index, ["scenario_depth_m", "exposed"]
+    ]
+    exposed_weight = float(persons.loc[persons["exposed"], "weight"].sum())
 
     reconciliation = {
         **identity,
