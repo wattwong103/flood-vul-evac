@@ -55,6 +55,30 @@ def test_unobserved_area_is_not_reported_as_zero_flooding(tmp_path):
     assert result.as_dict()["aoi_water_share"] is None
 
 
+@pytest.mark.parametrize("clip", [False, True])
+def test_nodata_zero_tag_does_not_hide_no_observation_pixels(tmp_path, clip):
+    import rasterio
+    from shapely.geometry import box
+    path, bounds = raster_fixture(tmp_path, [0, 1, 2, 3])
+    with rasterio.open(path, "r+") as dst:
+        dst.nodata = 0
+    result = gsw.measure_year(2020, path.name, path, bounds,
+                             aoi_geometry=box(*bounds) if clip else None)
+    assert result.aoi_no_observation_pixels == 1
+    assert result.aoi_water_pixels == 2
+
+
+def test_road_outside_raster_does_not_inherit_border_water(monkeypatch):
+    import geopandas as gpd
+    from rasterio.transform import from_origin
+    from shapely.geometry import LineString
+    from bkkflow import observed_evac
+    monkeypatch.setattr(observed_evac, "water_mask", lambda year:
+        (np.ones((2, 2), dtype=bool), from_origin(0, 2, 1, 1), "EPSG:32647"))
+    edges = gpd.GeoDataFrame(geometry=[LineString([(3, .5), (4, .5)])], crs="EPSG:32647")
+    assert not observed_evac.edges_in_water(edges, 2020).any()
+
+
 def test_unknown_source_code_is_rejected():
     with pytest.raises(ValueError, match="waterClass"):
         gsw.is_water(np.array([0, 1, 255], dtype="uint8"))

@@ -42,7 +42,7 @@ export function ValidationStamp({
 }) {
   const resolved = resolveValidationStatus(status);
   return (
-    <p className={`validation-stamp${compact ? " compact" : ""}`}>
+    <div className={`validation-stamp${compact ? " compact" : ""}`}>
       <Badge
         variant="outline"
         className={`status-badge status-${resolved ?? "unknown"}`}
@@ -55,7 +55,7 @@ export function ValidationStamp({
       <span className="stamp-time">
         model time {modelTime ?? NOT_AVAILABLE}
       </span>
-    </p>
+    </div>
   );
 }
 

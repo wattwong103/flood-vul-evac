@@ -157,7 +157,7 @@ def _load(path) -> gpd.GeoDataFrame | None:
     return frame
 
 
-WATER_MASK_CACHE: dict[int, Any] = {}
+WATER_MASK_CACHE: dict[tuple, Any] = {}
 
 
 def water_mask(year: int):
@@ -170,11 +170,6 @@ def water_mask(year: int):
     finding. The 30 m classification is the resolution at which "is this road
     wet" is a meaningful question.
     """
-    if year in WATER_MASK_CACHE:
-        return WATER_MASK_CACHE[year]
-
-    from pathlib import Path as _Path
-
     import rasterio
     from rasterio.mask import mask as rio_mask
 
@@ -183,10 +178,10 @@ def water_mask(year: int):
 
     aoi = load_aoi("bangkok-bma")
     bounds = tuple(float(value) for value in aoi.geometry.union_all().bounds)
-    path = _Path("data/staged/gsw") / gsw_module.tile_name_for(year, bounds)
-    if not path.is_file():
-        WATER_MASK_CACHE[year] = None
-        return None
+    path, metadata = gsw_module.staged_tile(year, bounds)
+    key = (str(path.resolve()), metadata["content_sha256"], aoi.geometry.union_all().wkb)
+    if key in WATER_MASK_CACHE:
+        return WATER_MASK_CACHE[key]
     with rasterio.open(path) as dataset:
         data, transform = rio_mask(
             dataset,
@@ -197,7 +192,7 @@ def water_mask(year: int):
         )
         crs = dataset.crs
     result = (gsw_module.is_water(data[0]), transform, crs)
-    WATER_MASK_CACHE[year] = result
+    WATER_MASK_CACHE[key] = result
     return result
 
 
@@ -233,10 +228,12 @@ def edges_in_water(
         ys.append(points[:, 1])
     mask_x, mask_y = to_mask.transform(np.concatenate(xs), np.concatenate(ys))
     rows, cols = rowcol(transform, mask_x, mask_y)
-    rows = np.clip(np.asarray(rows, dtype="int64"), 0, mask.shape[0] - 1)
-    cols = np.clip(np.asarray(cols, dtype="int64"), 0, mask.shape[1] - 1)
+    rows, cols = np.asarray(rows, dtype="int64"), np.asarray(cols, dtype="int64")
+    inside = (rows >= 0) & (rows < mask.shape[0]) & (cols >= 0) & (cols < mask.shape[1])
+    sampled = np.zeros(len(rows), dtype=bool)
+    sampled[inside] = mask[rows[inside], cols[inside]]
     # Concatenation groups by sample fraction, not by edge.
-    wet = mask[rows, cols].reshape(samples_per_edge, len(edges))
+    wet = sampled.reshape(samples_per_edge, len(edges))
     return wet.any(axis=0)
 
 
