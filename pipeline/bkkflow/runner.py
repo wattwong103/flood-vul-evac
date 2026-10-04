@@ -127,6 +127,7 @@ def execute_run(
     flood_enabled: bool = True,
     max_agents: int | None = None,
     pilot_id: str | None = None,
+    cohort_from_run: str | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline once and return the published run summary."""
     bundle = load_pilot_bundle(
@@ -136,6 +137,15 @@ def execute_run(
         pilot_stage.validate_staged_pilot(
             bundle.input_root, expected_bundle=bundle
         )
+    cohort_reference: dict[str, Any] | None = None
+    if cohort_from_run:
+        reference_dir = (RUNS_DIR / cohort_from_run).resolve()
+        if reference_dir.parent != RUNS_DIR.resolve():
+            raise ValueError("cohort reference run must be a direct child of runs/")
+        reference_path = reference_dir / "cohort_metadata.json"
+        if not reference_path.is_file():
+            raise ValueError(f"cohort reference has no cohort_metadata.json: {cohort_from_run}")
+        cohort_reference = read_json(reference_path)
     run_id = run_id or str(uuid.uuid4())
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -418,6 +428,7 @@ def execute_run(
         sample_cap=limit,
         total_residents=total_residents,
         routed_trips=routed,
+        cohort_reference=cohort_reference,
     )
 
 
@@ -445,6 +456,7 @@ def _finish_run(
     sample_cap: int,
     total_residents: float,
     routed_trips: int,
+    cohort_reference: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Flood, cohort, evacuation, validation and publication."""
     analysis_crs = context.pilot["analysis_crs"]
@@ -550,9 +562,22 @@ def _finish_run(
         surface_depth_at=depth_at,
         scenario_time_s=scenario.start_time_s,
         min_depth_m=exposure_threshold,
+        aoi_id=context.pilot["aoi"]["aoi_id"],
+        seed=seed,
+        max_agents=sample_cap,
+        sample_persons=sample,
+        sampling_probability=min(1.0, sample_cap / len(persons)) if len(persons) else 0.0,
+        expected_metadata=cohort_reference,
+    )
+    cohort_reconciliation["run_id"] = context.run_id
+    cohort_reconciliation["reference_run_id"] = (
+        cohort_reference.get("run_id") if cohort_reference else None
     )
     cohort_path = _write_parquet(context, "cohort.parquet", cohort)
     register_output(context, "cohort", cohort_path, rows=len(cohort))
+    cohort_metadata_path = context.run_dir / "cohort_metadata.json"
+    write_json(cohort_metadata_path, cohort_reconciliation)
+    register_output(context, "cohort_metadata", cohort_metadata_path)
     context.record("cohort", time.time() - stage_start, rows=len(cohort),
                    note=json_note(cohort_reconciliation))
 

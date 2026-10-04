@@ -35,6 +35,10 @@ TERMINAL_STATES = (
     "did_not_depart",
 )
 
+COHORT_RULE_VERSION = "fixed-order-area-v1"
+COHORT_SEED = 29092026
+COHORT_CAP = 1200
+
 
 @dataclass
 class EvacuationScenario:
@@ -124,63 +128,111 @@ def select_cohort(
     scenario_time_s: int,
     min_depth_m: float = 0.15,
     order_radius_m: float = 4000.0,
+    aoi_id: str = "unspecified",
+    seed: int = COHORT_SEED,
+    max_agents: int = COHORT_CAP,
+    sample_persons: pd.DataFrame | None = None,
+    sampling_probability: float = 1.0,
+    expected_metadata: dict[str, Any] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Select the evacuation cohort: present, in the affected area, ordered.
-
-    The exposure threshold is the same 0.15 m used for flooded buildings and
-    flooded area, so "exposed people", "flooded buildings" and "flooded area"
-    all refer to the same water level. A lower threshold would mark nearly
-    everyone as exposed, which makes the distinction from "present" vacuous.
-
-    Returns the cohort and an explicit reconciliation so the website can show
-    how many people were present, how many were exposed, and how many entered
-    the cohort, without conflating them.
-    """
-    if persons.empty:
-        return persons.copy(), {"present": 0.0, "exposed": 0.0, "cohort": 0.0}
-
-    depths = np.array([surface_depth_at(lon, lat) for lon, lat in zip(persons["lon"], persons["lat"])])
+    """Filter one deterministic upstream sample, then attach scenario exposure."""
+    if max_agents <= 0:
+        raise ValueError("fixed cohort max_agents must be positive")
+    if not 0.0 <= sampling_probability <= 1.0:
+        raise ValueError("fixed cohort sampling_probability must be between zero and one")
+    sample_persons = persons if sample_persons is None else sample_persons
+    if len(sample_persons) > max_agents:
+        raise ValueError("fixed cohort input exceeds the declared upstream sample cap")
+    if persons["person_id"].duplicated().any() or sample_persons["person_id"].duplicated().any():
+        raise ValueError("fixed cohort person_id values must be unique")
+    sample_rows = sample_persons.sort_values("person_id", kind="stable")
+    sample_weights = sample_rows.set_index("person_id")["weight"]
+    if not set(persons["person_id"]).issubset(sample_weights.index):
+        raise ValueError("present rows must be a subset of the upstream sample")
+    for row in persons.itertuples():
+        if float(row.weight).hex() != float(sample_weights.loc[row.person_id]).hex():
+            raise ValueError("present-row weights must match the upstream sample")
     persons = persons.copy()
-    persons["scenario_depth_m"] = np.round(depths, 4)
-    if min_depth_m > 0:
-        persons["exposed"] = persons["scenario_depth_m"] >= min_depth_m
+    centre_x = float(persons["lon"].mean()) if len(persons) else None
+    centre_y = float(persons["lat"].mean()) if len(persons) else None
+    if len(persons):
+        persons["distance_to_centre_m"] = np.hypot(
+            persons["lon"] - centre_x, persons["lat"] - centre_y
+        )
+        persons["in_order_area"] = (
+            persons["distance_to_centre_m"] <= (order_radius_m / 111_320.0)
+        )
     else:
-        # Dry baseline: nobody is exposed to flood water. The cohort still
-        # exists, because it is defined by the evacuation order, not by
-        # exposure. Reporting everyone as "exposed" to a flood that does not
-        # exist would be a false statement.
-        persons["exposed"] = False
-
-    centre_x = float(persons["lon"].mean())
-    centre_y = float(persons["lat"].mean())
-    persons["distance_to_centre_m"] = np.hypot(
-        persons["lon"] - centre_x, persons["lat"] - centre_y
-    )
-    persons["in_order_area"] = persons["distance_to_centre_m"] <= (order_radius_m / 111_320.0)
-
+        persons["distance_to_centre_m"] = pd.Series(dtype=float)
+        persons["in_order_area"] = pd.Series(dtype=bool)
     present_weight = float(persons["weight"].sum())
-    exposed_weight = float(persons.loc[persons["exposed"], "weight"].sum())
+    eligible = persons.loc[persons["in_order_area"]].sort_values("person_id", kind="stable")
+    cohort = eligible.copy()
+    cohort["order_id"] = [
+        "order_" + hashlib.sha256(f"{aoi_id}|{person_id}".encode()).hexdigest()[:20]
+        for person_id in cohort["person_id"]
+    ]
+    cohort["sampling_probability"] = sampling_probability
+    cohort["cohort_reason"] = "scenario_independent_fixed_order_area"
+
+    geometry_rule = "WGS84 degree distance <= order_radius_m / 111320"
+    presence_rule = "input rows present at scenario_time_s before cohort construction"
+    sample_rule = (
+        "numpy.default_rng(seed).choice over full person row order without replacement; "
+        "selected indices sorted; cap=min(full rows, max_agents)"
+    )
+    sample_digest = hashlib.sha256()
+    for row in sample_rows.itertuples():
+        sample_digest.update(f"{row.person_id}\0{float(row.weight).hex()}\n".encode())
+    digest = hashlib.sha256(
+        f"{COHORT_RULE_VERSION}|{aoi_id}|{seed}|{max_agents}|{centre_x}|{centre_y}|".encode()
+    )
+    for row in cohort.itertuples():
+        digest.update(
+            f"{row.order_id}\0{row.person_id}\0{float(row.weight).hex()}\n".encode()
+        )
+    cohort_digest = digest.hexdigest()
+    identity = {
+        "cohort_rule_version": COHORT_RULE_VERSION,
+        "aoi_id": aoi_id,
+        "seed": int(seed),
+        "max_agents": int(max_agents),
+        "order_radius_m": float(order_radius_m),
+        "scenario_time_s": int(scenario_time_s),
+        "order_centre_lon": centre_x,
+        "order_centre_lat": centre_y,
+        "order_geometry_rule": geometry_rule,
+        "presence_rule": presence_rule,
+        "sample_rule": sample_rule,
+        "sample_digest": sample_digest.hexdigest(),
+        "sampling_probability": float(sampling_probability),
+        "cohort_digest": cohort_digest,
+    }
+    if expected_metadata is not None:
+        mismatches = [key for key, value in identity.items() if expected_metadata.get(key) != value]
+        if mismatches:
+            raise ValueError(f"fixed cohort mismatch: {', '.join(mismatches)}")
+
     if min_depth_m > 0:
-        cohort = persons[persons["exposed"] & persons["in_order_area"]].copy()
-        cohort["cohort_reason"] = "in_order_area_and_flooded"
+        depths = np.array([
+            surface_depth_at(lon, lat) for lon, lat in zip(cohort["lon"], cohort["lat"])
+        ])
+        cohort["scenario_depth_m"] = np.round(depths, 4)
+        cohort["exposed"] = cohort["scenario_depth_m"] >= min_depth_m
     else:
-        cohort = persons[persons["in_order_area"]].copy()
-        cohort["cohort_reason"] = "in_order_area_dry_baseline"
+        cohort["scenario_depth_m"] = 0.0
+        cohort["exposed"] = False
+    exposed_weight = float(cohort.loc[cohort["exposed"], "weight"].sum())
 
     reconciliation = {
+        **identity,
         "present_weighted": round(present_weight, 2),
         "exposed_weighted": round(exposed_weight, 2),
         "cohort_weighted": round(float(cohort["weight"].sum()), 2),
+        "eligible_rows": int(len(eligible)),
+        "cohort_rows": int(len(cohort)),
         "min_depth_m": min_depth_m,
-        "order_radius_m": order_radius_m,
-        "scenario_time_s": scenario_time_s,
-        "cohort_rule": (
-            "present AND depth >= min_depth_m AND within order radius"
-            if min_depth_m > 0
-            else "present AND within order radius (dry baseline: no water condition)"
-        ),
-        "note": "present, exposed and cohort are distinct quantities and are reported separately; "
-                "exposure uses the 0.15 m depth threshold shared with flooded buildings and area",
+        "cohort_rule": "upstream fixed sample; then present AND within order radius; exposure is outcome only",
     }
     return cohort, reconciliation
 

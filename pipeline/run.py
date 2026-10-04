@@ -111,6 +111,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         flood_enabled=not args.baseline,
         max_agents=args.max_agents,
         pilot_id=args.pilot,
+        cohort_from_run=args.cohort_from_run,
     )
     print(json.dumps({key: value for key, value in summary.items() if key != "stats"}, indent=2))
     print(json.dumps(summary["stats"]["population"], indent=2))
@@ -209,6 +210,7 @@ def main() -> int:
     run = sub.add_parser("run", help="execute one full run")
     run.add_argument("--baseline", action="store_true", help="disable the flood scenario")
     run.add_argument("--max-agents", type=int, default=None)
+    run.add_argument("--cohort-from-run", default=None)
     run.add_argument(
         "--pilot",
         default=None,

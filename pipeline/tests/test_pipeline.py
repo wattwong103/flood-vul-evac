@@ -763,41 +763,68 @@ def test_unreachable_people_are_route_failed_not_dropped() -> None:
     assert set(states["reason"]) == {"no_path_under_closure"}
 
 
-def test_dry_baseline_reports_nobody_exposed_but_keeps_the_cohort() -> None:
-    persons = pd.DataFrame(
-        {
-            "person_id": ["p_0", "p_1"],
-            "weight": [10.0, 10.0],
-            "lon": [0.0, 0.0],
-            "lat": [0.0, 0.0],
-        }
-    )
-    cohort, reconciliation = evacuation.select_cohort(
-        persons, surface_depth_at=lambda lon, lat: 0.0, scenario_time_s=0, min_depth_m=0.0
-    )
-    assert reconciliation["exposed_weighted"] == 0.0
-    assert reconciliation["cohort_weighted"] == 20.0
-    assert len(cohort) == 2
+def _eligible_people(rows: int = 8) -> pd.DataFrame:
+    return pd.DataFrame({"person_id": [f"p_{i}" for i in range(rows)],
+                         "weight": [i + 0.5 for i in range(rows)],
+                         "lon": [100.5 + i * 0.0001 for i in range(rows)],
+                         "lat": [13.7] * rows})
 
 
-def test_flooded_run_exposes_only_people_past_the_threshold() -> None:
-    persons = pd.DataFrame(
-        {
-            "person_id": ["p_0", "p_1"],
-            "weight": [10.0, 10.0],
-            "lon": [0.0, 0.0],
-            "lat": [0.0, 0.0],
-        }
-    )
-    cohort, reconciliation = evacuation.select_cohort(
-        persons,
-        surface_depth_at=lambda lon, lat: 0.5,
-        scenario_time_s=0,
-        min_depth_m=0.15,
-    )
-    assert reconciliation["exposed_weighted"] == 20.0
-    assert reconciliation["cohort_weighted"] == 20.0
-    assert len(cohort) == 2
+def test_dry_and_wet_share_fixed_cohort_while_exposure_stays_separate() -> None:
+    persons = _eligible_people()
+    common = {"aoi_id": "aoi-a", "seed": 29092026, "max_agents": 1200}
+    dry, dry_meta = evacuation.select_cohort(
+        persons, surface_depth_at=lambda *_: 9.0, scenario_time_s=0,
+        min_depth_m=0.0, **common)
+    wet, wet_meta = evacuation.select_cohort(
+        persons, surface_depth_at=lambda lon, _: 0.5 if lon > 100.5003 else 0.0,
+        scenario_time_s=0, min_depth_m=0.15, expected_metadata=dry_meta, **common)
+    columns = ["person_id", "order_id", "weight", "sampling_probability"]
+    pd.testing.assert_frame_equal(dry[columns], wet[columns])
+    assert dry_meta["cohort_digest"] == wet_meta["cohort_digest"]
+    assert dry["exposed"].sum() == 0 and dry_meta["exposed_weighted"] == 0.0
+    assert 0 < wet["exposed"].sum() < len(wet)
+    assert len(wet) == len(dry) == len(persons)
+
+
+def test_fixed_cohort_sampling_is_deterministic_capped_and_aoi_scoped() -> None:
+    persons = _eligible_people(20)
+    sampled = population.sample_representative_agents(persons, max_agents=5, seed=29092026)
+    kwargs = {"surface_depth_at": lambda *_: 0.0, "scenario_time_s": 0,
+              "min_depth_m": 0.0, "seed": 29092026, "max_agents": 5,
+              "sample_persons": sampled, "sampling_probability": 0.25}
+    first, meta = evacuation.select_cohort(sampled, aoi_id="aoi-a", **kwargs)
+    repeat, repeat_meta = evacuation.select_cohort(sampled, aoi_id="aoi-a", **kwargs)
+    other, other_meta = evacuation.select_cohort(sampled, aoi_id="aoi-b", **kwargs)
+    assert first["person_id"].tolist() == repeat["person_id"].tolist()
+    assert len(first) == 5 and meta["sampling_probability"] == pytest.approx(0.25)
+    assert meta["cohort_digest"] == repeat_meta["cohort_digest"]
+    assert meta["cohort_digest"] != other_meta["cohort_digest"]
+    assert set(first["order_id"]).isdisjoint(other["order_id"])
+    with pytest.raises(ValueError, match="exceeds the declared upstream sample cap"):
+        evacuation.select_cohort(
+            persons, aoi_id="aoi-a", **{**kwargs, "sample_persons": persons})
+
+
+def test_fixed_cohort_rejects_requested_digest_mismatch() -> None:
+    persons = _eligible_people()
+    sampled = population.sample_representative_agents(persons, max_agents=5, seed=29092026)
+    common = {"surface_depth_at": lambda *_: 0.0, "scenario_time_s": 0,
+              "min_depth_m": 0.0, "aoi_id": "aoi-a", "seed": 29092026,
+              "max_agents": 5, "sample_persons": sampled,
+              "sampling_probability": 0.625}
+    _, reference = evacuation.select_cohort(sampled, **common)
+    unchanged = reference.copy()
+    changed = sampled.copy()
+    changed.loc[0, "weight"] += 1
+    for candidate, overrides in ((changed, {"sample_persons": changed}),
+                                 (sampled, {"aoi_id": "aoi-b"}),
+                                 (sampled, {"seed": 7}),
+                                 (sampled, {"max_agents": 6})):
+        with pytest.raises(ValueError, match="cohort mismatch"):
+            evacuation.select_cohort(
+                candidate, **{**common, **overrides}, expected_metadata=reference)
+    assert reference == unchanged
 
 
 # --------------------------------------------------------------------------

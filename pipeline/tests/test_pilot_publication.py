@@ -170,6 +170,34 @@ def test_pilot_publishes_verified_source_identity(pilot_inputs, flood_enabled):
     assert runner.manifest_module.validate_manifest(manifest) == []
 
 
+def test_pilot_pair_reuses_saved_fixed_cohort_and_rejects_mismatch(pilot_inputs):
+    dry = runner.execute_run(
+        run_id="pair-dry", pilot_id="khlong-san-district",
+        flood_enabled=False, max_agents=10)
+    wet = runner.execute_run(
+        run_id="pair-wet", pilot_id="khlong-san-district",
+        flood_enabled=True, max_agents=10, cohort_from_run="pair-dry")
+    dry_dir, wet_dir = Path(dry["run_dir"]), Path(wet["run_dir"])
+    dry_cohort = pd.read_parquet(dry_dir / "cohort.parquet")
+    wet_cohort = pd.read_parquet(wet_dir / "cohort.parquet")
+    identity = ["person_id", "order_id", "weight", "sampling_probability"]
+    pd.testing.assert_frame_equal(dry_cohort[identity], wet_cohort[identity])
+    dry_meta = read_json(dry_dir / "cohort_metadata.json")
+    wet_meta = read_json(wet_dir / "cohort_metadata.json")
+    assert dry_meta["cohort_digest"] == wet_meta["cohort_digest"]
+    assert (dry_meta["seed"], dry_meta["max_agents"]) == (29092026, 10)
+    assert dry_meta["order_geometry_rule"] and dry_meta["presence_rule"]
+    assert dry_meta["sample_rule"] and dry_meta["sample_digest"]
+    assert wet_meta["reference_run_id"] == "pair-dry"
+    assert dry_meta["exposed_weighted"] == 0.0 and not dry_cohort["exposed"].any()
+    reference_bytes = (dry_dir / "cohort_metadata.json").read_bytes()
+    with pytest.raises(ValueError, match="cohort mismatch"):
+        runner.execute_run(
+            run_id="pair-bad", pilot_id="khlong-san-district",
+            flood_enabled=True, max_agents=1, cohort_from_run="pair-dry")
+    assert (dry_dir / "cohort_metadata.json").read_bytes() == reference_bytes
+
+
 def test_flooded_pilot_routes_with_peak_speed_multipliers(pilot_inputs, monkeypatch):
     captured = []
     build_graph = runner.mobility_module.build_routing_graph
