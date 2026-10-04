@@ -1,3 +1,4 @@
+import { validationChecks } from "@/lib/validation";
 /**
  * Run detail — the PFLOW stage rail, the manifest, and the validation report.
  *
@@ -328,9 +329,7 @@ function toStringArray(value: unknown): string[] {
 }
 
 function ValidationChecks({ report }: { report: Record<string, unknown> }) {
-  const checks = Array.isArray(report.checks)
-    ? (report.checks as Array<Record<string, unknown>>)
-    : [];
+  const checks = validationChecks(report);
 
   if (checks.length === 0) {
     return (
