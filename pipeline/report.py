@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -24,6 +26,7 @@ import pandas as pd  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bkkflow.aoi import load_aoi  # noqa: E402
+from bkkflow import replay_audit  # noqa: E402
 from bkkflow.util import RUNS_DIR, ensure_dir  # noqa: E402
 
 STATUS_COLOUR = {
@@ -32,6 +35,143 @@ STATUS_COLOUR = {
     "reviewed": "#15803d",
     "operational": "#7c3aed",
 }
+
+
+@dataclass(frozen=True)
+class CheckedRun:
+    """One immutable run bound to a fresh successful replay audit."""
+
+    run_id: str
+    state: str
+    bundle: replay_audit.AuditBundle
+    audit: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CheckedPair:
+    """A dry/moderate pair whose common research contract is identical."""
+
+    aoi_id: str
+    aoi_label: str
+    dry: CheckedRun
+    moderate: CheckedRun
+    audit_status: str
+
+
+def _audited_run(run_id: str) -> CheckedRun:
+    if not isinstance(run_id, str) or not run_id or Path(run_id).name != run_id:
+        raise ValueError("pair run ID is invalid")
+    root = RUNS_DIR.resolve()
+    run_dir = (root / run_id).resolve()
+    if not run_dir.is_relative_to(root):
+        raise ValueError("pair run path escapes runs directory")
+    audit = replay_audit.audit_saved_run(run_dir)
+    if audit.get("status") != "PASS":
+        detail = "; ".join(
+            str(check.get("detail", check.get("name", "failed check")))
+            for check in audit.get("checks", [])
+            if isinstance(check, dict) and check.get("status") == "FAIL"
+        )
+        raise ValueError(f"pair audit failed for {run_id}: {detail or 'unknown failure'}")
+    bundle = replay_audit.load_audit_bundle(run_dir)
+    if (
+        audit.get("run_id") != bundle.run_id
+        or audit.get("aoi_id") != bundle.aoi_id
+        or audit.get("audited_hashes") != bundle.file_hashes
+    ):
+        raise ValueError(f"pair audit binding mismatch for {run_id}")
+    state = bundle.manifest["active_scenario"]["state"]
+    return CheckedRun(bundle.run_id, state, bundle, audit)
+
+
+def _require_equal(label: str, left: Any, right: Any) -> None:
+    if left != right:
+        raise ValueError(f"pair {label} mismatch")
+
+
+def _cohort_rows(run: CheckedRun) -> pd.DataFrame:
+    columns = ["person_id", "order_id", "weight", "sampling_probability"]
+    frame = run.bundle.tables["cohort"]
+    if not set(columns) <= set(frame):
+        raise ValueError("pair cohort IDs/weights mismatch")
+    return frame[columns].sort_values(["person_id", "order_id"]).reset_index(drop=True)
+
+
+def _common_contract(run: CheckedRun) -> dict[str, Any]:
+    bundle, manifest, stats = run.bundle, run.bundle.manifest, run.bundle.stats
+    rows = manifest["evacuation_scenario"]["destinations"]
+    identifiers = [row["dest_id"] for row in rows]
+    if len(identifiers) != len(set(identifiers)):
+        raise ValueError("pair evacuation assumptions mismatch")
+    evacuation = {**manifest["evacuation_scenario"], "destinations": []}
+    flood = manifest["flood_scenario"]
+    state_parameters = {"severity", "peak_depth_m", "decay_length_m", "duration_h"}
+    flood = {
+        **{key: value for key, value in flood.items() if key != "parameters"},
+        "parameters": {key: value for key, value in flood["parameters"].items()
+                       if key not in state_parameters},
+    }
+    contract = bundle.denominators
+    quantities = contract["quantities"]
+    return {
+        "AOI label": stats["geography"]["name"],
+        "geography contract": manifest["geography"],
+        "statistics geography": stats["geography"],
+        "validation status": manifest["validation_status"],
+        "source/code identity": (manifest["code_identity"], manifest["source_versions"]),
+        "source summary": stats["sources"],
+        "validation result": stats["validation"],
+        "population assumptions": manifest["population_model"],
+        "PFLOW assumptions": manifest["pflow_contract"],
+        "configured flood assumptions": flood,
+        "evacuation assumptions": (evacuation, sorted(rows, key=lambda row: row["dest_id"])),
+        "cohort identity": tuple(
+            bundle.cohort_metadata[key] for key in replay_audit.COHORT_IDENTITY_FIELDS
+        ),
+        "denominator contract": {
+            "contract_version": contract["contract_version"],
+            "scope": contract["scope"],
+            "capacity": contract["capacity"],
+            "denominator_assignment": contract["pairing"]["denominator_assignment"],
+            "common_identity": contract["pairing"]["common_identity"],
+        },
+        "denominator F/S/P/C quantities": tuple(
+            quantities[key] for key in ("full_population", "sample", "present", "cohort")
+        ),
+        "population quantities": {
+            key: value for key, value in stats["population"].items()
+            if key not in {"people_exposed", "exposed_share_of_present"}
+        },
+    }
+
+
+def load_checked_pair(first_run_id: str, second_run_id: str) -> CheckedPair:
+    """Freshly audit and bind exactly one dry and one moderate saved run."""
+    if first_run_id == second_run_id:
+        raise ValueError("pair requires two distinct run IDs")
+    runs = [_audited_run(first_run_id), _audited_run(second_run_id)]
+    by_state = {run.state: run for run in runs}
+    if len(by_state) != 2 or set(by_state) != {"dry", "moderate"}:
+        raise ValueError("pair must contain exactly one dry and one moderate run")
+    dry, moderate = by_state["dry"], by_state["moderate"]
+    if dry.bundle.cohort_metadata.get("reference_run_id") is not None:
+        raise ValueError("dry cohort must be an independent pair baseline")
+    if moderate.bundle.cohort_metadata.get("reference_run_id") != dry.run_id:
+        raise ValueError("moderate cohort must reference dry run")
+
+    _require_equal("AOI identity", dry.bundle.aoi_id, moderate.bundle.aoi_id)
+    dry_flood = dry.bundle.manifest["flood_scenario"]["parameters"]
+    moderate_flood = moderate.bundle.manifest["flood_scenario"]["parameters"]
+    if dry_flood["peak_depth_m"] != 0 or moderate_flood["peak_depth_m"] <= 0:
+        raise ValueError("pair flood state identity mismatch")
+    dry_common, moderate_common = _common_contract(dry), _common_contract(moderate)
+    for label in dry_common:
+        _require_equal(label, dry_common[label], moderate_common[label])
+    if not _cohort_rows(dry).equals(_cohort_rows(moderate)):
+        raise ValueError("pair cohort IDs/weights mismatch")
+    return CheckedPair(
+        dry.bundle.aoi_id, dry.bundle.stats["geography"]["name"], dry, moderate, "PASS"
+    )
 
 
 def _load(run_id: str, name: str) -> pd.DataFrame:
