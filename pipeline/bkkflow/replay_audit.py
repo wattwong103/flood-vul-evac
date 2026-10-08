@@ -743,8 +743,17 @@ def integerized_capacity_partition(
         raise ValueError("invalid source weight or integerized capacity")
     represented = max(int(round(weight)), 1)
     admitted = min(represented, max(remaining_capacity, 0))
+    if admitted == 0:
+        return 0.0, weight, remaining_capacity
+    if admitted == represented:
+        return weight, 0.0, remaining_capacity - admitted
     admitted_weight = weight * admitted / represented
-    return admitted_weight, weight - admitted_weight, remaining_capacity - admitted
+    overflow_weight = weight - admitted_weight
+    if admitted_weight <= 1e-6:
+        return 0.0, weight, remaining_capacity - admitted
+    if overflow_weight <= 1e-6:
+        return weight, 0.0, remaining_capacity - admitted
+    return admitted_weight, overflow_weight, remaining_capacity - admitted
 
 
 def _compare_terminal_records(actual: pd.DataFrame, saved: pd.DataFrame) -> None:
@@ -773,7 +782,10 @@ def _compare_terminal_records(actual: pd.DataFrame, saved: pd.DataFrame) -> None
         for key in numeric:
             left, right = comparable(expected[key]), comparable(observed[key])
             if (left is None) != (right is None) or (
-                left is not None and abs(float(left) - float(right)) > 1e-6
+                left is not None and (
+                    not math.isfinite(float(left)) or not math.isfinite(float(right))
+                    or abs(float(left) - float(right)) > 1e-6
+                )
             ):
                 raise ValueError("saved terminal numeric mismatch")
 
@@ -871,18 +883,25 @@ def replay_evacuation(bundle: AuditBundle) -> EvacuationReplayAudit:
         "arrived_weighted": quantities["terminal_states"]["arrived"]["weight"],
         "unserved_weighted": denominators["unserved_derived"]["weight"],
     }
-    if any(abs(float(published[key]) - value) > 0.01 for key, value in comparisons.items()):
+    published_weights = {key: float(published[key]) for key in comparisons}
+    if (any(not math.isfinite(value) for value in published_weights.values())
+            or any(abs(published_weights[key] - value) > 0.01
+                   for key, value in comparisons.items())):
         raise ValueError("published evacuation weight mismatch")
     state_distribution = published.get("state_distribution")
     if not isinstance(state_distribution, dict) or set(state_distribution) != set(TERMINAL_STATES):
         raise ValueError("published terminal distribution mismatch")
-    if any(abs(float(state_distribution[key]) - quantities["terminal_states"][key]["weight"]) > 0.01
-           for key in TERMINAL_STATES):
+    distribution_weights = {key: float(state_distribution[key]) for key in TERMINAL_STATES}
+    if (any(not math.isfinite(value) for value in distribution_weights.values())
+            or any(abs(distribution_weights[key] - quantities["terminal_states"][key]["weight"]) > 0.01
+                   for key in TERMINAL_STATES)):
         raise ValueError("published terminal distribution mismatch")
     for key, value in clearance.items():
         observed = published["clearance_time_minutes"].get(key)
+        observed_value = None if observed is None else float(observed)
         if (value is None) != (observed is None) or (
-            value is not None and abs(value - float(observed)) > 0.01
+            value is not None and (not math.isfinite(observed_value)
+                                   or abs(value - observed_value) > 0.01)
         ):
             raise ValueError("published clearance mismatch")
     destination_summary = published.get("destinations")

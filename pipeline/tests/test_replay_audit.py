@@ -218,6 +218,7 @@ def test_integerized_capacity_partition_preserves_fractional_weight() -> None:
     assert replay_audit.integerized_capacity_partition(2.4, 1) == (1.2, 1.2, 0)
     assert replay_audit.integerized_capacity_partition(0.4, 1) == (0.4, 0.0, 0)
     assert replay_audit.integerized_capacity_partition(2.4, 0) == (0.0, 2.4, 0)
+    assert replay_audit.integerized_capacity_partition(2.8, 10) == (2.8, 0.0, 7)
 
 
 def test_replay_evacuation_matches_saved_terminal_evidence(published_run: Path) -> None:
@@ -244,3 +245,21 @@ def test_final_audit_report_never_passes_failed_replay(published_run: Path) -> N
     assert report["status"] == "FAIL"
     assert "PASS" not in str(report)
     assert report["checks"][0]["status"] == "FAIL"
+
+
+@pytest.mark.parametrize("field", ["cohort_weighted", "median_clearance", "terminal_event"])
+def test_final_audit_report_rejects_non_finite_published_metrics(
+    published_run: Path, field: str,
+) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    if field == "terminal_event":
+        bundle.tables["evacuation_states"].loc[0, "event_time_s"] = float("nan")
+    elif field == "median_clearance":
+        bundle.stats["evacuation"]["clearance_time_minutes"]["median"] = float("nan")
+    else:
+        bundle.stats["evacuation"][field] = float("nan")
+
+    report = replay_audit.final_audit_report(bundle)
+
+    assert report["status"] == "FAIL"
+    assert "PASS" not in str(report)
