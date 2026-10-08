@@ -679,6 +679,138 @@ def build_denominator_contract(
     return contract
 
 
+def validate_denominator_contract(contract: Any) -> dict[str, Any]:
+    """Reject malformed or internally inconsistent published denominator data."""
+    try:
+        if (
+            not isinstance(contract, dict)
+            or contract.get("contract_version") != DENOMINATOR_CONTRACT_VERSION
+            or contract["scope"] != DENOMINATOR_SCOPE
+            or contract["capacity"] != CAPACITY_METHOD
+        ):
+            raise ValueError
+
+        def count(value: Any) -> int:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError
+            return value
+
+        def weight(value: Any) -> float:
+            result = float(value)
+            if not math.isfinite(result) or result < 0:
+                raise ValueError
+            return result
+
+        quantities = contract["quantities"]
+        population: dict[str, tuple[int, float]] = {}
+        for name in ("full_population", "sample", "present", "cohort"):
+            item = quantities[name]
+            population[name] = (count(item["rows"]), weight(item["weight"]))
+            if bool(population[name][0]) != bool(population[name][1]):
+                raise ValueError
+        for parent, child in (
+            ("full_population", "sample"), ("sample", "present"), ("present", "cohort")
+        ):
+            if (
+                population[child][0] > population[parent][0]
+                or population[child][1] - population[parent][1] > 1e-6
+            ):
+                raise ValueError
+
+        present_rows, present_weight = population["present"]
+        exposed = quantities["exposed_present"]
+        exposed_rows, exposed_weight = count(exposed["rows"]), weight(exposed["weight"])
+        exposed_share = contract["shares"]["exposed_of_present"]
+        exposed_share = None if exposed_share is None else float(exposed_share)
+        expected_exposed_share = exposed_weight / present_weight if present_weight else None
+        if (
+            exposed.get("denominator") != "present"
+            or exposed_rows > present_rows
+            or exposed_weight - present_weight > 1e-6
+            or bool(exposed_rows) != bool(exposed_weight)
+            or not _same_optional_share(exposed_share, expected_exposed_share)
+        ):
+            raise ValueError
+
+        cohort_rows, cohort_weight = population["cohort"]
+        terms = quantities["terminal_states"]
+        shares = contract["shares"]["terminal_of_cohort"]
+        if set(terms) != set(TERMINAL_STATES) or set(shares) != set(TERMINAL_STATES):
+            raise ValueError
+        terminal_weights: dict[str, float] = {}
+        terminal_records = 0
+        for state in TERMINAL_STATES:
+            state_weight = weight(terms[state]["weight"])
+            records = count(terms[state]["outcome_records"])
+            sources = count(terms[state]["source_rows"])
+            share = shares[state]
+            share = None if share is None else float(share)
+            if (
+                records != sources
+                or sources > cohort_rows
+                or bool(records) != bool(state_weight)
+                or not _same_optional_share(
+                    share, state_weight / cohort_weight if cohort_weight else None
+                )
+            ):
+                raise ValueError
+            terminal_records += records
+            terminal_weights[state] = state_weight
+        terminal_weight = math.fsum(terminal_weights.values())
+        if not cohort_rows <= terminal_records <= 2 * cohort_rows:
+            raise ValueError
+
+        arrived = terms["arrived"]
+        clearance = contract["clearance_denominator"]
+        if (
+            clearance.get("population") != "arrivals_only"
+            or count(clearance["outcome_records"]) != count(arrived["outcome_records"])
+            or count(clearance["source_rows"]) != count(arrived["source_rows"])
+            or abs(weight(clearance["weight"]) - terminal_weights["arrived"]) > 1e-6
+        ):
+            raise ValueError
+
+        unserved_block = contract["unserved_derived"]
+        unserved = weight(unserved_block["weight"])
+        expected_unserved = math.fsum(
+            terminal_weights[state] for state in TERMINAL_STATES if state != "arrived"
+        )
+        conservation = contract["conservation"]
+        residual = abs(cohort_weight - terminal_weight)
+        if (
+            unserved_block.get("formula") != "cohort.weight - terminal_states.arrived.weight"
+            or unserved_block.get("is_conservation_term") is not False
+            or abs(unserved - expected_unserved) > 1e-6
+            or residual > 1e-6
+            or abs(weight(conservation["cohort_weight"]) - cohort_weight) > 1e-6
+            or abs(weight(conservation["terminal_weight"]) - terminal_weight) > 1e-6
+            or abs(weight(conservation["residual_abs"]) - residual) > 1e-6
+            or conservation.get("absolute_tolerance") != 1e-6
+            or conservation.get("passed") is not True
+        ):
+            raise ValueError
+
+        pairing = contract["pairing"]
+        common_identity = pairing["common_identity"]
+        if (
+            pairing.get("denominator_assignment") != DENOMINATOR_ASSIGNMENT
+            or pairing.get("sanctioned_numeric_variation")
+            != list(SANCTIONED_NUMERIC_VARIATION)
+            or not isinstance(common_identity, dict)
+            or (common_identity and set(common_identity) != set(COHORT_IDENTITY_FIELDS))
+        ):
+            raise ValueError
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("invalid denominator contract") from exc
+    return contract
+
+
+def _same_optional_share(actual: float | None, expected: float | None) -> bool:
+    if actual is None or expected is None:
+        return actual is expected
+    return math.isfinite(actual) and 0 <= actual <= 1 and abs(actual - expected) <= 1e-6
+
+
 def check_conservation(states: pd.DataFrame, cohort_weight: float) -> dict[str, Any]:
     """Every cohort member must land in exactly one terminal state."""
     if states.empty:

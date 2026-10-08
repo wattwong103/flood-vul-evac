@@ -8,6 +8,7 @@ access or the staged pilot data.
 
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 
@@ -921,6 +922,60 @@ def test_denominator_contract_no_arrivals_has_null_clearance_share() -> None:
     assert contract["clearance_denominator"] == {
         "outcome_records": 0, "source_rows": 0, "weight": 0.0, "population": "arrivals_only"}
     assert contract["shares"]["terminal_of_cohort"]["arrived"] == 0.0
+
+
+def test_published_denominator_contract_rejects_contradictory_readback() -> None:
+    full = pd.DataFrame({
+        "person_id": [f"p{i}" for i in range(6)],
+        "weight": [2.5, 1.25, 3.75, 4.5, 8.0, 10.0],
+    })
+    sample = full.iloc[:5].copy()
+    present = sample.iloc[:4].copy().assign(exposed=[False, False, False, True])
+    cohort = present.iloc[:3].copy()
+    states = pd.DataFrame({
+        "outcome_id": ["o1", "o2", "o3"],
+        "source_person_id": ["p0", "p1", "p2"],
+        "source_weight": [2.5, 1.25, 3.75],
+        "state": ["arrived", "arrived", "route_failed"],
+        "weight": [2.5, 1.25, 3.75],
+    })
+    valid = evacuation.build_denominator_contract(full, sample, present, cohort, states)
+    candidates = []
+    candidate = copy.deepcopy(valid)
+    candidate["quantities"].pop("full_population")
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["quantities"]["exposed_present"]["weight"] = 99.0
+    candidate["shares"]["exposed_of_present"] = 8.25
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["clearance_denominator"]["weight"] = 999.0
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["scope"].update(
+        representative_of_full_district_or_bangkok=True,
+        reweighting_to_full_population=True,
+    )
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["conservation"].update(
+        passed=False, terminal_weight=999.0, absolute_tolerance=999.0,
+    )
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["quantities"]["terminal_states"]["arrived"].update(
+        outcome_records=0, source_rows=99,
+    )
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["capacity"]["method"] = "continuous"
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["pairing"].pop("denominator_assignment")
+    candidates.append(candidate)
+    for candidate in candidates:
+        with pytest.raises(ValueError, match="invalid denominator contract"):
+            evacuation.validate_denominator_contract(candidate)
 
 
 def test_all_arrived_reordered_fractional_weights_do_not_create_negative_unserved() -> None:
