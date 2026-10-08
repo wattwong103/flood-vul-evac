@@ -4,14 +4,17 @@ Figures are evidence, not decoration: every panel states what it shows, which
 run it came from and what the model status is. Nothing here is a publication
 graphic and no figure may be read without its caption.
 
-    python pipeline/report.py <run_id> [--compare <baseline_run_id>]
+    python pipeline/report.py <saved_run_a> <saved_run_b>
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -196,6 +199,11 @@ def _cell(value: Any) -> str:
     if isinstance(value, float):
         value = f"{value:.12g}"
     return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def _safe_token(value: str) -> str:
+    token = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+    return token or "area"
 
 
 def write_pair_evidence(pair: CheckedPair, report_dir: Path) -> Path:
@@ -404,14 +412,22 @@ def write_pair_evidence(pair: CheckedPair, report_dir: Path) -> Path:
     ]
     text = "\n".join(lines)
     _validate_evidence_language(text)
-    path = ensure_dir(Path(report_dir)) / "PAIR_EVIDENCE.md"
+    path = ensure_dir(Path(report_dir)) / f"{_safe_token(pair.aoi_label)}-pair-evidence.md"
     path.write_text(text, encoding="utf-8")
     return path
 
 
-def _load(run_id: str, name: str) -> pd.DataFrame:
-    path = RUNS_DIR / run_id / name
-    return pd.read_parquet(path) if path.is_file() else pd.DataFrame()
+def _checked_table(run: CheckedRun, role: str) -> pd.DataFrame:
+    if role in run.bundle.tables:
+        return run.bundle.tables[role].copy()
+    output = run.bundle.outputs.get(role)
+    if output is None:
+        raise ValueError(f"checked report role is missing: {role}")
+    path = run.bundle.run_dir / output["uri"]
+    digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+    if digest != run.audit["audited_hashes"].get(output["uri"]):
+        raise ValueError(f"checked report artifact changed after audit: {role}")
+    return pd.read_parquet(path)
 
 
 def _caption(figure, run_id: str, status: str, extra: str = "") -> None:
@@ -426,20 +442,20 @@ def _caption(figure, run_id: str, status: str, extra: str = "") -> None:
     )
 
 
-def figure_scenario_overview(run_id: str, report_dir: Path) -> list[Path]:
+def figure_scenario_overview(run: CheckedRun, report_dir: Path) -> list[Path]:
     """Population, flood depth, closed edges and outcomes in one figure."""
-    manifest = json.loads((RUNS_DIR / run_id / "manifest.json").read_text(encoding="utf-8"))
-    stats = json.loads((RUNS_DIR / run_id / "stats.json").read_text(encoding="utf-8"))
+    manifest, stats = run.bundle.manifest, run.bundle.stats
     status = manifest["validation_status"]
     aoi = load_aoi(manifest["geography"]["aoi_id"]).to_crs("EPSG:32647")
-    edges = _load(run_id, "network_edges.parquet")
-    flood = _load(run_id, "flood_slices.parquet")
-    buildings = _load(run_id, "buildings.parquet")
+    edges = _checked_table(run, "network_edges")
+    flood = _checked_table(run, "flood_slices")
+    buildings = _checked_table(run, "buildings")
     peak_time = manifest["flood_scenario"]["parameters"]["peak_time_s"]
+    area_label = stats["geography"]["name"]
 
     figure, axes = plt.subplots(2, 2, figsize=(14, 11))
     figure.suptitle(
-        "BKK/FLOW pilot scenario overview — Khlong San, Bangkok\n"
+        f"BKK/FLOW pilot scenario overview — {area_label}, Bangkok\n"
         f"scenario: {manifest['flood_scenario']['parameters']['scenario_id']} "
         f"(severity {manifest['flood_scenario']['parameters']['severity']}, "
         f"source role: {manifest['flood_scenario']['parameters']['source_role']})",
@@ -464,7 +480,7 @@ def figure_scenario_overview(run_id: str, report_dir: Path) -> list[Path]:
 
         geoms = edges["geometry_wkt"].map(wkt.loads)
         closed_ids = set()
-        states = _load(run_id, "edge_states.parquet")
+        states = _checked_table(run, "edge_states")
         if len(states):
             walk = states[(states["time_s"] == peak_time) & (states["mode"] == 0)]
             closed_ids = set(walk[walk["closed"]]["edge_id"])
@@ -537,31 +553,33 @@ def figure_scenario_overview(run_id: str, report_dir: Path) -> list[Path]:
 
     _caption(
         figure,
-        run_id,
+        run.run_id,
         status,
-        f"Residents {stats['population']['residents_weighted']:,.0f}; present "
+        f"Area {area_label}. Residents {stats['population']['residents_weighted']:,.0f}; present "
         f"{stats['population']['people_present']:,.0f}; exposed "
         f"{stats['population']['people_exposed']:,.0f}.",
     )
     figure.tight_layout(rect=(0, 0.03, 1, 0.95))
-    path = report_dir / "scenario_overview.png"
+    path = report_dir / f"{_safe_token(area_label)}-{run.state}-overview.png"
     figure.savefig(path, dpi=150)
     plt.close(figure)
     return [path]
 
 
-def figure_comparison(run_id: str, baseline_id: str, report_dir: Path) -> list[Path]:
-    """Dry versus flooded clearance and outcomes."""
-    flooded = json.loads((RUNS_DIR / run_id / "stats.json").read_text(encoding="utf-8"))
-    dry = json.loads((RUNS_DIR / baseline_id / "stats.json").read_text(encoding="utf-8"))
-    status = flooded["validation_status"]
+def figure_comparison(pair: CheckedPair, report_dir: Path) -> list[Path]:
+    """Dry versus moderate clearance and outcomes for an audited checked pair."""
+    moderate, dry = pair.moderate.bundle.stats, pair.dry.bundle.stats
+    status = moderate["validation_status"]
 
-    states = ["arrived", "shelter_full", "route_failed", "did_not_depart"]
+    states = list(replay_audit.TERMINAL_STATES)
     dry_states = dry["evacuation"].get("state_distribution", {})
-    flood_states = flooded["evacuation"].get("state_distribution", {})
+    moderate_states = moderate["evacuation"].get("state_distribution", {})
 
     figure, axes = plt.subplots(1, 2, figsize=(14, 5.8))
-    figure.suptitle("Dry baseline versus flooded scenario — Khlong San pilot", fontsize=13)
+    figure.suptitle(
+        f"Dry baseline versus moderate scenario — {pair.aoi_label}, Bangkok",
+        fontsize=13,
+    )
 
     positions = np.arange(len(states))
     width = 0.38
@@ -574,9 +592,9 @@ def figure_comparison(run_id: str, baseline_id: str, report_dir: Path) -> list[P
     )
     axes[0].bar(
         positions + width / 2,
-        [flood_states.get(state, 0.0) for state in states],
+        [moderate_states.get(state, 0.0) for state in states],
         width,
-        label="flooded",
+        label="moderate scenario",
         color="#b45309",
     )
     axes[0].set_xticks(positions)
@@ -587,23 +605,23 @@ def figure_comparison(run_id: str, baseline_id: str, report_dir: Path) -> list[P
     axes[0].tick_params(axis="x", labelsize=8.5)
 
     dry_failed = dry_states.get("route_failed", 0.0)
-    flood_failed = flood_states.get("route_failed", 0.0)
+    moderate_failed = moderate_states.get("route_failed", 0.0)
     axes[1].bar(
         [0, 1],
-        [dry["flood"]["edges_closed"], flooded["flood"]["edges_closed"]],
+        [dry["flood"]["edges_closed"], moderate["flood"]["edges_closed"]],
         color=["#9ca3af", "#b45309"],
         width=0.5,
     )
     axes[1].set_xticks([0, 1])
-    axes[1].set_xticklabels(["dry baseline", "flooded"])
+    axes[1].set_xticklabels(["dry baseline", "moderate"])
     axes[1].set_ylabel("ways closed at peak")
     axes[1].set_title("Network disruption at peak")
     axes[1].text(
         0.5,
         0.94,
-        f"route_failed: {dry_failed:,.0f} dry  →  {flood_failed:,.0f} flooded\n"
+        f"route_failed: {dry_failed:,.0f} dry  →  {moderate_failed:,.0f} moderate\n"
         f"clearance p95: {dry['evacuation']['clearance_time_minutes'].get('p95')} min  →  "
-        f"{flooded['evacuation']['clearance_time_minutes'].get('p95')} min",
+        f"{moderate['evacuation']['clearance_time_minutes'].get('p95')} min",
         transform=axes[1].transAxes,
         fontsize=8.5,
         ha="center",
@@ -612,21 +630,23 @@ def figure_comparison(run_id: str, baseline_id: str, report_dir: Path) -> list[P
 
     _caption(
         figure,
-        run_id,
+        pair.moderate.run_id,
         status,
-        f"Baseline run {baseline_id[:8]}. Behaviours are uncalibrated priors; the comparison "
-        "isolates the flood term only.",
+        f"Area {pair.aoi_label}. Dry run {pair.dry.run_id[:8]}; "
+        f"moderate run {pair.moderate.run_id[:8]}. "
+        "This is a within-model fixed-declared-assumption contrast over sample denominators; "
+        "behaviours are uncalibrated priors and the comparison is not causal.",
     )
     figure.tight_layout(rect=(0, 0.04, 1, 0.93))
-    path = report_dir / "dry_vs_flooded.png"
+    path = report_dir / f"{_safe_token(pair.aoi_label)}-dry-vs-moderate.png"
     figure.savefig(path, dpi=150)
     plt.close(figure)
     return [path]
 
 
-def figure_present_profile(run_id: str, report_dir: Path) -> list[Path]:
+def figure_present_profile(run: CheckedRun, report_dir: Path) -> list[Path]:
     """Present population over 24 hours, distinguishing resident from present."""
-    mesh = _load(run_id, "mesh_volume.parquet")
+    mesh = _checked_table(run, "mesh_volume")
     if mesh.empty:
         return []
     hourly = (
@@ -634,20 +654,26 @@ def figure_present_profile(run_id: str, report_dir: Path) -> list[Path]:
         .groupby("hour", as_index=False)["total_pop"]
         .sum()
     )
-    persons = _load(run_id, "persons.parquet")
+    persons = _checked_table(run, "persons")
     residents = float(persons["weight"].sum()) if len(persons) else np.nan
+    area_label = run.bundle.stats["geography"]["name"]
 
     figure, axis = plt.subplots(figsize=(11, 5))
     axis.plot(hourly["hour"], hourly["total_pop"], marker="o", color="#1d4ed8", label="people present (sampled, weighted)")
     axis.axhline(residents, color="#6b7280", linestyle="--", label="resident baseline (weighted)")
     axis.set_xlabel("hour of day")
     axis.set_ylabel("weighted people")
-    axis.set_title("Present population versus resident baseline — these are different quantities")
+    axis.set_title(
+        f"Present population versus resident baseline — {area_label}; different quantities"
+    )
     axis.legend()
     axis.grid(alpha=0.3)
-    _caption(figure, run_id, "demonstration", "Presence comes from scenario activity priors, not observation.")
+    _caption(
+        figure, run.run_id, run.bundle.manifest["validation_status"],
+        f"Area {area_label}. Presence comes from scenario activity priors, not observation.",
+    )
     figure.tight_layout(rect=(0, 0.04, 1, 1))
-    path = report_dir / "present_vs_resident.png"
+    path = report_dir / f"{_safe_token(area_label)}-{run.state}-present-profile.png"
     figure.savefig(path, dpi=150)
     plt.close(figure)
     return [path]
@@ -747,26 +773,58 @@ def write_summary(run_id: str, report_dir: Path, figures: list[Path], baseline_i
     return path
 
 
+def publish_pair_report(first_run_id: str, second_run_id: str) -> dict[str, Any]:
+    """Atomically publish figures and evidence only after the pair passes every gate."""
+    pair = load_checked_pair(first_run_id, second_run_id)
+    target_name = (
+        f"{_safe_token(pair.aoi_label)}-pair-report-"
+        f"{_safe_token(pair.dry.run_id)}-{_safe_token(pair.moderate.run_id)}"
+    )
+    target = pair.moderate.bundle.run_dir / target_name
+    if target.exists():
+        raise ValueError(f"pair report already exists: {target.name}")
+
+    with tempfile.TemporaryDirectory(
+        prefix=".pair-report-", dir=pair.moderate.bundle.run_dir
+    ) as temporary:
+        scratch = Path(temporary)
+        figures = [
+            *figure_scenario_overview(pair.moderate, scratch),
+            *figure_present_profile(pair.moderate, scratch),
+            *figure_comparison(pair, scratch),
+        ]
+        evidence = write_pair_evidence(pair, scratch)
+        artifacts = [*figures, evidence]
+        if (
+            len(figures) != 3
+            or len({path.name for path in artifacts}) != len(artifacts)
+            or any(path.parent != scratch or not path.is_file() or path.stat().st_size == 0
+                   for path in artifacts)
+        ):
+            raise ValueError("pair report artifact check failed")
+        _validate_evidence_language(evidence.read_text(encoding="utf-8"))
+        scratch.replace(target)
+
+    return {
+        "report_dir": str(target),
+        "figures": [str(target / path.name) for path in figures],
+        "evidence": str(target / evidence.name),
+        "dry_run_id": pair.dry.run_id,
+        "moderate_run_id": pair.moderate.run_id,
+        "audit_status": pair.audit_status,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("run_id")
-    parser.add_argument("--compare", default=None, help="baseline run id for the dry-versus-flooded figure")
+    parser.add_argument("run_ids", nargs=2, metavar="RUN")
     args = parser.parse_args()
-
-    run_dir = RUNS_DIR / args.run_id
-    if not (run_dir / "manifest.json").is_file():
-        print(f"no manifest for run {args.run_id}", file=sys.stderr)
+    try:
+        result = publish_pair_report(*args.run_ids)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"pair report failed: {exc}", file=sys.stderr)
         return 1
-
-    report_dir = ensure_dir(run_dir / "report")
-    figures: list[Path] = []
-    figures += figure_scenario_overview(args.run_id, report_dir)
-    figures += figure_present_profile(args.run_id, report_dir)
-    if args.compare:
-        figures += figure_comparison(args.run_id, args.compare, report_dir)
-    summary = write_summary(args.run_id, report_dir, figures, args.compare)
-
-    print(json.dumps({"figures": [str(path) for path in figures], "summary": str(summary)}, indent=2))
+    print(json.dumps(result, indent=2))
     return 0
 
 

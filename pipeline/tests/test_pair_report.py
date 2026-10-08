@@ -194,7 +194,7 @@ def test_write_pair_evidence_is_complete_and_area_generic(
     path = report.write_pair_evidence(pair, tmp_path)
     text = path.read_text(encoding="utf-8")
 
-    assert path.name == "PAIR_EVIDENCE.md"
+    assert path.name == "bang-rak-pair-evidence.md"
     assert text.startswith("# Bang Rak dry–moderate saved-pair evidence")
     assert "Khlong San" not in text
     assert all(value in text for value in (*published_pair, "bang-rak-district", "PASS"))
@@ -223,3 +223,109 @@ def test_write_pair_evidence_is_complete_and_area_generic(
 def test_pair_evidence_rejects_banned_claims(claim: str) -> None:
     with pytest.raises(ValueError, match="banned evidence claim"):
         report._validate_evidence_language(f"Result: {claim}.")
+
+
+def test_comparison_figure_is_area_generic_and_noncausal(
+    published_pair: tuple[str, str], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audited_run = report._audited_run
+    monkeypatch.setattr(
+        report, "_audited_run",
+        lambda run_id: _as_aoi(audited_run(run_id), "bang-rak-district", "Bang Rak"),
+    )
+    pair = report.load_checked_pair(*published_pair)
+    captured: list[Any] = []
+    subplots = report.plt.subplots
+
+    def capture(*args, **kwargs):
+        figure, axes = subplots(*args, **kwargs)
+        captured.append(figure)
+        return figure, axes
+
+    monkeypatch.setattr(report.plt, "subplots", capture)
+    saved_aoi = report.load_aoi("khlong-san-district")
+    monkeypatch.setattr(report, "load_aoi", lambda _aoi_id: saved_aoi)
+    comparison = report.figure_comparison(pair, tmp_path)
+    overview = report.figure_scenario_overview(pair.moderate, tmp_path)
+    present = report.figure_present_profile(pair.moderate, tmp_path)
+
+    assert [paths[0].name for paths in (comparison, overview, present)] == [
+        "bang-rak-dry-vs-moderate.png",
+        "bang-rak-moderate-overview.png",
+        "bang-rak-moderate-present-profile.png",
+    ]
+    for figure in captured:
+        title = figure._suptitle.get_text() if figure._suptitle else ""
+        figure_text = " ".join([title, *(item.get_text() for item in figure.texts)])
+        assert "Bang Rak" in figure_text and "Khlong San" not in figure_text
+        report._validate_evidence_language(figure_text)
+    assert "within-model fixed-declared-assumption contrast" in " ".join(
+        item.get_text() for item in captured[0].texts
+    )
+
+
+def test_publish_pair_report_is_atomic_and_pair_gated(
+    published_pair: tuple[str, str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pair = report.load_checked_pair(*published_pair)
+    moderate_dir = pair.moderate.bundle.run_dir
+
+    monkeypatch.setattr(
+        report, "load_checked_pair",
+        lambda *_args: (_ for _ in ()).throw(ValueError("pair mismatch")),
+    )
+    with pytest.raises(ValueError, match="pair mismatch"):
+        report.publish_pair_report(*published_pair)
+    assert not list(moderate_dir.glob("*pair-report*"))
+
+    monkeypatch.setattr(report, "load_checked_pair", lambda *_args: pair)
+
+    def placeholder(_value, directory: Path, name: str) -> list[Path]:
+        path = directory / name
+        path.write_bytes(b"not-a-real-png")
+        return [path]
+
+    monkeypatch.setattr(
+        report, "figure_scenario_overview",
+        lambda run, directory: placeholder(run, directory, "overview.png"),
+    )
+    monkeypatch.setattr(
+        report, "figure_present_profile",
+        lambda run, directory: placeholder(run, directory, "present.png"),
+    )
+    monkeypatch.setattr(
+        report, "figure_comparison",
+        lambda _pair, _directory: (_ for _ in ()).throw(RuntimeError("figure failed")),
+    )
+    with pytest.raises(RuntimeError, match="figure failed"):
+        report.publish_pair_report(*published_pair)
+    assert not list(moderate_dir.glob("*pair-report*"))
+
+    monkeypatch.setattr(
+        report, "figure_comparison",
+        lambda checked, directory: placeholder(checked, directory, "comparison.png"),
+    )
+    result = report.publish_pair_report(*reversed(published_pair))
+    target = Path(result["report_dir"])
+    assert target.is_dir() and result["audit_status"] == "PASS"
+    assert all(Path(path).is_file() for path in [*result["figures"], result["evidence"]])
+    assert not list(moderate_dir.glob(".pair-report-*"))
+
+
+def test_main_requires_exactly_two_runs_and_uses_atomic_publisher(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    called: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        report, "publish_pair_report",
+        lambda first, second: called.append((first, second)) or {"report_dir": "saved"},
+    )
+    monkeypatch.setattr(sys, "argv", ["report.py", "run-a", "run-b"])
+    assert report.main() == 0
+    assert called == [("run-a", "run-b")]
+    assert '"report_dir": "saved"' in capsys.readouterr().out
+
+    monkeypatch.setattr(sys, "argv", ["report.py", "only-one"])
+    with pytest.raises(SystemExit):
+        report.main()
