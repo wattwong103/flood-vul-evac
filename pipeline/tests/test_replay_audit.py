@@ -7,6 +7,7 @@ import copy
 import sys
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -113,4 +114,47 @@ def test_auditor_does_not_import_or_call_pipeline_builders() -> None:
     assert not calls & {
         "select_cohort", "simulate_evacuation", "build_denominator_contract",
         "weighted_clearance_minutes", "_build_stats", "route_lookup",
+    }
+
+
+def test_reconstruct_cohort_metrics_matches_saved_bundle(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    audit = replay_audit.reconstruct_cohort_metrics(bundle)
+
+    assert audit.denominators == bundle.denominators
+    assert audit.clearance_time_minutes == bundle.stats["evacuation"]["clearance_time_minutes"]
+    assert audit.cohort_person_ids == tuple(bundle.tables["cohort"]["person_id"])
+    assert set(audit.cohort_person_ids) <= set(audit.present_person_ids) <= set(audit.sample_person_ids)
+
+
+def test_reconstruct_cohort_metrics_rejects_terminal_weight_drift(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    bundle.tables["evacuation_states"].loc[0, "weight"] += 0.25
+
+    with pytest.raises(ValueError, match="terminal .* mismatch"):
+        replay_audit.reconstruct_cohort_metrics(bundle)
+
+
+def test_reconstruct_cohort_metrics_derives_sampling_probability(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    forged = 0.123
+    bundle.cohort_metadata["sampling_probability"] = forged
+    bundle.denominators["pairing"]["common_identity"]["sampling_probability"] = forged
+    bundle.tables["cohort"]["sampling_probability"] = forged
+
+    with pytest.raises(ValueError, match="cohort identity mismatch"):
+        replay_audit.reconstruct_cohort_metrics(bundle)
+
+
+def test_inverse_weighted_clearance_is_arrivals_only_and_null_when_empty() -> None:
+    states = pd.DataFrame({
+        "state": ["arrived", "route_failed", "arrived"],
+        "event_time_s": [660.0, 999.0, 720.0], "weight": [0.1, 50.0, 0.2],
+    })
+    assert replay_audit.inverse_weighted_clearance(states, warning_time_s=600.0) == {
+        "p5": 1.0, "median": 2.0, "p95": 2.0,
+    }
+    states["state"] = "route_failed"
+    assert replay_audit.inverse_weighted_clearance(states, warning_time_s=600.0) == {
+        "p5": None, "median": None, "p95": None,
     }

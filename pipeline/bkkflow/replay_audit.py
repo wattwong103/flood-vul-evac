@@ -12,11 +12,15 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
+from pyproj import Transformer
+from scipy.spatial import cKDTree
 
 REQUIRED_ROLES = (
     "persons", "activities", "network_edges", "flood_slices", "edge_states",
@@ -26,6 +30,12 @@ TABLE_ROLES = tuple(role for role in REQUIRED_ROLES
                     if role not in {"cohort_metadata", "denominators"})
 DENOMINATOR_CONTRACT_VERSION = "sample-denominators-v1"
 PFLOW_CONTRACT_VERSION = "pflow-bkk-v0.1"
+TERMINAL_STATES = ("arrived", "shelter_full", "stranded", "route_failed", "did_not_depart")
+COHORT_IDENTITY_FIELDS = (
+    "cohort_rule_version", "aoi_id", "seed", "max_agents", "order_radius_m",
+    "scenario_time_s", "order_centre_lon", "order_centre_lat", "order_geometry_rule",
+    "presence_rule", "sample_rule", "sample_digest", "sampling_probability", "cohort_digest",
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +51,15 @@ class AuditBundle:
     cohort_metadata: dict[str, Any]
     denominators: dict[str, Any]
     file_hashes: dict[str, str]
+
+
+@dataclass(frozen=True)
+class CohortMetricAudit:
+    sample_person_ids: tuple[str, ...]
+    present_person_ids: tuple[str, ...]
+    cohort_person_ids: tuple[str, ...]
+    denominators: dict[str, Any]
+    clearance_time_minutes: dict[str, float | None]
 
 
 def _sha256(path: Path) -> str:
@@ -235,3 +254,233 @@ def load_audit_bundle(run_dir: str | Path) -> AuditBundle:
     )
     return AuditBundle(root, run_id, aoi_id, manifest, run_state, stats, outputs, tables,
                        cohort_metadata, denominators, file_hashes)
+
+
+def inverse_weighted_clearance(
+    states: pd.DataFrame, *, warning_time_s: Any
+) -> dict[str, float | None]:
+    """Independently calculate the declared inverse weighted ECDF in minutes."""
+    warning = float(warning_time_s)
+    if not math.isfinite(warning) or warning < 0 or "state" not in states:
+        raise ValueError("invalid warning time or terminal states")
+    arrived = states.loc[states["state"] == "arrived"]
+    if arrived.empty:
+        return {"p5": None, "median": None, "p95": None}
+    if not {"event_time_s", "weight"} <= set(arrived):
+        raise ValueError("arrived records are incomplete")
+    weights = pd.to_numeric(arrived["weight"], errors="coerce").to_numpy(float)
+    clearances = pd.to_numeric(arrived["event_time_s"], errors="coerce").to_numpy(float) - warning
+    if (~np.isfinite(weights)).any() or (weights <= 0).any() or (~np.isfinite(clearances)).any() or (clearances < 0).any():
+        raise ValueError("arrived weights and clearance must be finite and non-negative")
+    order = np.argsort(clearances, kind="stable")
+    cumulative, total = [], Decimal(0)
+    for value in weights[order]:
+        total += Decimal(str(value))
+        cumulative.append(total)
+    quantiles = (("p5", Decimal("0.05")), ("median", Decimal("0.50")), ("p95", Decimal("0.95")))
+    return {label: float(clearances[order[next(i for i, value in enumerate(cumulative)
+                                               if value >= q * total)]]) / 60.0
+            for label, q in quantiles}
+
+
+def _person_weights(frame: pd.DataFrame, label: str) -> pd.Series:
+    if not {"person_id", "weight"} <= set(frame) or frame["person_id"].isna().any() or frame["person_id"].duplicated().any():
+        raise ValueError(f"{label} person identity mismatch")
+    values = pd.to_numeric(frame["weight"], errors="coerce").to_numpy(float)
+    if (~np.isfinite(values)).any() or (values <= 0).any():
+        raise ValueError(f"{label} person weight mismatch")
+    return pd.Series(values, index=frame["person_id"].astype(str))
+
+
+def _same_people(actual: pd.DataFrame, expected: pd.DataFrame, label: str) -> None:
+    actual_weights, expected_weights = _person_weights(actual, label), _person_weights(expected, label)
+    if tuple(actual_weights.index) != tuple(expected_weights.index) or any(
+        float(actual_weights.loc[key]).hex() != float(expected_weights.loc[key]).hex()
+        for key in actual_weights.index
+    ):
+        raise ValueError(f"{label} identity mismatch")
+
+
+def _derive_populations(bundle: AuditBundle) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    persons, activities = bundle.tables["persons"], bundle.tables["activities"]
+    meta, seed, cap = bundle.cohort_metadata, bundle.cohort_metadata["seed"], bundle.cohort_metadata["max_agents"]
+    if cap <= 0:
+        raise ValueError("sample cap must be positive")
+    _person_weights(persons, "full population")
+    if len(persons) <= cap:
+        sample = persons.copy()
+    else:
+        take = np.random.default_rng(seed).choice(len(persons), size=cap, replace=False)
+        sample = persons.iloc[np.sort(take)].copy()
+    at_time = meta["scenario_time_s"]
+    if activities.empty:
+        present = sample.copy()
+    else:
+        active = activities[(activities["start_time_s"] <= at_time) & (activities["end_time_s"] > at_time)]
+        present = sample[sample["person_id"].isin(set(active["person_id"]))].copy()
+    centre_lon = float(present["lon"].mean()) if len(present) else None
+    centre_lat = float(present["lat"].mean()) if len(present) else None
+    if len(present):
+        distance = np.hypot(present["lon"] - centre_lon, present["lat"] - centre_lat)
+        cohort = present.loc[distance <= meta["order_radius_m"] / 111_320.0].sort_values("person_id", kind="stable").copy()
+    else:
+        cohort = present.copy()
+    cohort["order_id"] = ["order_" + hashlib.sha256(f"{bundle.aoi_id}|{person_id}".encode()).hexdigest()[:20]
+                          for person_id in cohort["person_id"]]
+    sampling_probability = min(1.0, cap / len(persons)) if len(persons) else 0.0
+    cohort["sampling_probability"] = sampling_probability
+
+    peak_time = _field(bundle.manifest, "flood_scenario", "parameters", "peak_time_s")
+    surface = bundle.tables["flood_slices"]
+    surface = surface.loc[surface["time_s"] == peak_time] if len(surface) else surface
+    depths = np.zeros(len(present), dtype=float)
+    if len(surface) and len(present):
+        transformer = Transformer.from_crs("OGC:CRS84", _field(bundle.manifest, "geography", "analysis_crs"), always_xy=True)
+        x, y = transformer.transform(present["lon"].to_numpy(), present["lat"].to_numpy())
+        _, indices = cKDTree(surface[["x", "y"]].to_numpy(float)).query(np.column_stack([x, y]))
+        depths = surface["peak_depth_m"].to_numpy(float)[indices]
+    present["scenario_depth_m"] = np.round(depths, 4)
+    threshold = float(meta["min_depth_m"])
+    present["exposed"] = present["scenario_depth_m"] >= threshold if threshold > 0 else False
+    cohort[["scenario_depth_m", "exposed"]] = present.loc[cohort.index, ["scenario_depth_m", "exposed"]]
+
+    sample_rows = sample.sort_values("person_id", kind="stable")
+    sample_digest = hashlib.sha256()
+    for row in sample_rows.itertuples():
+        sample_digest.update(f"{row.person_id}\0{float(row.weight).hex()}\n".encode())
+    cohort_digest = hashlib.sha256(
+        f"fixed-order-area-v1|{bundle.aoi_id}|{seed}|{cap}|{centre_lon}|{centre_lat}|".encode()
+    )
+    for row in cohort.itertuples():
+        cohort_digest.update(f"{row.order_id}\0{row.person_id}\0{float(row.weight).hex()}\n".encode())
+    identity = {
+        "cohort_rule_version": "fixed-order-area-v1", "aoi_id": bundle.aoi_id,
+        "seed": seed, "max_agents": cap, "order_radius_m": float(meta["order_radius_m"]),
+        "scenario_time_s": int(at_time), "order_centre_lon": centre_lon,
+        "order_centre_lat": centre_lat,
+        "order_geometry_rule": "WGS84 degree distance <= order_radius_m / 111320",
+        "presence_rule": "if activities exist: sampled person IDs with start_time_s <= scenario_time_s < end_time_s; otherwise full sample; order area uses stored person/home lon-lat",
+        "sample_rule": "numpy.default_rng(seed).choice over full person row order without replacement; selected indices sorted; cap=min(full rows, max_agents)",
+        "sample_digest": sample_digest.hexdigest(), "sampling_probability": sampling_probability,
+        "cohort_digest": cohort_digest.hexdigest(),
+    }
+    if any(meta.get(key) != identity[key] for key in COHORT_IDENTITY_FIELDS):
+        raise ValueError("cohort identity mismatch")
+    _same_people(cohort, bundle.tables["cohort"], "cohort")
+    saved = bundle.tables["cohort"].set_index("person_id")
+    for row in cohort.itertuples():
+        if (saved.loc[row.person_id, "order_id"] != row.order_id
+                or float(saved.loc[row.person_id, "sampling_probability"]).hex() != sampling_probability.hex()
+                or bool(saved.loc[row.person_id, "exposed"]) != bool(row.exposed)
+                or abs(float(saved.loc[row.person_id, "scenario_depth_m"]) - row.scenario_depth_m) > 1e-6):
+            raise ValueError("cohort identity mismatch")
+    return sample, present, cohort
+
+
+def _reconstruct_denominators(
+    bundle: AuditBundle, sample: pd.DataFrame, present: pd.DataFrame, cohort: pd.DataFrame
+) -> dict[str, Any]:
+    full_weights = _person_weights(bundle.tables["persons"], "full population")
+    sample_weights, present_weights = _person_weights(sample, "sample"), _person_weights(present, "present")
+    cohort_weights = _person_weights(cohort, "cohort")
+    states = bundle.tables["evacuation_states"].copy()
+    required = {"outcome_id", "source_person_id", "source_weight", "state", "weight"}
+    if not required <= set(states) or states["outcome_id"].isna().any() or states["outcome_id"].duplicated().any():
+        raise ValueError("terminal record identity mismatch")
+    if states["state"].isna().any() or set(states["state"]) - set(TERMINAL_STATES):
+        raise ValueError("terminal state mismatch")
+    weights = pd.to_numeric(states["weight"], errors="coerce").to_numpy(float)
+    source_weights = pd.to_numeric(states["source_weight"], errors="coerce").to_numpy(float)
+    if (~np.isfinite(weights)).any() or (weights <= 0).any() or (~np.isfinite(source_weights)).any() or (source_weights <= 0).any():
+        raise ValueError("terminal weight mismatch")
+    states["weight"], states["source_weight"] = weights, source_weights
+    if set(states["source_person_id"].astype(str)) != set(cohort_weights.index):
+        raise ValueError("terminal source identity mismatch")
+    for source_id, group in states.groupby("source_person_id", sort=False):
+        expected = float(cohort_weights.loc[str(source_id)])
+        if any(float(value).hex() != expected.hex() for value in group["source_weight"]):
+            raise ValueError("terminal source-weight mismatch")
+        if abs(math.fsum(float(value) for value in group["weight"]) - expected) > 1e-6:
+            raise ValueError("terminal source conservation mismatch")
+        if len(group) > 1 and (len(group) != 2 or set(group["state"]) != {"arrived", "shelter_full"}):
+            raise ValueError("terminal split mismatch")
+        if group["state"].duplicated().any():
+            raise ValueError("terminal fragment mismatch")
+
+    def quantity(frame: pd.DataFrame, values: pd.Series) -> dict[str, int | float]:
+        return {"rows": len(frame), "weight": math.fsum(float(value) for value in values)}
+
+    cohort_weight = math.fsum(float(value) for value in cohort_weights)
+    terminal_quantities, terminal_shares = {}, {}
+    for state in TERMINAL_STATES:
+        group = states.loc[states["state"] == state]
+        weight = math.fsum(float(value) for value in group["weight"])
+        terminal_quantities[state] = {
+            "outcome_records": len(group), "source_rows": group["source_person_id"].nunique(),
+            "weight": weight,
+        }
+        terminal_shares[state] = weight / cohort_weight if cohort_weight else None
+    terminal_weight = math.fsum(item["weight"] for item in terminal_quantities.values())
+    if abs(terminal_weight - cohort_weight) > 1e-6:
+        raise ValueError("terminal conservation mismatch")
+    exposed = present["exposed"].astype(bool).to_numpy()
+    exposed_weight = math.fsum(float(value) for value in present_weights.to_numpy()[exposed])
+    present_weight = math.fsum(float(value) for value in present_weights)
+    arrived = terminal_quantities["arrived"]
+    unserved = math.fsum(terminal_quantities[state]["weight"] for state in TERMINAL_STATES if state != "arrived")
+    meta = bundle.cohort_metadata
+    contract = {
+        "contract_version": DENOMINATOR_CONTRACT_VERSION,
+        "scope": {"population_basis": "deterministic_sample_only",
+                  "representative_of_full_district_or_bangkok": False,
+                  "reweighting_to_full_population": False},
+        "capacity": {"method": "integerized", "integerization_rule": "max(round(source_weight), 1)",
+                     "fractional_weight_partition": "proportional_to_admitted_integer_units"},
+        "quantities": {
+            "full_population": quantity(bundle.tables["persons"], full_weights),
+            "sample": quantity(sample, sample_weights), "present": quantity(present, present_weights),
+            "exposed_present": {"rows": int(exposed.sum()), "weight": exposed_weight,
+                                "denominator": "present"},
+            "cohort": quantity(cohort, cohort_weights), "terminal_states": terminal_quantities,
+        },
+        "shares": {"exposed_of_present": exposed_weight / present_weight if present_weight else None,
+                   "terminal_of_cohort": terminal_shares},
+        "clearance_denominator": {"outcome_records": arrived["outcome_records"],
+                                  "source_rows": arrived["source_rows"], "weight": arrived["weight"],
+                                  "population": "arrivals_only"},
+        "unserved_derived": {"weight": unserved,
+                             "formula": "cohort.weight - terminal_states.arrived.weight",
+                             "is_conservation_term": False},
+        "conservation": {"cohort_weight": cohort_weight, "terminal_weight": terminal_weight,
+                         "residual_abs": abs(cohort_weight - terminal_weight),
+                         "absolute_tolerance": 1e-6, "passed": True},
+        "pairing": {
+            "denominator_assignment": {"exposure": "exposed present / present",
+                                       "terminal_states": "terminal state weight / fixed cohort",
+                                       "clearance": "arrived records only"},
+            "common_identity": {key: meta[key] for key in COHORT_IDENTITY_FIELDS},
+            "sanctioned_numeric_variation": ["exposed_present", "terminal_states", "clearance_denominator"],
+        },
+    }
+    if contract != bundle.denominators:
+        raise ValueError("denominator reconstruction mismatch")
+    return contract
+
+
+def reconstruct_cohort_metrics(bundle: AuditBundle) -> CohortMetricAudit:
+    """Rebuild F/S/P/C/E/A denominators and clearance without pipeline helpers."""
+    sample, present, cohort = _derive_populations(bundle)
+    denominators = _reconstruct_denominators(bundle, sample, present, cohort)
+    warning = _field(bundle.manifest, "evacuation_scenario", "departure_model", "warning_time_s")
+    clearance = inverse_weighted_clearance(bundle.tables["evacuation_states"], warning_time_s=warning)
+    published = _field(bundle.stats, "evacuation", "clearance_time_minutes")
+    for label, actual in clearance.items():
+        expected = published.get(label) if isinstance(published, dict) else None
+        if (actual is None) != (expected is None) or (
+            actual is not None and abs(actual - float(expected)) > 0.01
+        ):
+            raise ValueError("published clearance mismatch")
+    return CohortMetricAudit(
+        tuple(sample["person_id"].astype(str)), tuple(present["person_id"].astype(str)),
+        tuple(cohort["person_id"].astype(str)), denominators, clearance,
+    )
