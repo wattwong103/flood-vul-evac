@@ -255,6 +255,7 @@ export type RunStats = {
   stages?: StageRecord[] | null;
   warnings?: unknown[] | null;
   sources?: StatsSourceRef[] | null;
+  denominators?: Record<string, unknown> | null;
   [key: string]: unknown;
 };
 
@@ -518,6 +519,7 @@ export type EvacuationResult = {
   arrived_weighted?: number | null;
   unserved_weighted?: number | null;
   top_bottleneck_edges?: BottleneckEdge[] | null;
+  denominators?: Record<string, unknown> | null;
   [key: string]: unknown;
 };
 

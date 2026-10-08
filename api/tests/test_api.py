@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.app import create_app
+from pipeline.bkkflow import evacuation as evacuation_module
 
 # ---------------------------------------------------------------------------
 # Contract section 4 key sets, spelled out so a missing or renamed field fails.
@@ -30,6 +31,7 @@ STATS_TOP_LEVEL = {
     "stages",
     "warnings",
     "sources",
+    "denominators",
 }
 STATS_GEOGRAPHY = {"aoi_id", "name", "area_km2", "analysis_crs"}
 STATS_POPULATION = {
@@ -405,6 +407,11 @@ def test_missing_stats_json_yields_nulls_not_zeros(
         "median": None,
         "p95": None,
     }
+    assert body["denominators"] is None
+    assert any(
+        warning["code"] == "invalid_denominator_contract"
+        for warning in body["warnings"]
+    )
     # Manifest-derived values are copied, not recomputed.
     assert body["population"]["population_version"] == "synth-2026-01"
     assert body["geography"]["aoi_id"] == "khlong-san-district"
@@ -415,6 +422,15 @@ def test_missing_stats_json_yields_nulls_not_zeros(
 def test_stats_json_keeps_extra_fields_but_rebuilds_clearance(
     client: TestClient, runs_dir: Path
 ) -> None:
+    population = pd.DataFrame({"person_id": ["p1"], "weight": [1.0]})
+    present = population.assign(exposed=False)
+    terminal = pd.DataFrame({
+        "outcome_id": ["o1"], "source_person_id": ["p1"],
+        "source_weight": [1.0], "state": ["arrived"], "weight": [1.0],
+    })
+    denominators = evacuation_module.build_denominator_contract(
+        population, population, present, population, terminal
+    )
     authored = {
         "run_id": "authored",
         "validation_status": "research",
@@ -453,6 +469,7 @@ def test_stats_json_keeps_extra_fields_but_rebuilds_clearance(
         "warnings": [],
         "sources": [],
         "field_added_after_contract_freeze": "kept",
+        "denominators": denominators,
     }
     states = pd.DataFrame(
         {"state": ["arrived"], "event_time_s": [600.0], "weight": [1.0]}
@@ -468,6 +485,27 @@ def test_stats_json_keeps_extra_fields_but_rebuilds_clearance(
     }
     # Reconciliation must not trim fields beyond the canonical clearance field.
     assert body["field_added_after_contract_freeze"] == "kept"
+    evacuation = client.get("/v1/runs/authored/evacuation").json()
+    assert evacuation["denominators"] == body["denominators"]
+
+
+def test_evacuation_rejects_malformed_denominator_contract(
+    client: TestClient, runs_dir: Path
+) -> None:
+    states = pd.DataFrame(
+        {"state": ["arrived"], "event_time_s": [600.0], "weight": [1.0]}
+    )
+    _write_run(
+        runs_dir, "bad-denominators", manifest=_manifest("bad-denominators"),
+        tables={"evacuation_states": states},
+        json_files={"stats": {"denominators": {"contract_version": "broken"}}},
+    )
+    stats = client.get("/v1/runs/bad-denominators/stats").json()
+    assert stats["denominators"] is None
+    assert any(warning["code"] == "invalid_denominator_contract" for warning in stats["warnings"])
+    body = client.get("/v1/runs/bad-denominators/evacuation").json()
+    assert body["denominators"] is None
+    assert any(warning["code"] == "invalid_denominator_contract" for warning in body["warnings"])
 
 
 def test_routes_serves_aggregate_evacuation_bottlenecks_not_person_paths(

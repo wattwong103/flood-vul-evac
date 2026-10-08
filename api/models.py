@@ -165,6 +165,7 @@ class EvacuationResponse(BaseModel):
     state_distribution: list[StateShare] = Field(default_factory=list)
     clearance_time_minutes: ClearanceTimes = Field(default_factory=ClearanceTimes)
     totals: EvacuationTotals = Field(default_factory=EvacuationTotals)
+    denominators: dict[str, Any] | None = None
     warnings: list[ApiWarning] = Field(default_factory=list)
 
 

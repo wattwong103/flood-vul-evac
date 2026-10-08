@@ -20,6 +20,7 @@ import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pipeline.bkkflow.evacuation import validate_denominator_contract
 
 from api import CONTRACT_VERSION, __version__
 from api.errors import install_error_handlers
@@ -175,6 +176,35 @@ CONNECTIVITY_DESTINATION_NOTE = (
     "These are unverified OSM tags with no capacity, operator or inspection date, "
     "so 'reachable' means reachable to a tagged place, not to usable shelter."
 )
+
+
+def _validated_denominators(
+    stats: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, ApiWarning | None]:
+    """Read the canonical contract without recreating it from API-side tables."""
+    if stats is None:
+        return None, None
+    try:
+        return validate_denominator_contract(stats.get("denominators")), None
+    except ValueError:
+        return None, make_warning(
+            "invalid_denominator_contract",
+            "stats.json has no usable canonical denominator contract; "
+            "denominators are null rather than reconstructed",
+            "stats.json",
+        )
+
+
+def _attach_denominator_contract(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate the stats contract in place and publish any failure as a warning."""
+    denominators, warning = _validated_denominators(payload)
+    payload["denominators"] = denominators
+    if warning is not None:
+        raw_warnings = payload.get("warnings")
+        warnings = list(raw_warnings) if isinstance(raw_warnings, list) else []
+        warnings.append(warning.model_dump())
+        payload["warnings"] = warnings
+    return payload
 
 
 def get_ctx(request: Request) -> Settings:
@@ -459,6 +489,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload = assemble_stats(run, pilot, registry)
         else:
             payload = reconcile_stats_clearance(run, payload)
+        payload = _attach_denominator_contract(payload)
         STATS_CACHE.put(cache_key, payload)
         return payload
 
@@ -963,6 +994,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """State distribution, clearance percentiles and unserved/stranded totals."""
         run = resolve_run(run_id)
         warnings: list[ApiWarning] = []
+        denominators: dict[str, Any] | None = None
+        stats, stats_warnings = load_stats_file(run)
+        warnings.extend(stats_warnings)
+        if stats is not None:
+            denominators, denominator_warning = _validated_denominators(stats)
+            if denominator_warning is not None:
+                warnings.append(denominator_warning)
 
         states, read_warnings = read_parquet(
             artefact_path(run, "evacuation_states.parquet"),
@@ -991,7 +1029,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
                 )
             return EvacuationResponse(
-                run_id=run.run_id, available=False, warnings=warnings
+                run_id=run.run_id, available=False, denominators=denominators,
+                warnings=warnings,
             )
 
         weights = (
@@ -1043,6 +1082,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             unserved = _sum(states["state"].isin(EVACUATION_UNSERVED_STATES))
             stranded = _sum(states["state"] == "stranded")
 
+        if denominators is not None:
+            quantities = denominators["quantities"]
+            contract_terms = quantities["terminal_states"]
+            contract_shares = denominators["shares"]["terminal_of_cohort"]
+            distribution = [
+                StateShare(
+                    state=str(state),
+                    count=int(values["outcome_records"]),
+                    weight=float(values["weight"]),
+                    share=(
+                        None if contract_shares[state] is None
+                        else float(contract_shares[state])
+                    ),
+                )
+                for state, values in contract_terms.items()
+            ]
+            cohort = float(quantities["cohort"]["weight"])
+            arrived = float(contract_terms[EVACUATION_ARRIVED_STATE]["weight"])
+            unserved = float(denominators["unserved_derived"]["weight"])
+            stranded = float(contract_terms["stranded"]["weight"])
+
         clearance = ClearanceTimes()
         if "event_time_s" in states.columns:
             times = _clearance_times(states, run, warnings)
@@ -1068,6 +1128,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 unserved_weighted=unserved,
                 stranded_weighted=stranded,
             ),
+            denominators=denominators,
             warnings=warnings,
         )
 

@@ -484,6 +484,7 @@ def empty_stats_skeleton(run: RunRef) -> dict[str, Any]:
         "stages": [],
         "warnings": [],
         "sources": [],
+        "denominators": None,
     }
 
 
