@@ -7,9 +7,12 @@ import copy
 import sys
 from pathlib import Path
 
+import geopandas as gpd
 import networkx as nx
 import pandas as pd
 import pytest
+from shapely import wkt
+from shapely.geometry import LineString
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -182,6 +185,68 @@ def test_reconstruct_peak_routes_matches_saved_route_evidence(published_run: Pat
     assert set(audit.routes) == set(bundle.tables["cohort"]["person_id"])
     assert audit.top_bottleneck_edges == bundle.stats["evacuation"]["top_bottleneck_edges"]
     assert all(route.status == "routed" and route.cost_s >= 0 for route in audit.routes.values())
+
+
+def test_published_network_wkt_preserves_projected_length_precision(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
+) -> None:
+    pilot_runs = request.getfixturevalue("pilot_inputs")
+    build_network = runner.network_module.build_network
+    geometry = LineString([
+        (661528.0098183819791302, 1517009.1526174470782280),
+        (661530.0351116514066234, 1517010.4595167222432792),
+    ])
+
+    def with_precision_edge(*args, **kwargs):
+        build = build_network(*args, **kwargs)
+        edge = gpd.GeoDataFrame(
+            [{
+                "edge_id": "precision-regression-edge",
+                "u": -9002,
+                "v": -9001,
+                "length_m": geometry.length,
+                "highway": "residential",
+                "network_version": str(build.edges.iloc[0]["network_version"]),
+                "walk_allowed": True,
+                "vehicle_allowed": True,
+                "speed_walk_mps": 1.25,
+                "speed_vehicle_mps": 20 / 3.6,
+                "oneway": False,
+            }],
+            geometry=[geometry],
+            crs=build.edges.crs,
+        )
+        build.edges = gpd.GeoDataFrame(
+            pd.concat([build.edges, edge], ignore_index=True),
+            geometry="geometry",
+            crs=build.edges.crs,
+        )
+        return build
+
+    monkeypatch.setattr(runner.network_module, "build_network", with_precision_edge)
+    result = runner.execute_run(
+        run_id="precision-publication", pilot_id="khlong-san-district",
+        flood_enabled=True, max_agents=3,
+    )
+    run_dir = Path(result["run_dir"])
+    assert run_dir.parent == pilot_runs
+    saved = pd.read_parquet(run_dir / "network_edges.parquet")
+    row = saved.loc[saved["edge_id"] == "precision-regression-edge"].iloc[0]
+
+    assert abs(wkt.loads(row["geometry_wkt"]).length - row["length_m"]) <= 1e-6
+    assert replay_audit.audit_saved_run(run_dir)["status"] == "PASS"
+
+
+def test_reconstruct_peak_routes_rejects_geometry_length_mismatch(
+    published_run: Path,
+) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    walk_edge = bundle.tables["network_edges"]["walk_allowed"].astype(bool)
+    row = bundle.tables["network_edges"].index[walk_edge][0]
+    bundle.tables["network_edges"].loc[row, "length_m"] += 0.01
+
+    with pytest.raises(ValueError, match="geometry-length mismatch"):
+        replay_audit.reconstruct_peak_routes(bundle)
 
 
 def test_reconstruct_peak_routes_rejects_closure_contradiction(published_run: Path) -> None:
