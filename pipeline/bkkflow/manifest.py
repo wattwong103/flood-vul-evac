@@ -13,7 +13,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .util import REPO_ROOT, read_json, sha256_file, utc_now_iso, write_json
+from .util import REPO_ROOT, read_json, sha256_file, utc_now_iso
 
 SCHEMA_PATH = REPO_ROOT / "schemas" / "pflow-bkk-run.schema.json"
 CONTRACT_VERSION = "pflow-bkk-v0.1"
@@ -55,9 +55,11 @@ def build_manifest(
     validation_status: str = "demonstration",
     created_at: str | None = None,
     code_identity: dict[str, Any] | None = None,
+    active_scenario: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
         **({"code_identity": code_identity} if code_identity is not None else {}),
+        **({"active_scenario": active_scenario} if active_scenario is not None else {}),
         "run_id": run_id,
         "created_at": created_at or utc_now_iso(),
         "validation_status": validation_status,

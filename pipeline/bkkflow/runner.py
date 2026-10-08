@@ -64,6 +64,7 @@ class RunContext:
     versions: dict[str, str]
     sources: dict[str, str]
     named_pilot: bool
+    active_scenario: dict[str, str]
     stages: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     source_versions: list[dict[str, Any]] = field(default_factory=list)
@@ -96,6 +97,7 @@ class RunContext:
             "stages": self.stages,
             "warnings": self.warnings,
             "error": error,
+            "active_scenario": dict(self.active_scenario),
         }
         write_json(self.run_dir / "run_state.json", payload)
 
@@ -173,6 +175,8 @@ def execute_run(
     cohort_from_run: str | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline once and return the published run summary."""
+    if type(flood_enabled) is not bool:
+        raise ValueError("flood_enabled must explicitly select dry or moderate")
     bundle = load_pilot_bundle(
         pilot_id, config_dir=CONFIG_DIR, curated_dir=CURATED_DIR
     )
@@ -203,6 +207,10 @@ def execute_run(
     pilot = bundle.pilot
     population_config = bundle.population
     scenario_config = bundle.scenario
+    active_scenario = {
+        "state": "moderate" if flood_enabled else "dry",
+        "configured_scenario_id": str(scenario_config["flood"]["scenario_id"]),
+    }
 
     context = RunContext(
         run_id=run_id,
@@ -214,6 +222,7 @@ def execute_run(
         versions=bundle.versions,
         sources=bundle.sources,
         named_pilot=bundle.named,
+        active_scenario=active_scenario,
     )
     context.write_state("validating_inputs")
 
@@ -763,6 +772,7 @@ def _finish_run(
         )
     manifest = manifest_module.build_manifest(
         code_identity=verify_code_identity(code_identity, context.run_dir),
+        active_scenario=context.active_scenario,
         run_id=context.run_id,
         geography={
             "country": "Thailand",

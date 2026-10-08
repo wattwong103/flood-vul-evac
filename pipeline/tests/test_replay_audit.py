@@ -63,6 +63,8 @@ def test_load_bundle_rejects_manifest_and_identity_contradictions(
 
     missing = copy.deepcopy(original)
     missing["outputs"].pop()
+    missing_active = copy.deepcopy(original)
+    missing_active.pop("active_scenario")
     duplicate_role, duplicate_uri = copy.deepcopy(original), copy.deepcopy(original)
     duplicate_role["outputs"].append({**duplicate_role["outputs"][0], "uri": "duplicate.parquet"})
     duplicate_uri["outputs"].append({**duplicate_uri["outputs"][0], "role": "duplicate_role"})
@@ -76,6 +78,9 @@ def test_load_bundle_rejects_manifest_and_identity_contradictions(
         ("AOI identity mismatch", changed(("geography", "aoi_id"), "wrong-aoi")),
         ("seed identity mismatch", changed(("evacuation_scenario", "seed"), 1)),
         ("sample-cap identity mismatch", changed(("pflow_contract", "activity_generator", "parameters", "sample_cap"), 1)),
+        ("active-scenario identity mismatch", missing_active),
+        ("active-scenario identity mismatch", changed(("active_scenario", "state"), "legacy")),
+        ("active-scenario identity mismatch", changed(("active_scenario", "configured_scenario_id"), "wrong")),
         ("source identity is invalid", changed(("source_versions", 0, "content_sha256"), "invalid")),
     ]
 
@@ -84,6 +89,15 @@ def test_load_bundle_rejects_manifest_and_identity_contradictions(
         with pytest.raises(ValueError, match=message):
             replay_audit.load_audit_bundle(published_run)
     write_json(published_run / "manifest.json", original)
+
+
+def test_load_bundle_rejects_run_state_scenario_mismatch(published_run: Path) -> None:
+    state = read_json(published_run / "run_state.json")
+    state["active_scenario"]["state"] = "dry"
+    write_json(published_run / "run_state.json", state)
+
+    with pytest.raises(ValueError, match="active-scenario identity mismatch"):
+        replay_audit.load_audit_bundle(published_run)
 
 
 def test_load_bundle_rejects_stats_contract_mismatch(published_run: Path) -> None:

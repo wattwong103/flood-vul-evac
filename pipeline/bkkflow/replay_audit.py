@@ -211,6 +211,18 @@ def _check_identity(
         raise ValueError("denominator contract mismatch")
     if run_state.get("state") != "published":
         raise ValueError("run state is not published")
+    active_scenario = manifest.get("active_scenario")
+    if (
+        not isinstance(active_scenario, dict)
+        or set(active_scenario) != {"state", "configured_scenario_id"}
+        or active_scenario.get("state") not in {"dry", "moderate"}
+        or not isinstance(active_scenario.get("configured_scenario_id"), str)
+        or not active_scenario["configured_scenario_id"]
+        or run_state.get("active_scenario") != active_scenario
+        or _field(manifest, "flood_scenario", "parameters", "scenario_id")
+        != active_scenario["configured_scenario_id"]
+    ):
+        raise ValueError("active-scenario identity mismatch")
     if manifest.get("validation_status") != stats.get("validation_status"):
         raise ValueError("validation-status identity mismatch")
 

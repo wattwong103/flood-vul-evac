@@ -166,8 +166,24 @@ def test_pilot_publishes_verified_source_identity(pilot_inputs, flood_enabled):
         "bangkok-moderate-distance-to-water"
     )
     assert manifest["evacuation_scenario"]["seed"] == 29092026
+    active_scenario = {
+        "state": "moderate" if flood_enabled else "dry",
+        "configured_scenario_id": "bangkok-moderate-distance-to-water",
+    }
+    assert manifest["active_scenario"] == active_scenario
+    assert read_json(run / "run_state.json")["active_scenario"] == active_scenario
     assert all(len(source["content_sha256"]) == 64 for source in manifest["source_versions"])
     assert runner.manifest_module.validate_manifest(manifest) == []
+
+
+@pytest.mark.parametrize("flood_enabled", [None, 0, 1, "moderate"])
+def test_pilot_requires_explicit_boolean_flood_state(flood_enabled):
+    with pytest.raises(ValueError, match="explicitly select dry or moderate"):
+        runner.execute_run(
+            pilot_id="khlong-san-district",
+            flood_enabled=flood_enabled,
+            max_agents=1,
+        )
 
 
 def test_pilot_pair_reuses_saved_fixed_cohort_and_rejects_mismatch(pilot_inputs):

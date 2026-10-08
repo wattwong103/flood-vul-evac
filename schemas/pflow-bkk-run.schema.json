@@ -18,6 +18,15 @@
     "warnings"
   ],
   "properties": {
+    "active_scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "configured_scenario_id"],
+      "properties": {
+        "state": { "enum": ["dry", "moderate"] },
+        "configured_scenario_id": { "type": "string", "minLength": 1 }
+      }
+    },
     "code_identity": {
       "type": "object",
       "additionalProperties": false,
