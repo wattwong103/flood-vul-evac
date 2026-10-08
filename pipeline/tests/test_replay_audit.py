@@ -7,6 +7,7 @@ import copy
 import sys
 from pathlib import Path
 
+import networkx as nx
 import pandas as pd
 import pytest
 
@@ -158,3 +159,56 @@ def test_inverse_weighted_clearance_is_arrivals_only_and_null_when_empty() -> No
     assert replay_audit.inverse_weighted_clearance(states, warning_time_s=600.0) == {
         "p5": None, "median": None, "p95": None,
     }
+
+
+def test_reconstruct_peak_routes_matches_saved_route_evidence(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    audit = replay_audit.reconstruct_peak_routes(bundle)
+
+    assert set(audit.routes) == set(bundle.tables["cohort"]["person_id"])
+    assert audit.top_bottleneck_edges == bundle.stats["evacuation"]["top_bottleneck_edges"]
+    assert all(route.status == "routed" and route.cost_s >= 0 for route in audit.routes.values())
+
+
+def test_reconstruct_peak_routes_rejects_closure_contradiction(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    peak = bundle.tables["edge_states"]["time_s"] == bundle.manifest["flood_scenario"]["parameters"]["peak_time_s"]
+    row = bundle.tables["edge_states"].index[peak & (bundle.tables["edge_states"]["mode"] == 0)][0]
+    bundle.tables["edge_states"].loc[row, "speed_multiplier"] = 0.0
+    bundle.tables["edge_states"].loc[row, "closed"] = False
+
+    with pytest.raises(ValueError, match="closure contradiction"):
+        replay_audit.reconstruct_peak_routes(bundle)
+
+
+def test_reconstruct_peak_routes_rejects_destination_tie(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    refuges = bundle.tables["refuges"]
+    refuges.loc[refuges.index[0], ["x", "y"]] = refuges.loc[refuges.index[1], ["x", "y"]].to_numpy()
+
+    with pytest.raises(ValueError, match="destination tie"):
+        replay_audit.reconstruct_peak_routes(bundle)
+
+
+def test_reconstruct_peak_routes_rejects_parallel_edge_tie(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    edge = bundle.tables["network_edges"].iloc[[0]].assign(edge_id="parallel")
+    peak_time = bundle.manifest["flood_scenario"]["parameters"]["peak_time_s"]
+    states = bundle.tables["edge_states"]
+    state = states.loc[(states["time_s"] == peak_time) & (states["mode"] == 0)].iloc[[0]].assign(edge_id="parallel")
+    bundle.tables["network_edges"] = pd.concat([bundle.tables["network_edges"], edge])
+    bundle.tables["edge_states"] = pd.concat([bundle.tables["edge_states"], state])
+
+    with pytest.raises(ValueError, match="parallel-edge tie"):
+        replay_audit.reconstruct_peak_routes(bundle)
+
+
+def test_unique_shortest_route_rejects_unexplained_path_tie() -> None:
+    graph = nx.Graph()
+    graph.add_edge(0, 1, cost=1.0, edge_id="a", length_m=1.0)
+    graph.add_edge(1, 3, cost=1.0, edge_id="b", length_m=1.0)
+    graph.add_edge(0, 2, cost=1.0, edge_id="c", length_m=1.0)
+    graph.add_edge(2, 3, cost=1.0, edge_id="d", length_m=1.0)
+
+    with pytest.raises(ValueError, match="path tie"):
+        replay_audit.unique_shortest_route(graph, 0, 3)

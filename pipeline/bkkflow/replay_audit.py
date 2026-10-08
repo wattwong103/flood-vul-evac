@@ -16,11 +16,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import networkx as nx
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 from pyproj import Transformer
 from scipy.spatial import cKDTree
+from shapely import wkt
 
 REQUIRED_ROLES = (
     "persons", "activities", "network_edges", "flood_slices", "edge_states",
@@ -60,6 +62,25 @@ class CohortMetricAudit:
     cohort_person_ids: tuple[str, ...]
     denominators: dict[str, Any]
     clearance_time_minutes: dict[str, float | None]
+
+
+@dataclass(frozen=True)
+class RouteAudit:
+    status: str
+    destination_id: str | None
+    origin_node: Any | None
+    destination_node: Any | None
+    edge_ids: tuple[str, ...]
+    cost_s: float | None
+    distance_m: float | None
+
+
+@dataclass(frozen=True)
+class PeakRoutingAudit:
+    routes: dict[str, RouteAudit]
+    peak_open_edge_ids: tuple[str, ...]
+    peak_closed_edge_ids: tuple[str, ...]
+    top_bottleneck_edges: list[dict[str, str | float]]
 
 
 def _sha256(path: Path) -> str:
@@ -484,3 +505,221 @@ def reconstruct_cohort_metrics(bundle: AuditBundle) -> CohortMetricAudit:
         tuple(sample["person_id"].astype(str)), tuple(present["person_id"].astype(str)),
         tuple(cohort["person_id"].astype(str)), denominators, clearance,
     )
+
+
+def unique_shortest_route(
+    graph: nx.Graph, origin: Any, destination: Any
+) -> tuple[list[Any], float] | None:
+    """Return one shortest route, rejecting an equally cheap alternative."""
+    if origin == destination:
+        return [origin], 0.0
+    try:
+        candidates = nx.shortest_simple_paths(graph, origin, destination, weight="cost")
+        path = next(candidates)
+        cost = math.fsum(graph[path[i]][path[i + 1]]["cost"] for i in range(len(path) - 1))
+        alternative = next(candidates, None)
+    except (nx.NetworkXNoPath, nx.NodeNotFound, StopIteration):
+        return None
+    if alternative is not None:
+        alternative_cost = math.fsum(
+            graph[alternative[i]][alternative[i + 1]]["cost"]
+            for i in range(len(alternative) - 1)
+        )
+        if abs(alternative_cost - cost) <= 1e-6:
+            raise ValueError("unexplained equal-cost path tie")
+    return path, cost
+
+
+def _peak_walk_graph(bundle: AuditBundle) -> tuple[nx.Graph, tuple[str, ...], tuple[str, ...]]:
+    edges, states = bundle.tables["network_edges"], bundle.tables["edge_states"]
+    edge_columns = {
+        "edge_id", "u", "v", "length_m", "walk_allowed", "speed_walk_mps",
+        "geometry_wkt",
+    }
+    state_columns = {"edge_id", "time_s", "mode", "speed_multiplier", "closed"}
+    if not edge_columns <= set(edges) or not state_columns <= set(states):
+        raise ValueError("routing inputs are incomplete")
+    if edges["edge_id"].isna().any() or edges["edge_id"].duplicated().any():
+        raise ValueError("network edge identity mismatch")
+    if not edges["walk_allowed"].map(lambda value: isinstance(value, (bool, np.bool_))).all():
+        raise ValueError("network walking eligibility mismatch")
+    route_choice = _field(bundle.manifest, "evacuation_scenario", "route_choice")
+    declared = {
+        "algorithm": "astar_static_under_scenario_closure",
+        "cost": "length / (dry_speed * depth_speed_multiplier)",
+        "replanning": "none_single_pass",
+    }
+    if not isinstance(route_choice, dict) or any(route_choice.get(key) != value for key, value in declared.items()):
+        raise ValueError("route-choice contract mismatch")
+
+    peak_time = _field(bundle.manifest, "flood_scenario", "parameters", "peak_time_s")
+    peak = states.loc[(states["time_s"] == peak_time) & (states["mode"] == 0)].copy()
+    if peak["edge_id"].isna().any() or peak["edge_id"].duplicated().any():
+        raise ValueError("peak walking edge-state identity mismatch")
+    routable = edges.loc[edges["walk_allowed"].astype(bool) & edges["speed_walk_mps"].notna()]
+    if set(routable["edge_id"].astype(str)) - set(peak["edge_id"].astype(str)):
+        raise ValueError("peak walking edge state is missing")
+    peak_by_id = peak.set_index(peak["edge_id"].astype(str))
+
+    graph = nx.Graph()
+    open_ids: list[str] = []
+    closed_ids: list[str] = []
+    for row in routable.itertuples():
+        edge_id = str(row.edge_id)
+        state = peak_by_id.loc[edge_id]
+        multiplier = float(state["speed_multiplier"])
+        if not math.isfinite(multiplier) or not 0.0 <= multiplier <= 1.0:
+            raise ValueError("invalid peak walking speed multiplier")
+        if not isinstance(state["closed"], (bool, np.bool_)):
+            raise ValueError("peak walking closure flag is invalid")
+        closed = bool(state["closed"])
+        if closed != (multiplier == 0.0):
+            raise ValueError("peak walking closure contradiction")
+        if closed:
+            closed_ids.append(edge_id)
+            continue
+        length, dry_speed = float(row.length_m), float(row.speed_walk_mps)
+        if not math.isfinite(length) or length <= 0 or not math.isfinite(dry_speed) or dry_speed <= 0:
+            raise ValueError("invalid routable edge length or speed")
+        try:
+            geometry = wkt.loads(row.geometry_wkt)
+        except Exception as exc:
+            raise ValueError("invalid network edge WKT") from exc
+        if geometry.geom_type != "LineString" or geometry.is_empty or len(geometry.coords) < 2:
+            raise ValueError("invalid network edge geometry")
+        if abs(float(geometry.length) - length) > 1e-6:
+            raise ValueError("network edge geometry-length mismatch")
+        start, end = geometry.coords[0], geometry.coords[-1]
+        for node, xy in ((row.u, start), (row.v, end)):
+            if node in graph:
+                saved = graph.nodes[node]
+                if math.hypot(saved["x"] - xy[0], saved["y"] - xy[1]) > 1e-6:
+                    raise ValueError("network node geometry mismatch")
+            else:
+                graph.add_node(node, x=float(xy[0]), y=float(xy[1]))
+        cost = length / (dry_speed * multiplier)
+        attributes = {
+            "cost": cost, "length_m": length, "edge_id": edge_id,
+            "dry_speed_mps": dry_speed, "speed_multiplier": multiplier,
+        }
+        if graph.has_edge(row.u, row.v):
+            existing = graph[row.u][row.v]["cost"]
+            if abs(existing - cost) <= 1e-6:
+                raise ValueError("unexplained equal-cost parallel-edge tie")
+            if cost < existing:
+                graph[row.u][row.v].update(attributes)
+        else:
+            graph.add_edge(row.u, row.v, **attributes)
+        open_ids.append(edge_id)
+    return graph, tuple(open_ids), tuple(closed_ids)
+
+
+def _nearest_destination(refuges: pd.DataFrame, x: float, y: float) -> pd.Series | None:
+    if refuges.empty:
+        return None
+    if not {"dest_id", "x", "y"} <= set(refuges) or refuges["dest_id"].duplicated().any():
+        raise ValueError("destination identity mismatch")
+    coordinates = refuges[["x", "y"]].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    if (~np.isfinite(coordinates)).any():
+        raise ValueError("destination coordinates are invalid")
+    distances = np.hypot(coordinates[:, 0] - x, coordinates[:, 1] - y)
+    minimum = float(distances.min())
+    if int(np.count_nonzero(np.abs(distances - minimum) <= 1e-6)) != 1:
+        raise ValueError("unexplained equal-cost destination tie")
+    return refuges.iloc[int(np.argmin(distances))]
+
+
+def _snap(graph: nx.Graph, x: float, y: float) -> Any | None:
+    nodes = list(graph.nodes(data=True))
+    if not nodes:
+        return None
+    coordinates = np.array([[item[1]["x"], item[1]["y"]] for item in nodes], dtype=float)
+    distance, index = cKDTree(coordinates).query([x, y])
+    return nodes[int(index)][0] if distance <= 250.0 else None
+
+
+def reconstruct_peak_routes(bundle: AuditBundle) -> PeakRoutingAudit:
+    """Independently rebuild peak walking routes from the immutable bundle."""
+    sample, present, cohort = _derive_populations(bundle)
+    _reconstruct_denominators(bundle, sample, present, cohort)
+    graph, open_ids, closed_ids = _peak_walk_graph(bundle)
+    transformer = Transformer.from_crs(
+        "OGC:CRS84", _field(bundle.manifest, "geography", "analysis_crs"), always_xy=True
+    )
+    refuges = bundle.tables["refuges"]
+    routes: dict[str, RouteAudit] = {}
+    for person in cohort.itertuples():
+        person_id = str(person.person_id)
+        x, y = transformer.transform(float(person.lon), float(person.lat))
+        destination = _nearest_destination(refuges, x, y)
+        if destination is None:
+            routes[person_id] = RouteAudit("no_destination", None, None, None, (), None, None)
+            continue
+        destination_id = str(destination["dest_id"])
+        origin_node = _snap(graph, x, y)
+        destination_node = _snap(graph, float(destination["x"]), float(destination["y"]))
+        if origin_node is None or destination_node is None:
+            routes[person_id] = RouteAudit(
+                "no_path", destination_id, origin_node, destination_node, (), None, None
+            )
+            continue
+        result = unique_shortest_route(graph, origin_node, destination_node)
+        if result is None:
+            routes[person_id] = RouteAudit(
+                "no_path", destination_id, origin_node, destination_node, (), None, None
+            )
+            continue
+        path, cost = result
+        edge_ids = tuple(graph[path[i]][path[i + 1]]["edge_id"] for i in range(len(path) - 1))
+        distance = math.fsum(graph[path[i]][path[i + 1]]["length_m"] for i in range(len(path) - 1))
+        formula_cost = math.fsum(
+            graph[path[i]][path[i + 1]]["length_m"]
+            / (graph[path[i]][path[i + 1]]["dry_speed_mps"]
+               * graph[path[i]][path[i + 1]]["speed_multiplier"])
+            for i in range(len(path) - 1)
+        )
+        if abs(formula_cost - cost) > 1e-6:
+            raise ValueError("unrounded route-cost mismatch")
+        routes[person_id] = RouteAudit(
+            "routed", destination_id, origin_node, destination_node, edge_ids, cost, distance
+        )
+
+    states = bundle.tables["evacuation_states"]
+    weights = cohort.set_index(cohort["person_id"].astype(str))["weight"]
+    bottleneck: dict[str, float] = {}
+    for person_id, route in routes.items():
+        saved = states.loc[states["source_person_id"].astype(str) == person_id]
+        saved_states = set(saved["state"])
+        if saved_states <= {"did_not_depart", "stranded"}:
+            continue
+        expected_failure = {
+            "no_destination": ("no_destination", None),
+            "no_path": ("no_path_under_closure", route.destination_id),
+        }
+        if route.status in expected_failure:
+            reason, destination_id = expected_failure[route.status]
+            if saved_states != {"route_failed"} or set(saved["reason"]) != {reason}:
+                raise ValueError("saved route category mismatch")
+            saved_destinations = set(saved["dest_id"].dropna().astype(str))
+            if saved_destinations != ({destination_id} if destination_id is not None else set()):
+                raise ValueError("saved route destination mismatch")
+            continue
+        if not saved_states or not saved_states <= {"arrived", "shelter_full"}:
+            raise ValueError("saved route category mismatch")
+        if set(saved["dest_id"].dropna().astype(str)) != {route.destination_id}:
+            raise ValueError("saved route destination mismatch")
+        saved_distances = pd.to_numeric(saved["distance_m"], errors="coerce").to_numpy(float)
+        if (~np.isfinite(saved_distances)).any() or any(
+            abs(value - round(float(route.distance_m), 1)) > 1e-6 for value in saved_distances
+        ):
+            raise ValueError("saved route distance mismatch")
+        if "arrived" in saved_states:
+            for edge_id in route.edge_ids:
+                bottleneck[edge_id] = bottleneck.get(edge_id, 0.0) + float(weights.loc[person_id])
+    top = [
+        {"edge_id": edge_id, "traversal_weight": round(weight, 1)}
+        for edge_id, weight in sorted(bottleneck.items(), key=lambda item: -item[1])[:10]
+    ]
+    if top != _field(bundle.stats, "evacuation", "top_bottleneck_edges"):
+        raise ValueError("saved route edge identity mismatch")
+    return PeakRoutingAudit(routes, open_ids, closed_ids, top)
