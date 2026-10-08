@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import math
 import sys
 from pathlib import Path
 
@@ -143,6 +144,97 @@ def test_reconstruct_cohort_metrics_matches_saved_bundle(published_run: Path) ->
     assert audit.clearance_time_minutes == bundle.stats["evacuation"]["clearance_time_minutes"]
     assert audit.cohort_person_ids == tuple(bundle.tables["cohort"]["person_id"])
     assert set(audit.cohort_person_ids) <= set(audit.present_person_ids) <= set(audit.sample_person_ids)
+
+
+def _split_terminal_bundle(bundle: replay_audit.AuditBundle) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    sample, present, cohort = replay_audit._derive_populations(bundle)
+    splits = (
+        (8.882412251852449, 88.91758774814755),
+        (52.13314519160798, 50.06685480839202),
+        (24.649969248210954, 24.250030751789044),
+    )
+    records = []
+    for row, (arrived_weight, full_weight) in zip(
+        bundle.tables["evacuation_states"].to_dict("records"), splits, strict=True,
+    ):
+        records.append({**row, "weight": arrived_weight})
+        records.append({
+            **row,
+            "state": "shelter_full",
+            "reason": "capacity_exhausted",
+            "weight": full_weight,
+            "outcome_id": f"{row['source_person_id']}:shelter_full:1",
+        })
+    states = pd.DataFrame(records, columns=bundle.tables["evacuation_states"].columns)
+    bundle.tables["evacuation_states"] = states
+
+    cohort_weight = math.fsum(float(value) for value in cohort["weight"])
+    terminal = bundle.denominators["quantities"]["terminal_states"]
+    shares = bundle.denominators["shares"]["terminal_of_cohort"]
+    for state in replay_audit.TERMINAL_STATES:
+        group = states.loc[states["state"] == state]
+        weight = math.fsum(float(value) for value in group["weight"])
+        terminal[state] = {
+            "outcome_records": len(group),
+            "source_rows": group["source_person_id"].nunique(),
+            "weight": weight,
+        }
+        shares[state] = weight / cohort_weight
+    arrived = terminal["arrived"]
+    bundle.denominators["clearance_denominator"] = {
+        "outcome_records": arrived["outcome_records"],
+        "source_rows": arrived["source_rows"],
+        "weight": arrived["weight"],
+        "population": "arrivals_only",
+    }
+    bundle.denominators["unserved_derived"]["weight"] = math.fsum(
+        terminal[state]["weight"]
+        for state in replay_audit.TERMINAL_STATES
+        if state != "arrived"
+    )
+    direct_weight = math.fsum(float(value) for value in states["weight"])
+    grouped_weight = math.fsum(item["weight"] for item in terminal.values())
+    assert direct_weight == cohort_weight
+    assert direct_weight.hex() != grouped_weight.hex()
+    bundle.denominators["conservation"].update(
+        terminal_weight=direct_weight,
+        residual_abs=abs(cohort_weight - direct_weight),
+    )
+    return sample, present, cohort
+
+
+def test_reconstruct_denominators_sums_original_split_outcome_records(
+    published_run: Path,
+) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    sample, present, cohort = _split_terminal_bundle(bundle)
+
+    reconstructed = replay_audit._reconstruct_denominators(bundle, sample, present, cohort)
+
+    assert reconstructed == bundle.denominators
+
+
+def test_reconstruct_denominators_rejects_one_ulp_contract_alteration(
+    published_run: Path,
+) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    sample, present, cohort = _split_terminal_bundle(bundle)
+    saved = bundle.denominators["conservation"]["terminal_weight"]
+    bundle.denominators["conservation"]["terminal_weight"] = math.nextafter(saved, math.inf)
+
+    with pytest.raises(ValueError, match="denominator reconstruction mismatch"):
+        replay_audit._reconstruct_denominators(bundle, sample, present, cohort)
+
+
+def test_reconstruct_denominators_rejects_split_source_weight_drift(
+    published_run: Path,
+) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    sample, present, cohort = _split_terminal_bundle(bundle)
+    bundle.tables["evacuation_states"].loc[0, "weight"] += 0.01
+
+    with pytest.raises(ValueError, match="terminal source conservation mismatch"):
+        replay_audit._reconstruct_denominators(bundle, sample, present, cohort)
 
 
 def test_reconstruct_cohort_metrics_rejects_terminal_weight_drift(published_run: Path) -> None:
