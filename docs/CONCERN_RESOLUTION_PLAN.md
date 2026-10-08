@@ -1,10 +1,17 @@
-# Remaining concern resolution
+# Historical BKK-009 concern resolution and current handoff
 
-Task BKK-009, authorised by the request to address the concerns and update the
-project state. Baseline: merged PRs #1–#14, main `9278893`, whose source tree
-matches the tested `a5dfc51`. No scientific method change is implied.
+Updated 9 October 2026. This document began as task BKK-009, authorised to
+address the 4 October concerns and update the project state. Its historical
+baseline was merged PRs #1–#14 at main `9278893`, whose source tree matched the
+tested `a5dfc51`. BKK-010–BKK-014 and the evidence update were subsequently
+merged. This record is retained for attribution; it is no longer an unmerged
+branch plan. No scientific method change is implied.
 
-## Ordered tasks and acceptance criteria
+The current four-area method and release contract is
+[MULTI_AREA_PLAN.md](MULTI_AREA_PLAN.md). It supersedes old slice-merge
+instructions without rewriting the evidence produced under earlier commits.
+
+## Historical ordered tasks and acceptance criteria
 
 | Task | Change | Acceptance evidence |
 |---|---|---|
@@ -19,6 +26,31 @@ Implement as small, ordered PRs. Each code fix includes a failing regression
 test, targeted verification, then the repository-wide checks where contracts
 change. Fresh-context and separate cross-harness Claude reviews precede ready
 status. The human owns merges.
+
+## Current merged boundary and release status
+
+Current `main` is `d58d08b0430cc47bf10ddb3279ee5b48472ca790`, tree
+`07bcb0a988c11edc9ef7f0153f17ec0c7cfe8f11`. Human-merged PR #49 placed the
+reviewed four-area stack on main. PR #50 fixed saved-network WKT precision, and
+PR #51 fixed independent denominator reconstruction to sum original terminal
+outcome records. Exact comparisons and the approved `1e-6` tolerances remain.
+
+There is no accepted BKK-024 comparison. Release v1 stopped at the WKT replay
+gate after two Khlong San bundles. Release v2 stopped at the denominator replay
+gate after five of eight planned bundles. Both sets remain immutable negative
+evidence and cannot be completed, patched or pooled with a later release.
+
+## Next pre-release sequence
+
+These are separate, small PRs targeting `main`; they are not a branch-to-branch
+stack. One implementer commits at a time and a human performs every merge.
+
+| Order | Change | Acceptance evidence |
+|---:|---|---|
+| 1 | Synchronise project status and historical concern labels | Current main/#49–#51, both failed releases, the active four-area contract and the absence of an accepted eight-run result are stated without changing historical run attribution. |
+| 2 | BKK-021F named-pilot identity and traversal regression matrix | Direct configured/traversal IDs are bound correctly; unknown, mismatched or missing scoped named-pilot inputs fail without falling back to Khlong San. |
+| 3 | Pipeline publication through saved artifacts and both API routes | A pipeline-produced Parquet/manifest bundle with fractional event seconds returns the same warning-relative weighted quantiles and canonical non-null denominator contract from both API routes. |
+| 4 | Fresh BKK-024 release | Freeze one merged source/configuration/environment boundary, create eight new IDs, execute one dry/moderate pair per approved AOI and pass all eight run audits plus four pair audits before sharing metrics. |
 
 ## Scope and method decisions
 
@@ -45,17 +77,19 @@ The terrain catalogue lead is not an admitted elevation surface; datum,
 bare-earth classification, hydraulic forcing and independent event validation
 remain acquisition gates. Mobility remains uncalibrated against OTP controls.
 
-The paper audit also identifies pilot replay, open-edge flood impedance and
-weighted-agent interpretation concerns. These must remain explicit in the shared
-status; a source-pinned pilot rerun and a separately scoped behavioural change
-are required before the paper claims calibrated evacuation performance.
+Merged source closes the earlier open-edge flood-impedance, fixed-cohort,
+weighted-quantile and denominator implementation defects. The failed releases
+remain invalid evidence. Weighted-agent interpretation and mobility calibration
+remain scientific concerns; source correction alone does not support calibrated
+evacuation-performance claims.
 
 ## Verification and handoff
 
-Run Python pipeline/API tests, frontend tests, production build and lint. Record
-exact outputs in PR descriptions and a dated handoff. Show the application on
-the corrected immutable city run. Record historical runs separately from current
-source changes and never overwrite their output evidence.
+Run Python pipeline/API tests and the affected frontend tests, build and lint
+when their code is in scope. Record exact outputs in PR descriptions and a dated
+handoff. Record historical and failed release runs separately from current source
+changes and never overwrite their output evidence. A passing source suite is not
+permission to reuse a partial run set.
 
 Project-wide status remains **DONE_WITH_CONCERNS** until the external evidence
 gates and remaining scientific validation tasks are met; passing internal tests
