@@ -28,7 +28,6 @@ import pandas as pd  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bkkflow.aoi import load_aoi  # noqa: E402
 from bkkflow import replay_audit  # noqa: E402
 from bkkflow.util import RUNS_DIR, ensure_dir  # noqa: E402
 
@@ -417,9 +416,7 @@ def write_pair_evidence(pair: CheckedPair, report_dir: Path) -> Path:
     return path
 
 
-def _checked_table(run: CheckedRun, role: str) -> pd.DataFrame:
-    if role in run.bundle.tables:
-        return run.bundle.tables[role].copy()
+def _checked_output_path(run: CheckedRun, role: str) -> Path:
     output = run.bundle.outputs.get(role)
     if output is None:
         raise ValueError(f"checked report role is missing: {role}")
@@ -427,7 +424,36 @@ def _checked_table(run: CheckedRun, role: str) -> pd.DataFrame:
     digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
     if digest != run.audit["audited_hashes"].get(output["uri"]):
         raise ValueError(f"checked report artifact changed after audit: {role}")
-    return pd.read_parquet(path)
+    return path
+
+
+def _checked_table(run: CheckedRun, role: str) -> pd.DataFrame:
+    if role in run.bundle.tables:
+        return run.bundle.tables[role].copy()
+    return pd.read_parquet(_checked_output_path(run, role))
+
+
+def _checked_aoi(run: CheckedRun):
+    import geopandas as gpd
+
+    output = run.bundle.outputs.get("aoi")
+    path = _checked_output_path(run, "aoi")
+    frame = gpd.read_parquet(path)
+    if (
+        frame.empty
+        or frame.crs is None
+        or (
+            "aoi_id" in frame
+            and set(frame["aoi_id"].astype(str)) != {run.bundle.aoi_id}
+        )
+        or len(frame) != output.get("row_count")
+        or (output.get("crs") and frame.crs.to_string() != output["crs"])
+        or frame.geometry.isna().any()
+        or frame.geometry.is_empty.any()
+        or not frame.geometry.is_valid.all()
+    ):
+        raise ValueError("checked report AOI metadata mismatch")
+    return frame
 
 
 def _caption(figure, run_id: str, status: str, extra: str = "") -> None:
@@ -446,7 +472,7 @@ def figure_scenario_overview(run: CheckedRun, report_dir: Path) -> list[Path]:
     """Population, flood depth, closed edges and outcomes in one figure."""
     manifest, stats = run.bundle.manifest, run.bundle.stats
     status = manifest["validation_status"]
-    aoi = load_aoi(manifest["geography"]["aoi_id"]).to_crs("EPSG:32647")
+    aoi = _checked_aoi(run).to_crs(manifest["geography"]["analysis_crs"])
     edges = _checked_table(run, "network_edges")
     flood = _checked_table(run, "flood_slices")
     buildings = _checked_table(run, "buildings")
@@ -644,24 +670,69 @@ def figure_comparison(pair: CheckedPair, report_dir: Path) -> list[Path]:
     return [path]
 
 
+def _present_series(
+    mesh: pd.DataFrame, activities: pd.DataFrame, persons: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    """Spatial population total at every saved timestamp, expressed in hours."""
+    required = {"time_s", "total_pop"}
+    if not required <= set(mesh):
+        raise ValueError("checked present-population table is incomplete")
+    values = mesh.loc[:, ["time_s", "total_pop"]].copy()
+    values["time_s"] = pd.to_numeric(values["time_s"], errors="coerce")
+    values["total_pop"] = pd.to_numeric(values["total_pop"], errors="coerce")
+    if (
+        values.empty
+        or not np.isfinite(values[["time_s", "total_pop"]].to_numpy(float)).all()
+        or (values[["time_s", "total_pop"]] < 0).any().any()
+    ):
+        raise ValueError("checked present-population values are invalid")
+    series = (
+        values.groupby("time_s", as_index=False, sort=True)["total_pop"]
+        .sum()
+    )
+    activity_columns = {"person_id", "start_time_s", "end_time_s", "weight"}
+    if not activities.empty and not activity_columns <= set(activities):
+        raise ValueError("checked activity table is incomplete")
+    if activities.empty:
+        if persons is None or not {"person_id", "weight"} <= set(persons):
+            raise ValueError("checked population fallback is incomplete")
+        expected = np.full(len(series), float(persons.drop_duplicates("person_id")["weight"].sum()))
+    else:
+        expected_values: list[float] = []
+        for time_s in series["time_s"]:
+            active = activities[
+                (activities["start_time_s"] <= time_s)
+                & (activities["end_time_s"] > time_s)
+            ]
+            weights = active.groupby("person_id")["weight"].agg(["first", "nunique"])
+            if (weights["nunique"] > 1).any():
+                raise ValueError("checked activity weights are inconsistent")
+            expected_values.append(float(weights["first"].sum()))
+        expected = np.asarray(expected_values)
+    if not np.allclose(series["total_pop"].to_numpy(float), expected, rtol=1e-9, atol=1e-6):
+        raise ValueError("checked mesh does not conserve unique active people")
+    series["time_h"] = series["time_s"] / 3600.0
+    return series[["time_h", "total_pop"]]
+
+
 def figure_present_profile(run: CheckedRun, report_dir: Path) -> list[Path]:
     """Present population over 24 hours, distinguishing resident from present."""
     mesh = _checked_table(run, "mesh_volume")
     if mesh.empty:
         return []
-    hourly = (
-        mesh.assign(hour=(mesh["time_s"] // 3600).astype(int))
-        .groupby("hour", as_index=False)["total_pop"]
-        .sum()
-    )
     persons = _checked_table(run, "persons")
+    activities = _checked_table(run, "activities")
+    series = _present_series(mesh, activities, persons)
     residents = float(persons["weight"].sum()) if len(persons) else np.nan
     area_label = run.bundle.stats["geography"]["name"]
 
     figure, axis = plt.subplots(figsize=(11, 5))
-    axis.plot(hourly["hour"], hourly["total_pop"], marker="o", color="#1d4ed8", label="people present (sampled, weighted)")
+    axis.plot(
+        series["time_h"], series["total_pop"], color="#1d4ed8",
+        label="people present (spatial total at each saved timestamp)",
+    )
     axis.axhline(residents, color="#6b7280", linestyle="--", label="resident baseline (weighted)")
-    axis.set_xlabel("hour of day")
+    axis.set_xlabel("time of day (hours)")
     axis.set_ylabel("weighted people")
     axis.set_title(
         f"Present population versus resident baseline — {area_label}; different quantities"

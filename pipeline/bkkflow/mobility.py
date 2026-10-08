@@ -486,12 +486,19 @@ def aggregate_mesh_volume(
     """Mesh population per 10-minute step, conserving agent presence."""
     records: list[dict[str, Any]] = []
     for start in range(0, SECONDS_PER_DAY, time_step_s):
-        end = start + time_step_s
         window = activities[
-            (activities["start_time_s"] < end) & (activities["end_time_s"] > start)
-        ]
+            (activities["start_time_s"] <= start) & (activities["end_time_s"] > start)
+        ].copy()
         if window.empty:
             continue
+        if "person_id" in window:
+            order = ["person_id", "start_time_s"]
+            if "sequence" in window:
+                order.append("sequence")
+            window = (
+                window.sort_values(order)
+                .drop_duplicates("person_id", keep="last")
+            )
         group = window.groupby(["lon", "lat"], as_index=False)["weight"].sum()
         for row in group.itertuples():
             digest = hashlib.sha256(

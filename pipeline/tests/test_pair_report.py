@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-import geopandas as gpd
+import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -245,10 +245,6 @@ def test_comparison_figure_is_area_generic_and_noncausal(
         return figure, axes
 
     monkeypatch.setattr(report.plt, "subplots", capture)
-    saved_aoi = gpd.read_parquet(
-        report.RUNS_DIR.parent / "curated/pilots/khlong-san-district/aoi.parquet"
-    )
-    monkeypatch.setattr(report, "load_aoi", lambda _aoi_id: saved_aoi)
     comparison = report.figure_comparison(pair, tmp_path)
     overview = report.figure_scenario_overview(pair.moderate, tmp_path)
     present = report.figure_present_profile(pair.moderate, tmp_path)
@@ -268,9 +264,53 @@ def test_comparison_figure_is_area_generic_and_noncausal(
     )
 
 
+def test_overview_uses_hash_bound_run_aoi(
+    published_pair: tuple[str, str], tmp_path: Path,
+) -> None:
+    pair = report.load_checked_pair(*published_pair)
+    aoi_output = pair.moderate.bundle.outputs["aoi"]
+    aoi_path = pair.moderate.bundle.run_dir / aoi_output["uri"]
+
+    assert report.figure_scenario_overview(pair.moderate, tmp_path)[0].is_file()
+    aoi_path.write_bytes(aoi_path.read_bytes() + b"changed-after-audit")
+    with pytest.raises(ValueError, match="checked report artifact changed after audit: aoi"):
+        report.figure_scenario_overview(pair.moderate, tmp_path)
+
+
+def test_present_series_spatially_sums_each_original_timestamp() -> None:
+    mesh = pd.DataFrame({
+        "time_s": [0, 0, 600, 600, 3600, 3600],
+        "total_pop": [10.0, 20.0, 12.0, 23.0, 15.0, 25.0],
+    })
+    activities = pd.DataFrame([
+        {"person_id": "p1", "start_time_s": 0, "end_time_s": 600,
+         "weight": 10.0},
+        {"person_id": "p2", "start_time_s": 0, "end_time_s": 7200,
+         "weight": 20.0},
+        {"person_id": "p3", "start_time_s": 600, "end_time_s": 3600,
+         "weight": 15.0},
+        {"person_id": "p4", "start_time_s": 3600, "end_time_s": 7200,
+         "weight": 20.0},
+    ])
+
+    series = report._present_series(mesh, activities)
+
+    assert series["time_h"].tolist() == [0.0, 1 / 6, 1.0]
+    assert series["total_pop"].tolist() == [30.0, 35.0, 40.0]
+
+    duplicated_transition = mesh.copy()
+    duplicated_transition.loc[duplicated_transition["time_s"] == 600, "total_pop"] += 5
+    with pytest.raises(ValueError, match="does not conserve unique active people"):
+        report._present_series(duplicated_transition, activities)
+
+
 def test_publish_pair_report_is_atomic_and_pair_gated(
     published_pair: tuple[str, str], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    load_checked_pair = report.load_checked_pair
+    scenario_overview = report.figure_scenario_overview
+    present_profile = report.figure_present_profile
+    comparison = report.figure_comparison
     pair = report.load_checked_pair(*published_pair)
     moderate_dir = pair.moderate.bundle.run_dir
 
@@ -305,14 +345,15 @@ def test_publish_pair_report_is_atomic_and_pair_gated(
         report.publish_pair_report(*published_pair)
     assert not list(moderate_dir.glob("*pair-report*"))
 
-    monkeypatch.setattr(
-        report, "figure_comparison",
-        lambda checked, directory: placeholder(checked, directory, "comparison.png"),
-    )
+    monkeypatch.setattr(report, "load_checked_pair", load_checked_pair)
+    monkeypatch.setattr(report, "figure_scenario_overview", scenario_overview)
+    monkeypatch.setattr(report, "figure_present_profile", present_profile)
+    monkeypatch.setattr(report, "figure_comparison", comparison)
     result = report.publish_pair_report(*reversed(published_pair))
     target = Path(result["report_dir"])
     assert target.is_dir() and result["audit_status"] == "PASS"
     assert all(Path(path).is_file() for path in [*result["figures"], result["evidence"]])
+    assert all(Path(path).read_bytes().startswith(b"\x89PNG") for path in result["figures"])
     assert not list(moderate_dir.glob(".pair-report-*"))
 
 

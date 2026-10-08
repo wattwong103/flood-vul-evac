@@ -231,6 +231,32 @@ def test_sample_keeps_weights_and_caps_rows() -> None:
 
 
 # --------------------------------------------------------------------------
+# mobility aggregation
+# --------------------------------------------------------------------------
+
+
+def test_mesh_volume_uses_point_in_time_presence_without_transition_duplicates() -> None:
+    activities = pd.DataFrame([
+        {"person_id": "p1", "sequence": 0, "start_time_s": 0, "end_time_s": 300,
+         "lon": 100.50, "lat": 13.72, "weight": 10.0},
+        {"person_id": "p1", "sequence": 1, "start_time_s": 300, "end_time_s": 86400,
+         "lon": 100.51, "lat": 13.73, "weight": 10.0},
+        {"person_id": "p2", "sequence": 0, "start_time_s": 0, "end_time_s": 86400,
+         "lon": 100.50, "lat": 13.72, "weight": 20.0},
+    ])
+
+    mesh = mobility.aggregate_mesh_volume(
+        activities, pd.DataFrame(), analysis_crs="EPSG:32647", time_step_s=600
+    )
+    totals = mesh.groupby("time_s")["total_pop"].sum()
+
+    assert totals.loc[0] == 30.0
+    assert totals.loc[600] == 30.0
+    assert len(mesh.loc[mesh["time_s"] == 0]) == 1
+    assert len(mesh.loc[mesh["time_s"] == 600]) == 2
+
+
+# --------------------------------------------------------------------------
 # flood impedance
 # --------------------------------------------------------------------------
 

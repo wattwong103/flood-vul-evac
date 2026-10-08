@@ -243,6 +243,10 @@ def execute_run(
     else:
         aoi_frame = aoi_module.load_aoi(aoi_id)
         aoi_provenance = read_json(CURATED_DIR / "aoi" / f"{aoi_id}.provenance.json")
+    aoi_path = _write_parquet(context, "aoi.parquet", aoi_frame)
+    register_output(
+        context, "aoi", aoi_path, rows=len(aoi_frame), crs=aoi_frame.crs.to_string()
+    )
     osm_provenance = read_json(bundle.input_root / "osm" / "provenance.json")
     if bundle.named:
         expected = {
