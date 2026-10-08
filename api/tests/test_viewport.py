@@ -48,3 +48,14 @@ def test_network_summary_does_not_read_large_parquet(viewport, monkeypatch):
     result = client.get("/v1/runs/selected/network?summary_only=true").json()
     assert result["summary"]["edges"] == result["matched_rows"] == 2
     assert result["features"] == []
+
+
+def test_incompatible_index_is_unavailable_not_a_bad_request(viewport):
+    import sqlite3
+    client, run = viewport
+    with sqlite3.connect(run / "map.sqlite") as db:
+        db.execute("UPDATE metadata SET value='future' WHERE key='version'")
+    result = client.get("/v1/runs/selected/map/network?bbox=100,13,101,14")
+    assert result.status_code == 200
+    assert result.json()["available"] is False
+    assert client.get("/v1/runs/selected/map/network?bbox=bad").status_code == 422

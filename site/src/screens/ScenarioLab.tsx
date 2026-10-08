@@ -1,3 +1,5 @@
+import { MapStatsGate } from "@/components/MapStatsGate";
+import { validationChecks } from "@/lib/validation";
 /**
  * Scenario Lab — the primary screen.
  *
@@ -490,14 +492,16 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
                 />
               ) : null}
               {anyLoading ? <LoadingState label="Reading run artefacts from the API" /> : null}
-              <MapView
-                bundle={bundle}
-                spatialRunId={isCity ? runId : null}
-                layers={layers}
-                modelTime={activeTime === null ? null : modelTime}
-                areaName={formatText(payload?.geography?.name ?? "the pilot area")}
-                reducedMotion={reducedMotion}
-              />
+              <MapStatsGate stats={stats} runId={runId}>
+                <MapView
+                  bundle={bundle}
+                  spatialRunId={isCity ? runId : null}
+                  layers={layers}
+                  modelTime={activeTime === null ? null : modelTime}
+                  areaName={formatText(payload?.geography?.name ?? "the pilot area")}
+                  reducedMotion={reducedMotion}
+                />
+              </MapStatsGate>
             </div>
 
             <section className="metric-grid" aria-label="Headline metrics">
@@ -847,9 +851,7 @@ function Timeline({
 }
 
 function ValidationSummary({ report }: { report: unknown }) {
-  const checks = Array.isArray((report as { checks?: unknown })?.checks)
-    ? ((report as { checks: Array<Record<string, unknown>> }).checks)
-    : [];
+  const checks = validationChecks(report);
 
   if (checks.length === 0) {
     return <p className="muted">The report contains no individual checks.</p>;

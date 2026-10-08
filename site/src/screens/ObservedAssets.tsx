@@ -1,3 +1,4 @@
+import { MapStatsGate } from "@/components/MapStatsGate";
 /**
  * Observed & assets — the one screen that carries an observation.
  *
@@ -489,14 +490,16 @@ export function ObservedAssets({ reducedMotion }: { reducedMotion: boolean }) {
                     </p>
                     {servesGeographicPoints(bundle.observedWater) ? (
                       <div className="lab-map">
-                        <MapView
-                          bundle={bundle}
-                          spatialRunId={stats.data?.scale === "city" ? runId : null}
-                          layers={layerState}
-                          modelTime={null}
-                          areaName={`the ${shownYear} observed water classification`}
-                          reducedMotion={reducedMotion}
-                        />
+                        <MapStatsGate stats={stats} runId={runId}>
+                          <MapView
+                            bundle={bundle}
+                            spatialRunId={stats.data?.scale === "city" ? runId : null}
+                            layers={layerState}
+                            modelTime={null}
+                            areaName={`the ${shownYear} observed water classification`}
+                            reducedMotion={reducedMotion}
+                          />
+                        </MapStatsGate>
                       </div>
                     ) : (
                       <ProjectedGeometryNotice gridSizeM={cells.data?.grid_size_m ?? null} />

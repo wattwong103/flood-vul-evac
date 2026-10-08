@@ -13,7 +13,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .util import REPO_ROOT, read_json, sha256_file, utc_now_iso, write_json
+from .util import REPO_ROOT, read_json, sha256_file, utc_now_iso
 
 SCHEMA_PATH = REPO_ROOT / "schemas" / "pflow-bkk-run.schema.json"
 CONTRACT_VERSION = "pflow-bkk-v0.1"
@@ -54,8 +54,12 @@ def build_manifest(
     warnings: list[str],
     validation_status: str = "demonstration",
     created_at: str | None = None,
+    code_identity: dict[str, Any] | None = None,
+    active_scenario: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
+        **({"code_identity": code_identity} if code_identity is not None else {}),
+        **({"active_scenario": active_scenario} if active_scenario is not None else {}),
         "run_id": run_id,
         "created_at": created_at or utc_now_iso(),
         "validation_status": validation_status,
@@ -90,3 +94,25 @@ def output_entry(role: str, path: str | Path, *, row_count: int | None = None, c
     if crs:
         entry["crs"] = crs
     return entry
+
+
+def verify_output_integrity(run_dir: str | Path, outputs: list[dict[str, Any]]) -> None:
+    """Require unique in-run URIs whose declared hashes match final file bytes."""
+    root = Path(run_dir).resolve()
+    seen: set[str] = set()
+    for entry in outputs:
+        uri = entry.get("uri")
+        if not isinstance(uri, str) or not uri:
+            raise ValueError("Output URI is missing")
+        if uri in seen:
+            raise ValueError(f"Duplicate output URI: {uri}")
+        seen.add(uri)
+
+        relative = Path(uri)
+        target = (root / relative).resolve()
+        if relative.is_absolute() or not target.is_relative_to(root):
+            raise ValueError(f"Output URI escapes run directory: {uri}")
+        if not target.is_file():
+            raise ValueError(f"Output file is missing: {uri}")
+        if entry.get("content_sha256") != sha256_file(target):
+            raise ValueError(f"Output hash mismatch: {uri}")

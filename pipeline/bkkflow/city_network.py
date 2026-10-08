@@ -38,7 +38,7 @@ VEHICLE_SPEED_KMH = {
     "living_street": 15, "service": 15, "road": 20,
 }
 WALK_SPEED_MPS = 4.5 / 3.6
-SNAP_TOLERANCE_M = 400.0
+from .city_method import SNAP_TOLERANCE_M
 
 PEDESTRIAN_ALLOWED = {
     "motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link",

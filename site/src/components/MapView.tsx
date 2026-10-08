@@ -1017,7 +1017,7 @@ function buildingRows(features: Array<Feature<BuildingProperties>>): Row[] {
         formatNumber(propNumber(p, "height_m"), 1),
         formatText(propString(p, "height_source")),
         formatNumber(propNumber(p, "max_depth_m"), 2),
-        verified === null ? "no refuge record" : verified ? "verified refuge" : "unverified — not a shelter",
+        !isRefugeRecord(p) ? "no refuge record" : verified ? "verified refuge" : "unverified — not a shelter",
         formatCount(propNumber(p, "refuge_capacity")),
       ],
     };

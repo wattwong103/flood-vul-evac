@@ -3,6 +3,7 @@ data/raw/
 data/staged/
 data/derived/
 data/cache/
+/data/curated/pilots/
 
 # Local run products and secrets.
 runs/

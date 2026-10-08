@@ -9,6 +9,7 @@ from shapely.geometry import LineString, Point
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bkkflow import observed_evac as screening
 from bkkflow.city_network import CityRoutingIndex
+from bkkflow.city_method import SNAP_TOLERANCE_M, ROUTING_CUTOFF_MINUTES
 
 
 def roads():
@@ -27,11 +28,19 @@ def test_closed_access_edge_does_not_move_origin(tmp_path, monkeypatch):
     monkeypatch.setattr(screening, "_load", lambda p: edges if p.name == "network_edges.parquet" else targets)
     monkeypatch.setattr(screening, "_water_cell_geometries", lambda *a: water)
     monkeypatch.setattr(screening, "edges_in_water", lambda *a: np.array([True, False]))
+    cutoffs = []
+    original = CityRoutingIndex.dijkstra
+    def record_cutoff(self, source, *, cutoff=None):
+        cutoffs.append(cutoff)
+        return original(self, source, cutoff=cutoff)
+    monkeypatch.setattr(CityRoutingIndex, "dijkstra", record_cutoff)
     closed = screening.run_connectivity_screening(run_dir=tmp_path, closure_fraction=1)
     reopened = screening.run_connectivity_screening(run_dir=tmp_path, closure_fraction=0)
     assert closed.reachable_population == 0
     assert reopened.reachable_population == 10
     assert closed.no_network_access_cells == reopened.no_network_access_cells == 0
+    assert cutoffs == [ROUTING_CUTOFF_MINUTES * 60] * 2
+    assert reopened.as_dict()["routing_cutoff_minutes"] == ROUTING_CUTOFF_MINUTES
 
 
 def test_nested_closures_are_independent_of_input_row_order():
@@ -62,3 +71,9 @@ def test_routing_cutoff_excludes_unsettled_costs():
     costs, _ = index.dijkstra(0, cutoff=150)
     assert costs[:2].tolist() == [0, 100]
     assert np.isinf(costs[2])
+
+
+def test_access_tolerance_includes_boundary_but_not_more():
+    index = CityRoutingIndex(roads(), np.ones(2, dtype=bool), np.ones(2))
+    assert index.nearest_node(0, SNAP_TOLERANCE_M, index.coords) == 0
+    assert index.nearest_node(0, SNAP_TOLERANCE_M + .001, index.coords) is None

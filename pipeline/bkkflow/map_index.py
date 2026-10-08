@@ -2,7 +2,9 @@
 from __future__ import annotations
 import json
 import math
+import os
 import sqlite3
+import tempfile
 from contextlib import closing
 from pathlib import Path
 import geopandas as gpd
@@ -17,11 +19,28 @@ LAYERS = {
 }
 
 
+class MapIndexUnavailable(RuntimeError):
+    """A valid request cannot be served by this run's saved index."""
+
+
 def build_map_index(run_dir: Path, analysis_crs: str) -> dict:
-    """Create once from public allowlisted columns; never alter a saved index."""
+    """Install a complete index once, without replacing a published artifact.
+
+    A crash leaves only a private temporary directory. A same-filesystem hard
+    link publishes atomically and fails if another writer installed the target.
+    Filesystems without hard-link support fail explicitly, never copy partially.
+    """
     path = run_dir / "map.sqlite"
-    with path.open("xb"):
-        pass
+    if path.exists():
+        raise FileExistsError(path)
+    with tempfile.TemporaryDirectory(prefix=".map-", dir=run_dir) as temporary:
+        staged = Path(temporary) / "map.sqlite"
+        result = _build_map_index(run_dir, analysis_crs, staged)
+        os.link(staged, path)
+    return {**result, "path": str(path)}
+
+
+def _build_map_index(run_dir: Path, analysis_crs: str, path: Path) -> dict:
     with closing(sqlite3.connect(path)) as db, db:
         db.executescript("""
             CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -78,7 +97,7 @@ def query_map_index(run_dir: Path, layer: str, bbox: tuple[float, ...], *,
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as db:
         metadata = dict(db.execute("SELECT key, value FROM metadata"))
         if metadata.get("run_id") != run_dir.name or metadata.get("version") != "1":
-            raise ValueError("Map index run identity or version mismatch")
+            raise MapIndexUnavailable("Map index run identity or version mismatch")
         # CROSS JOIN keeps RTree lookup first, rather than scanning every feature.
         selection = """FROM bounds b CROSS JOIN features f ON f.id=b.id
             WHERE b.maxx>=? AND b.minx<=? AND b.maxy>=? AND b.miny<=? AND f.layer=?"""

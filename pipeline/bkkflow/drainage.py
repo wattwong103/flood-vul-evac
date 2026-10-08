@@ -150,7 +150,7 @@ SOURCE_ROLE = "screening_index"
 INDEX_VERSION = "bkk-drainage-screening-v0.1"
 
 ANALYSIS_CRS = "EPSG:32647"
-GRID_SIZE_M = 1000.0
+from .city_method import PUBLIC_GRID_M as GRID_SIZE_M
 
 #: Straight-line search radius for the nearest-channel distance. Beyond it the
 #: value is unknown, so the field is null rather than capped.

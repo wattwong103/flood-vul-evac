@@ -255,6 +255,7 @@ export type RunStats = {
   stages?: StageRecord[] | null;
   warnings?: unknown[] | null;
   sources?: StatsSourceRef[] | null;
+  denominators?: Record<string, unknown> | null;
   [key: string]: unknown;
 };
 
@@ -486,6 +487,7 @@ export type BuildingProperties = {
   ground_floor_dry?: boolean | null;
   refuge_id?: string | null;
   refuge_name?: string | null;
+  refuge_status?: string | null;
   /** False means "not verified" — never render as a safe shelter. */
   refuge_verified?: boolean | null;
   refuge_capacity?: number | null;
@@ -517,6 +519,7 @@ export type EvacuationResult = {
   arrived_weighted?: number | null;
   unserved_weighted?: number | null;
   top_bottleneck_edges?: BottleneckEdge[] | null;
+  denominators?: Record<string, unknown> | null;
   [key: string]: unknown;
 };
 

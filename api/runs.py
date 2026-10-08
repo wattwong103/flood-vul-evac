@@ -175,6 +175,10 @@ def _load_run(path: Path, run_id: str | None = None) -> RunRef:
         )
 
     run_state, state_error = _read_json(path / "run_state.json")
+    # New source-tracked runs must pass the final drift gate before being served.
+    # Legacy manifests keep their existing compatibility behavior.
+    if "code_identity" in manifest and (run_state or {}).get("state") != "published":
+        raise RunNotFoundError(resolved_id, "source-tracked run has not been published")
     warnings: list[ApiWarning] = []
     if run_state is None:
         run_state = {}

@@ -18,6 +18,29 @@
     "warnings"
   ],
   "properties": {
+    "active_scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "configured_scenario_id"],
+      "properties": {
+        "state": { "enum": ["dry", "moderate"] },
+        "configured_scenario_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "code_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["git_commit", "git_tree", "git_status", "source_sha256", "source_files", "scope", "verification"],
+      "properties": {
+        "git_commit": { "type": ["string", "null"], "pattern": "^[a-f0-9]{40,64}$" },
+        "git_tree": { "type": ["string", "null"], "pattern": "^[a-f0-9]{40,64}$" },
+        "git_status": { "enum": ["clean", "dirty", "unavailable"] },
+        "source_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "source_files": { "type": "integer", "minimum": 0 },
+        "scope": { "type": "array", "items": { "type": "string" } },
+        "verification": { "enum": ["matched_before_publication"] }
+      }
+    },
     "run_id": { "type": "string", "format": "uuid" },
     "created_at": { "type": "string", "format": "date-time" },
     "validation_status": {

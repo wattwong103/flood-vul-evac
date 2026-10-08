@@ -36,14 +36,17 @@ from . import drainage as drainage_module
 from . import observed_evac as observed_evac_module
 from .provenance import verify_source
 from .map_index import build_map_index
+from .code_identity import capture_code_identity, verify_code_identity
+from .city_method import PUBLIC_GRID_M
 from .sources.registry import load_registry
+from .sources.population_source import CITY_DATASET, CITY_SOURCE_ID, count_raster_url
 from .sources import city_osm, destinations as destinations_source, gsw, mitrearth
 from .util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
-WORLDPOP_RASTER = Path(__file__).resolve().parents[2] / "data/staged/population/tha_ppp_2020.tif"
-WORLDPOP_SOURCE_ID = "worldpop-global-2000-2020-tha-100m"
-WORLDPOP_URL = "https://data.worldpop.org/GIS/Population/Global_2000_2020/2020/THA/tha_ppp_2020.tif"
+WORLDPOP_RASTER = Path(__file__).resolve().parents[2] / "data/staged/population" / Path(CITY_DATASET["data_file"]).name
+WORLDPOP_SOURCE_ID = CITY_SOURCE_ID
+WORLDPOP_URL = count_raster_url(CITY_DATASET)
 
 FLOOD_NOT_COMPUTED = (
     "not_computed_insufficient_dem_vertical_accuracy"
@@ -185,6 +188,7 @@ def execute_city_run(
     run_id = run_id or str(uuid.uuid4())
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
+    code_identity = capture_code_identity()
     started = time.time()
 
     config = load_config("pilot.city.json")
@@ -375,7 +379,7 @@ def execute_city_run(
            note=f"{total_residents:,.0f} weighted residents")
 
     stage_start = time.time()
-    grid = _agglomerate_cells(cells, crs=analysis_crs, cell_size_m=1000.0)
+    grid = _agglomerate_cells(cells, crs=analysis_crs, cell_size_m=PUBLIC_GRID_M)
     grid_out = grid.copy()
     grid_out["geometry_wkt"] = grid.geometry.to_wkt()
     grid_out.drop(columns="geometry").to_parquet(run_dir / "population_grid_1km.parquet", index=False)
@@ -569,6 +573,7 @@ def execute_city_run(
         source_versions.append(observed_source)
 
     manifest = manifest_module.build_manifest(
+        code_identity=verify_code_identity(code_identity, run_dir),
         run_id=run_id,
         geography={
             "country": "Thailand",
@@ -599,7 +604,7 @@ def execute_city_run(
                 "external_trip_policy": "boundary_flows_not_modelled",
             },
             "privacy": {
-                "public_min_cell_metres": 1000,
+                "public_min_cell_metres": PUBLIC_GRID_M,
                 "minimum_reported_count": 20,
                 "real_trajectories_present": False,
             },
@@ -623,7 +628,7 @@ def execute_city_run(
                 {"reason": "mobility stages are not part of the city baseline run"},
             ),
             "aggregation": manifest_module.component(
-                "bkk-grid-aggregate", "0.1.0", {"public_grid_metres": 1000},
+                "bkk-grid-aggregate", "0.1.0", {"public_grid_metres": PUBLIC_GRID_M},
             ),
         },
         flood_scenario_entry={
@@ -772,6 +777,7 @@ def execute_city_run(
         "elapsed_seconds": round(time.time() - started, 1),
     }
     write_json(run_dir / "stats.json", stats)
+    verify_code_identity(code_identity, run_dir)
     write_json(
         run_dir / "run_state.json",
         {

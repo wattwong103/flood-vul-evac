@@ -27,7 +27,7 @@ from bkkflow import aoi as aoi_module  # noqa: E402
 from bkkflow.sources import gsw  # noqa: E402
 from bkkflow.util import CURATED_DIR, ensure_dir, sha256_file, utc_now_iso  # noqa: E402
 
-GRID_M = 1000.0
+from bkkflow.city_method import PUBLIC_GRID_M as GRID_M  # noqa: E402
 YEARS = (2010, 2011, 2012, 2020)
 
 

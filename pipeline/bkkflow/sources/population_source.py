@@ -28,6 +28,13 @@ from ..util import STAGED_DIR, ensure_dir, utc_now_iso, write_json
 REST_BASE = "https://www.worldpop.org/rest/data"
 DOWNLOAD_BASE = "https://data.worldpop.org"
 SOURCE_ID = "worldpop-global2-tha-100m-r2025a"
+CITY_SOURCE_ID = "worldpop-global-2000-2020-tha-100m"
+CITY_DATASET = {"popyear": "2020", "data_file": "GIS/Population/Global_2000_2020/2020/THA/tha_ppp_2020.tif"}
+
+
+def count_raster_url(dataset: dict[str, Any]) -> str:
+    """Use the same resource identity for download verification and manifests."""
+    return f"{DOWNLOAD_BASE}/{dataset['data_file'].lstrip('/')}"
 
 
 @dataclass
@@ -87,7 +94,7 @@ def download_count_raster(
 ) -> tuple[Path, dict[str, Any]]:
     """Download the count GeoTIFF with resume and a verified byte count."""
     target_dir = ensure_dir(Path(out_dir or STAGED_DIR / "population"))
-    url = f"{DOWNLOAD_BASE}/{dataset['data_file']}"
+    url = count_raster_url(dataset)
     name = Path(dataset["data_file"]).name
     destination = target_dir / name
     if destination.is_file():
@@ -151,7 +158,8 @@ def clip_to_aoi(
         with rasterio.open(target, "w", **profile) as writer:
             writer.write(data[0], 1)
 
-        window_total = float(np.nansum(data[0][data[0] > 0]))
+        positive = data[0][data[0] > 0].astype("float64")
+        window_total = float(positive.sum())
         stats = {
             "source": str(source),
             "clip": str(target),
@@ -166,7 +174,7 @@ def clip_to_aoi(
             "clip_nonzero_cells": int((data[0] > 0).sum()),
             "clip_max_cell": float(data[0].max()) if data[0].size else 0.0,
             "clip_mean_positive": (
-                float(data[0][data[0] > 0].mean()) if (data[0] > 0).any() else 0.0
+                float(positive.mean()) if positive.size else 0.0
             ),
             "clipped_at": utc_now_iso(),
             "method": "window clip in source CRS; no resampling",

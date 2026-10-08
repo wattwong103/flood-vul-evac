@@ -46,7 +46,8 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from .city_network import CityRoutingIndex, SNAP_TOLERANCE_M
+from .city_network import CityRoutingIndex
+from .city_method import PUBLIC_GRID_M, SNAP_TOLERANCE_M, ROUTING_CUTOFF_MINUTES, cell_footprints
 from .util import CURATED_DIR, ensure_dir, utc_now_iso, write_json
 
 DESIGNATED_DESTINATIONS = 150
@@ -106,7 +107,7 @@ class ScreeningResult:
             "closure_fraction": self.closure_fraction,
             "access_anchors": "baseline walking graph, fixed across closures",
             "snap_tolerance_m": SNAP_TOLERANCE_M,
-            "routing_cutoff_minutes": 180,
+            "routing_cutoff_minutes": ROUTING_CUTOFF_MINUTES,
             "closure_selection": "seeded permutation of sorted wet-edge IDs, nested prefixes",
             "exposure_method": "positive area overlap of 1 km population and water-containing cells",
             "travel_percentiles_weighting": "unweighted reachable exposed cells",
@@ -269,8 +270,8 @@ def select_designated_destinations(
     if "verified" in frame.columns:
         frame = frame[~frame["verified"].astype(bool)]
     # Spatially thin the candidates by grid cell so the set covers the city.
-    frame["bucket"] = (frame["cx"] // 1000).astype("int64").astype(str) + "_" + (
-        frame["cy"] // 1000
+    frame["bucket"] = (frame["cx"] // PUBLIC_GRID_M).astype("int64").astype(str) + "_" + (
+        frame["cy"] // PUBLIC_GRID_M
     ).astype("int64").astype(str)
     frame = frame.drop_duplicates(subset="bucket")
     if len(frame) > count:
@@ -289,10 +290,8 @@ def exposed_cells(grid: pd.DataFrame, water: gpd.GeoDataFrame) -> np.ndarray:
     exposed = np.zeros(len(grid), dtype=bool)
     if water.empty or grid.empty:
         return exposed
-    def footprints(x, y):
-        return shapely.box(x - 500., y - 500., x + 500., y + 500.)
-    population_boxes = footprints(grid["x"].to_numpy(), grid["y"].to_numpy())
-    water_boxes = footprints(water.geometry.x.to_numpy(), water.geometry.y.to_numpy())
+    population_boxes = cell_footprints(grid["x"].to_numpy(), grid["y"].to_numpy())
+    water_boxes = cell_footprints(water.geometry.x.to_numpy(), water.geometry.y.to_numpy())
     rows, columns = shapely.STRtree(water_boxes).query(population_boxes, predicate="intersects")
     overlap = shapely.area(shapely.intersection(population_boxes[rows], water_boxes[columns]))
     exposed[rows[overlap > 0]] = True
@@ -390,7 +389,7 @@ def run_connectivity_screening(
         node = index.nearest_node(point.x, point.y, index.coords)
         if node is None:
             continue
-        costs, _ = index.dijkstra(node, cutoff=60 * 60 * 3)
+        costs, _ = index.dijkstra(node, cutoff=60 * ROUTING_CUTOFF_MINUTES)
         fields.append(costs)
         used += 1
     if not fields:

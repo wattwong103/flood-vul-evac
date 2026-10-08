@@ -11,6 +11,55 @@ import { stringPropertyExpression } from "../src/lib/map-expressions.ts";
 import { geoJsonBounds } from "../src/lib/map-bounds.ts";
 import { updateMapSources } from "../src/lib/map-sources.ts";
 import { isRefugeRecord } from "../src/lib/map-refuges.ts";
+import { validationChecks } from "../src/lib/validation.ts";
+
+test("validation reads the API envelope and preserves zero-valued observations", () => {
+  const checks = [{ check_id: "persons.unique_ids", description: "Synthetic IDs", passed: true, observed: 0, threshold: "0 duplicates", detail: null }];
+  for (const report of [{ checks }, { available: true, validation: { checks } }]) {
+    const result = validationChecks(report);
+    assert.equal(result[0].name, "persons.unique_ids");
+    assert.equal(result[0].result, 0);
+    assert.equal(result[0].notes, "Synthetic IDs");
+    assert.equal(result[0].passed, true);
+  }
+  assert.deepEqual(validationChecks({ available: false, validation: null }), []);
+});
+
+test("an index disappearing halfway through pagination cannot leave an apparently complete layer", async () => {
+  const original = globalThis.fetch;
+  let page = 0;
+  globalThis.fetch = async () => new Response(JSON.stringify(++page === 1
+    ? { available: true, run_id: "run", layer: "network", features: [{ properties: { edge_id: "one" } }], matched_rows: 2, next_cursor: 1 }
+    : { available: false, run_id: "run", layer: "network", features: [], next_cursor: null }));
+  try {
+    const result = await loadViewportLayer("run", "network", [100, 13, 101, 14]);
+    assert.equal(result.features.length, 0);
+    assert.match(result.note, /unavailable/);
+  } finally { globalThis.fetch = original; }
+});
+
+test("map statistics gate exposes failure and keeps geometry hidden until ready", async () => {
+  const { createServer } = await import("vite");
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { MapStatsGate } = await server.ssrLoadModule("/src/components/MapStatsGate.tsx");
+    for (const phase of ["loading", "error", "missing", "ready"]) {
+      const html = renderToStaticMarkup(createElement(MapStatsGate, {
+        runId: "chosen", stats: { phase, data: phase === "ready" ? { scale: "city", run_id: "chosen" } : null,
+          error: phase === "error" ? { message: "Statistics failed" } : null, reload: () => {} },
+      }, "geometry-visible"));
+      assert.equal(html.includes("geometry-visible"), phase === "ready");
+      if (phase === "error") assert.match(html, /Statistics failed/);
+      if (phase === "loading") assert.match(html, /statistics/i);
+    }
+    const stale = renderToStaticMarkup(createElement(MapStatsGate, {
+      runId: "new", stats: { phase: "ready", data: { run_id: "old", scale: "city" }, reload: () => {} },
+    }, "stale-geometry"));
+    assert.doesNotMatch(stale, /stale-geometry/);
+  } finally { await server.close(); }
+});
 
 test("ordinary buildings are not refuge candidates merely because verification is false", () => {
   assert.equal(isRefugeRecord({ refuge_verified: false, refuge_status: "not_a_refuge" }), false);

@@ -5,6 +5,8 @@ from .util import RAW_DIR, read_json, sha256_file, stable_hash, write_json
 
 
 def verify_source(path: Path, url: str, *, cache_dir: Path | None = None) -> dict:
+    if not path.is_file():
+        raise ValueError(f"Missing staged source: {path.name}; restore or re-download the original bytes")
     sidecar = path.with_suffix(".provenance.json")
     original = sidecar.is_file()
     key = stable_hash({"url": url, "accept": False})

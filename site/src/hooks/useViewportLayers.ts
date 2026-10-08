@@ -14,7 +14,7 @@ export function useViewportLayers(
   const [viewport, setViewport] = useState<{ bounds: ViewportBounds; zoom: number } | null>(null);
   const [loaded, setLoaded] = useState<{ key: string; network?: ViewportResult; buildings?: ViewportResult; note: string } | null>(null);
   useEffect(() => {
-    if (!map) return;
+    if (!map || !runId) return;
     const update = () => {
       const b = map.getBounds();
       setViewport({ bounds: [Math.max(-180, b.getWest()), Math.max(-90, b.getSouth()),
@@ -23,7 +23,7 @@ export function useViewportLayers(
     update();
     map.on("moveend", update);
     return () => { map.off("moveend", update); };
-  }, [map]);
+  }, [map, runId]);
   const key = JSON.stringify([runId, viewport, network, buildings]);
   const detailed = !!viewport && viewport.zoom >= 13;
   useEffect(() => {

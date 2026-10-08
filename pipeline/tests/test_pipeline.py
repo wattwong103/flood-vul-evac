@@ -8,6 +8,7 @@ access or the staged pilot data.
 
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 
@@ -230,6 +231,32 @@ def test_sample_keeps_weights_and_caps_rows() -> None:
 
 
 # --------------------------------------------------------------------------
+# mobility aggregation
+# --------------------------------------------------------------------------
+
+
+def test_mesh_volume_uses_point_in_time_presence_without_transition_duplicates() -> None:
+    activities = pd.DataFrame([
+        {"person_id": "p1", "sequence": 0, "start_time_s": 0, "end_time_s": 300,
+         "lon": 100.50, "lat": 13.72, "weight": 10.0},
+        {"person_id": "p1", "sequence": 1, "start_time_s": 300, "end_time_s": 86400,
+         "lon": 100.51, "lat": 13.73, "weight": 10.0},
+        {"person_id": "p2", "sequence": 0, "start_time_s": 0, "end_time_s": 86400,
+         "lon": 100.50, "lat": 13.72, "weight": 20.0},
+    ])
+
+    mesh = mobility.aggregate_mesh_volume(
+        activities, pd.DataFrame(), analysis_crs="EPSG:32647", time_step_s=600
+    )
+    totals = mesh.groupby("time_s")["total_pop"].sum()
+
+    assert totals.loc[0] == 30.0
+    assert totals.loc[600] == 30.0
+    assert len(mesh.loc[mesh["time_s"] == 0]) == 1
+    assert len(mesh.loc[mesh["time_s"] == 600]) == 2
+
+
+# --------------------------------------------------------------------------
 # flood impedance
 # --------------------------------------------------------------------------
 
@@ -400,6 +427,10 @@ def test_closed_way_becomes_a_routable_line() -> None:
 # --------------------------------------------------------------------------
 
 
+def _routing_edges(records: list[dict]) -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame(records, geometry="geometry", crs="EPSG:32647")
+
+
 def test_excluded_edges_are_absent_from_the_routing_graph() -> None:
     build = network.build_network(_roads(), analysis_crs="EPSG:32647", network_version="t")
     closed = set(build.edges.loc[build.edges["highway"] == "primary", "edge_id"])
@@ -410,6 +441,195 @@ def test_excluded_edges_are_absent_from_the_routing_graph() -> None:
     assert reduced.number_of_edges() < full.number_of_edges()
     remaining = {data["edge_id"] for _, _, data in reduced.edges(data=True)}
     assert not (remaining & closed)
+
+
+def test_flood_multiplier_changes_cost_and_speed_attributes() -> None:
+    edges = _routing_edges([
+        {
+            "edge_id": "slow",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 100.0,
+            "speed_walk_mps": 2.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+        }
+    ])
+
+    graph = mobility.build_routing_graph(
+        edges, mobility.MODE_WALK, speed_multipliers={"slow": 0.5}
+    )
+
+    edge = graph[0][1]
+    assert edge["cost"] == pytest.approx(100.0)
+    assert edge["dry_speed_mps"] == pytest.approx(2.0)
+    assert edge["speed_multiplier"] == pytest.approx(0.5)
+    assert edge["speed_mps"] == pytest.approx(1.0)
+
+
+def test_zero_flood_multiplier_removes_edge() -> None:
+    edges = _routing_edges(
+        [
+            {
+                "edge_id": "closed",
+                "u": 0,
+                "v": 1,
+                "highway": "residential",
+                "length_m": 80.0,
+                "speed_walk_mps": 2.0,
+                "speed_vehicle_mps": 10.0,
+                "geometry": LineString([(0.0, 0.0), (80.0, 0.0)]),
+            },
+            {
+                "edge_id": "open-parallel",
+                "u": 0,
+                "v": 1,
+                "highway": "residential",
+                "length_m": 100.0,
+                "speed_walk_mps": 1.0,
+                "speed_vehicle_mps": 10.0,
+                "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+            },
+        ]
+    )
+
+    graph = mobility.build_routing_graph(
+        edges,
+        mobility.MODE_WALK,
+        speed_multipliers={"closed": 0.0, "open-parallel": 1.0},
+    )
+
+    assert graph.number_of_edges() == 1
+    assert graph[0][1]["edge_id"] == "open-parallel"
+
+
+@pytest.mark.parametrize("multiplier", [-0.1, 1.1, np.nan])
+def test_flood_multiplier_rejects_values_outside_closed_open_domain(
+    multiplier: float,
+) -> None:
+    edges = _routing_edges([
+        {
+            "edge_id": "invalid",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 100.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+        }
+    ])
+
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        mobility.build_routing_graph(
+            edges, mobility.MODE_WALK, speed_multipliers={"invalid": multiplier}
+        )
+
+
+def test_flood_multiplier_must_cover_every_routable_edge() -> None:
+    edges = _routing_edges([
+        {
+            "edge_id": "missing",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 100.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+        }
+    ])
+
+    with pytest.raises(ValueError, match="missing speed multiplier"):
+        mobility.build_routing_graph(
+            edges, mobility.MODE_WALK, speed_multipliers={}
+        )
+
+
+def test_route_selection_uses_flood_adjusted_cost() -> None:
+    edges = _routing_edges([
+        {
+            "edge_id": "direct",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 100.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+        },
+        {
+            "edge_id": "detour-a",
+            "u": 0,
+            "v": 2,
+            "highway": "residential",
+            "length_m": 60.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (50.0, 50.0)]),
+        },
+        {
+            "edge_id": "detour-b",
+            "u": 2,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 60.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(50.0, 50.0), (100.0, 0.0)]),
+        },
+    ])
+    multipliers = {"direct": 0.2, "detour-a": 1.0, "detour-b": 1.0}
+    index = mobility.NetworkIndex(
+        mobility.build_routing_graph(
+            edges, mobility.MODE_WALK, speed_multipliers=multipliers
+        ),
+        "EPSG:32647",
+    )
+
+    path, cost = index.route(0, 1)
+
+    assert path == [0, 2, 1]
+    assert cost == pytest.approx(120.0)
+
+
+def test_parallel_edge_selection_keeps_adjusted_winner_attributes() -> None:
+    edges = _routing_edges([
+        {
+            "edge_id": "dry-fast",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 100.0,
+            "speed_walk_mps": 2.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (100.0, 0.0)]),
+        },
+        {
+            "edge_id": "wet-fast",
+            "u": 0,
+            "v": 1,
+            "highway": "residential",
+            "length_m": 90.0,
+            "speed_walk_mps": 1.0,
+            "speed_vehicle_mps": 10.0,
+            "geometry": LineString([(0.0, 0.0), (90.0, 0.0)]),
+        },
+    ])
+    graph = mobility.build_routing_graph(
+        edges,
+        mobility.MODE_WALK,
+        speed_multipliers={"dry-fast": 0.2, "wet-fast": 1.0},
+    )
+
+    edge = graph[0][1]
+    assert edge["edge_id"] == "wet-fast"
+    assert edge["cost"] == pytest.approx(90.0)
+    assert edge["length_m"] == pytest.approx(90.0)
+    assert edge["dry_speed_mps"] == pytest.approx(1.0)
+    assert edge["speed_multiplier"] == pytest.approx(1.0)
+    assert edge["speed_mps"] == pytest.approx(1.0)
 
 
 def test_routing_graph_nodes_carry_coordinates() -> None:
@@ -461,13 +681,53 @@ def _destinations() -> gpd.GeoDataFrame:
     )
 
 
+@pytest.mark.parametrize(
+    ("states", "expected"),
+    [
+        (pd.DataFrame({"state": ["arrived"] * 3 + ["route_failed"],
+                       "event_time_s": [2100, 900, 1500, -1],
+                       "weight": [0.49, 0.02, 0.49, -5]}),
+         {"p5": 20.0, "median": 20.0, "p95": 30.0}),
+        (pd.DataFrame({"state": ["arrived"] * 4,
+                       "event_time_s": [1800, 900, 1500, 1500],
+                       "weight": [0.4, 0.1, 0.2, 0.3]}),
+         {"p5": 10.0, "median": 20.0, "p95": 25.0}),
+        (pd.DataFrame({"state": ["arrived"] * 3,
+                       "event_time_s": [900, 1500, 2100], "weight": [0.3, 0.1, 0.2]}),
+         {"p5": 10.0, "median": 10.0, "p95": 30.0}),
+        (pd.DataFrame({"state": ["route_failed"], "event_time_s": [np.nan],
+                       "weight": [0.0]}),
+         {"p5": None, "median": None, "p95": None}),
+    ],
+)
+def test_weighted_clearance_inverse_ecdf_ties_and_no_arrivals(states, expected) -> None:
+    assert evacuation.weighted_clearance_minutes(states, warning_time_s=300) == expected
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "message"),
+    [
+        *[("weight", value, "arrived weight") for value in (0, -1, np.nan, np.inf, "bad")],
+        *[("event_time_s", value, "clearance") for value in (299, np.nan, np.inf, "bad")],
+    ],
+)
+def test_weighted_clearance_rejects_invalid_arrived_values(column, value, message) -> None:
+    data = {"state": ["arrived"], "event_time_s": [600.0], "weight": [1.0]}
+    data[column] = [value]
+    with pytest.raises(ValueError, match=message):
+        evacuation.weighted_clearance_minutes(pd.DataFrame(data), warning_time_s=300.0)
+
+
 def test_every_cohort_member_reaches_exactly_one_terminal_state() -> None:
     cohort = _cohort(20)
-    scenario = evacuation.EvacuationScenario(scenario_id="t", warning_time_s=0)
+    scenario = evacuation.EvacuationScenario(
+        scenario_id="t", warning_time_s=600, warning_reach=1.0, compliance=1.0,
+        preparation_delay_mean_s=0.0, preparation_delay_sd_s=0.0,
+    )
     states, outcomes = evacuation.simulate_evacuation(
         cohort,
         destinations=_destinations(),
-        route_lookup=lambda *args: (600.0, 500.0, ["e1", "e2"]),
+        route_lookup=lambda *args: (60.375, 500.0, ["e1", "e2"]),
         scenario=scenario,
         seed=1,
     )
@@ -475,6 +735,10 @@ def test_every_cohort_member_reaches_exactly_one_terminal_state() -> None:
     assert conservation["passed"], conservation
     assert set(states["state"]) <= set(evacuation.TERMINAL_STATES)
     assert outcomes["cohort_weighted"] == pytest.approx(200.0)
+    expected = evacuation.weighted_clearance_minutes(states, warning_time_s=600.0)
+    assert outcomes["clearance_time_minutes"] == expected
+    reconstructed = (float(states.loc[states["state"] == "arrived", "event_time_s"].iloc[0]) - 600) / 60
+    assert abs(reconstructed - expected["median"]) < 0.01
 
 
 def test_capacity_creates_overflow_not_silent_loss() -> None:
@@ -491,6 +755,27 @@ def test_capacity_creates_overflow_not_silent_loss() -> None:
     assert outcomes["unserved_weighted"] > 0
     assert "shelter_full" in states["state"].tolist()
     assert outcomes["destinations"][0]["remaining"] == 0
+
+
+def test_integerized_capacity_partitions_fractional_source_weight() -> None:
+    cohort = _cohort(1)
+    cohort.loc[0, "weight"] = 2.5
+    destinations = _destinations()
+    destinations.loc[0, "capacity"] = 1
+    scenario = evacuation.EvacuationScenario(
+        scenario_id="t", warning_time_s=0, warning_reach=1.0, compliance=1.0,
+        preparation_delay_mean_s=0.0, preparation_delay_sd_s=0.0,
+    )
+    states, _ = evacuation.simulate_evacuation(
+        cohort, destinations=destinations,
+        route_lookup=lambda *args: (60.0, 100.0, []), scenario=scenario, seed=1,
+    )
+    by_state = states.set_index("state")
+    assert by_state.loc["arrived", "weight"] == pytest.approx(1.25)
+    assert by_state.loc["shelter_full", "weight"] == pytest.approx(1.25)
+    assert states["weight"].sum() == pytest.approx(2.5)
+    assert states["source_weight"].tolist() == [2.5, 2.5]
+    assert states["outcome_id"].is_unique
 
 
 def test_zero_compliance_means_nobody_departs() -> None:
@@ -526,41 +811,212 @@ def test_unreachable_people_are_route_failed_not_dropped() -> None:
     assert set(states["reason"]) == {"no_path_under_closure"}
 
 
-def test_dry_baseline_reports_nobody_exposed_but_keeps_the_cohort() -> None:
-    persons = pd.DataFrame(
-        {
-            "person_id": ["p_0", "p_1"],
-            "weight": [10.0, 10.0],
-            "lon": [0.0, 0.0],
-            "lat": [0.0, 0.0],
-        }
-    )
-    cohort, reconciliation = evacuation.select_cohort(
-        persons, surface_depth_at=lambda lon, lat: 0.0, scenario_time_s=0, min_depth_m=0.0
-    )
-    assert reconciliation["exposed_weighted"] == 0.0
-    assert reconciliation["cohort_weighted"] == 20.0
-    assert len(cohort) == 2
+def _eligible_people(rows: int = 8) -> pd.DataFrame:
+    return pd.DataFrame({"person_id": [f"p_{i}" for i in range(rows)],
+                         "weight": [i + 0.5 for i in range(rows)],
+                         "lon": [100.5 + i * 0.0001 for i in range(rows)],
+                         "lat": [13.7] * rows})
 
 
-def test_flooded_run_exposes_only_people_past_the_threshold() -> None:
-    persons = pd.DataFrame(
-        {
-            "person_id": ["p_0", "p_1"],
-            "weight": [10.0, 10.0],
-            "lon": [0.0, 0.0],
-            "lat": [0.0, 0.0],
-        }
+def test_dry_and_wet_share_fixed_cohort_while_exposure_stays_separate() -> None:
+    persons = _eligible_people()
+    persons.loc[7, "lon"] = 100.6  # flooded and present, but outside the order area
+    common = {"aoi_id": "aoi-a", "seed": 29092026, "max_agents": 1200}
+    dry, dry_meta = evacuation.select_cohort(
+        persons, surface_depth_at=lambda *_: 9.0, scenario_time_s=0,
+        min_depth_m=0.0, **common)
+    wet, wet_meta = evacuation.select_cohort(
+        persons, surface_depth_at=lambda lon, _: 0.5 if lon > 100.55 else 0.0,
+        scenario_time_s=0, min_depth_m=0.15, expected_metadata=dry_meta, **common)
+    columns = ["person_id", "order_id", "weight", "sampling_probability"]
+    pd.testing.assert_frame_equal(dry[columns], wet[columns])
+    assert dry_meta["cohort_digest"] == wet_meta["cohort_digest"]
+    assert dry["exposed"].sum() == 0 and dry_meta["exposed_weighted"] == 0.0
+    assert wet["exposed"].sum() == 0 and wet_meta["exposed_weighted"] == persons.loc[7, "weight"]
+    assert wet_meta["present_weighted"] == dry_meta["present_weighted"] == persons["weight"].sum()
+    assert persons.loc[7, "person_id"] not in set(wet["person_id"])
+    assert len(wet) == len(dry) == len(persons) - 1
+
+
+def test_fixed_cohort_sampling_is_deterministic_capped_and_aoi_scoped() -> None:
+    persons = _eligible_people(20)
+    sampled = population.sample_representative_agents(persons, max_agents=5, seed=29092026)
+    kwargs = {"surface_depth_at": lambda *_: 0.0, "scenario_time_s": 0,
+              "min_depth_m": 0.0, "seed": 29092026, "max_agents": 5,
+              "sample_persons": sampled, "sampling_probability": 0.25}
+    first, meta = evacuation.select_cohort(sampled, aoi_id="aoi-a", **kwargs)
+    repeat, repeat_meta = evacuation.select_cohort(sampled, aoi_id="aoi-a", **kwargs)
+    other, other_meta = evacuation.select_cohort(sampled, aoi_id="aoi-b", **kwargs)
+    assert first["person_id"].tolist() == repeat["person_id"].tolist()
+    assert len(first) == 5 and meta["sampling_probability"] == pytest.approx(0.25)
+    assert meta["cohort_digest"] == repeat_meta["cohort_digest"]
+    assert meta["cohort_digest"] != other_meta["cohort_digest"]
+    assert set(first["order_id"]).isdisjoint(other["order_id"])
+    with pytest.raises(ValueError, match="exceeds the declared upstream sample cap"):
+        evacuation.select_cohort(
+            persons, aoi_id="aoi-a", **{**kwargs, "sample_persons": persons})
+
+
+def test_fixed_cohort_rejects_requested_digest_mismatch() -> None:
+    persons = _eligible_people()
+    sampled = population.sample_representative_agents(persons, max_agents=5, seed=29092026)
+    common = {"surface_depth_at": lambda *_: 0.0, "scenario_time_s": 0,
+              "min_depth_m": 0.0, "aoi_id": "aoi-a", "seed": 29092026,
+              "max_agents": 5, "sample_persons": sampled,
+              "sampling_probability": 0.625}
+    _, reference = evacuation.select_cohort(sampled, **common)
+    unchanged = reference.copy()
+    changed = sampled.copy()
+    changed.loc[0, "weight"] += 1
+    for candidate, overrides in ((changed, {"sample_persons": changed}),
+                                 (sampled, {"aoi_id": "aoi-b"}),
+                                 (sampled, {"seed": 7}),
+                                 (sampled, {"max_agents": 6})):
+        with pytest.raises(ValueError, match="cohort mismatch"):
+            evacuation.select_cohort(
+                candidate, **{**common, **overrides}, expected_metadata=reference)
+    assert reference == unchanged
+
+
+def test_denominator_contract_is_fractional_sample_only_and_exposure_uses_present() -> None:
+    full = pd.DataFrame({"person_id": ["p1", "p2", "p3"], "weight": [1.25, 2.5, 4.0]})
+    sample = full.iloc[:2].copy()
+    present = sample.assign(exposed=[False, True])
+    cohort = present.iloc[:1].copy()
+    states = pd.DataFrame({
+        "outcome_id": ["p1:arrived:0"], "source_person_id": ["p1"],
+        "source_weight": [1.25], "state": ["arrived"], "weight": [1.25],
+    })
+    contract = evacuation.build_denominator_contract(full, sample, present, cohort, states)
+    quantities = contract["quantities"]
+    assert quantities["full_population"] == {"rows": 3, "weight": 7.75}
+    assert quantities["sample"] == {"rows": 2, "weight": 3.75}
+    assert quantities["exposed_present"]["weight"] == 2.5  # outside C still exposed
+    assert contract["shares"]["exposed_of_present"] == pytest.approx(2.5 / 3.75)
+    assert contract["clearance_denominator"]["weight"] == 1.25
+    assert contract["scope"]["representative_of_full_district_or_bangkok"] is False
+
+
+def test_denominator_contract_labels_terminal_fragments_and_all_states() -> None:
+    terminal = list(evacuation.TERMINAL_STATES)
+    cohort = pd.DataFrame({"person_id": [f"p{i}" for i in range(5)],
+                           "weight": [0.1, 0.2, 0.3, 0.4, 0.5]})
+    states = pd.DataFrame({
+        "outcome_id": [f"p{i}:{state}:0" for i, state in enumerate(terminal)],
+        "source_person_id": cohort["person_id"], "source_weight": cohort["weight"],
+        "state": terminal, "weight": cohort["weight"],
+    })
+    present = cohort.assign(exposed=False)
+    contract = evacuation.build_denominator_contract(cohort, cohort, present, cohort, states)
+    terms = contract["quantities"]["terminal_states"]
+    assert all(terms[state]["outcome_records"] == 1 for state in terminal)
+    assert all(terms[state]["source_rows"] == 1 for state in terminal)
+    assert contract["conservation"]["residual_abs"] <= 1e-6
+    assert contract["unserved_derived"]["is_conservation_term"] is False
+
+
+@pytest.mark.parametrize("defect", ["gap", "overlap", "weight", "negative", "unknown"])
+def test_denominator_contract_rejects_invalid_partitions_and_weights(defect) -> None:
+    cohort = pd.DataFrame({"person_id": ["p1", "p2"], "weight": [0.4, 0.6]})
+    present = cohort.assign(exposed=False)
+    states = pd.DataFrame({
+        "outcome_id": ["o1", "o2"], "source_person_id": ["p1", "p2"],
+        "source_weight": [0.4, 0.6], "state": ["arrived", "route_failed"],
+        "weight": [0.4, 0.6],
+    })
+    if defect == "gap":
+        states = states.iloc[:1]
+    elif defect == "overlap":
+        states.loc[1, ["source_person_id", "source_weight"]] = ["p1", 0.4]
+    elif defect == "weight":
+        states.loc[1, "weight"] = 0.5
+    elif defect == "negative":
+        present.loc[0, "weight"] = -0.4
+    else:
+        states.loc[1, "state"] = "unknown"
+    with pytest.raises(ValueError):
+        evacuation.build_denominator_contract(cohort, cohort, present, cohort, states)
+
+
+def test_denominator_contract_no_arrivals_has_null_clearance_share() -> None:
+    cohort = pd.DataFrame({"person_id": ["p1"], "weight": [0.75]})
+    present = cohort.assign(exposed=False)
+    states = pd.DataFrame({"outcome_id": ["o1"], "source_person_id": ["p1"],
+                           "source_weight": [0.75], "state": ["did_not_depart"],
+                           "weight": [0.75]})
+    contract = evacuation.build_denominator_contract(cohort, cohort, present, cohort, states)
+    assert contract["clearance_denominator"] == {
+        "outcome_records": 0, "source_rows": 0, "weight": 0.0, "population": "arrivals_only"}
+    assert contract["shares"]["terminal_of_cohort"]["arrived"] == 0.0
+
+
+def test_published_denominator_contract_rejects_contradictory_readback() -> None:
+    full = pd.DataFrame({
+        "person_id": [f"p{i}" for i in range(6)],
+        "weight": [2.5, 1.25, 3.75, 4.5, 8.0, 10.0],
+    })
+    sample = full.iloc[:5].copy()
+    present = sample.iloc[:4].copy().assign(exposed=[False, False, False, True])
+    cohort = present.iloc[:3].copy()
+    states = pd.DataFrame({
+        "outcome_id": ["o1", "o2", "o3"],
+        "source_person_id": ["p0", "p1", "p2"],
+        "source_weight": [2.5, 1.25, 3.75],
+        "state": ["arrived", "arrived", "route_failed"],
+        "weight": [2.5, 1.25, 3.75],
+    })
+    valid = evacuation.build_denominator_contract(full, sample, present, cohort, states)
+    candidates = []
+    candidate = copy.deepcopy(valid)
+    candidate["quantities"].pop("full_population")
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["quantities"]["exposed_present"]["weight"] = 99.0
+    candidate["shares"]["exposed_of_present"] = 8.25
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["clearance_denominator"]["weight"] = 999.0
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["scope"].update(
+        representative_of_full_district_or_bangkok=True,
+        reweighting_to_full_population=True,
     )
-    cohort, reconciliation = evacuation.select_cohort(
-        persons,
-        surface_depth_at=lambda lon, lat: 0.5,
-        scenario_time_s=0,
-        min_depth_m=0.15,
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["conservation"].update(
+        passed=False, terminal_weight=999.0, absolute_tolerance=999.0,
     )
-    assert reconciliation["exposed_weighted"] == 20.0
-    assert reconciliation["cohort_weighted"] == 20.0
-    assert len(cohort) == 2
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["quantities"]["terminal_states"]["arrived"].update(
+        outcome_records=0, source_rows=99,
+    )
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["capacity"]["method"] = "continuous"
+    candidates.append(candidate)
+    candidate = copy.deepcopy(valid)
+    candidate["pairing"].pop("denominator_assignment")
+    candidates.append(candidate)
+    for candidate in candidates:
+        with pytest.raises(ValueError, match="invalid denominator contract"):
+            evacuation.validate_denominator_contract(candidate)
+
+
+def test_all_arrived_reordered_fractional_weights_do_not_create_negative_unserved() -> None:
+    cohort = pd.DataFrame({"person_id": ["p1", "p2", "p3"], "weight": [0.3, 0.2, 0.1]})
+    present = cohort.assign(exposed=False)
+    states = pd.DataFrame({
+        "outcome_id": ["o1", "o3", "o2"],
+        "source_person_id": ["p1", "p3", "p2"],
+        "source_weight": [0.3, 0.1, 0.2],
+        "state": ["arrived"] * 3,
+        "weight": [0.3, 0.1, 0.2],
+    })
+    contract = evacuation.build_denominator_contract(cohort, cohort, present, cohort, states)
+    assert contract["unserved_derived"]["weight"] == 0.0
+    assert contract["shares"]["terminal_of_cohort"]["arrived"] == 1.0
 
 
 # --------------------------------------------------------------------------

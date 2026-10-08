@@ -65,3 +65,13 @@ def test_cache_validation_uses_recorded_coverage_path(tmp_path, monkeypatch):
     path.write_text("changed")
     with pytest.raises(ValueError):
         city_osm.validate_cached_ingest(record, aoi, tmp_path)
+
+
+def test_coverage_on_another_drive_remains_usable(tmp_path, monkeypatch):
+    path = tmp_path / "coverage.poly"
+    path.write_text("name\n1\n100 13\n101 13\n101 14\n100 14\nEND\nEND\n")
+    aoi = gpd.GeoDataFrame(geometry=[box(100.1, 13.1, 100.2, 13.2)], crs="EPSG:4326")
+    def another_drive(*args):
+        raise ValueError("path is on mount D:, start on mount C:")
+    monkeypatch.setattr(city_osm.os.path, "relpath", another_drive)
+    assert Path(city_osm.source_coverage(path, aoi)["path"]) == path.resolve()
