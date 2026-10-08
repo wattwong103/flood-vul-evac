@@ -267,6 +267,9 @@ def simulate_evacuation(
         return pd.DataFrame(
             columns=[
                 "person_id",
+                "outcome_id",
+                "source_person_id",
+                "source_weight",
                 "state",
                 "reason",
                 "event_time_s",
@@ -398,14 +401,15 @@ def simulate_evacuation(
             continue
 
         if admitted < people_represented:
-            overflow = people_represented - admitted
+            admitted_weight = weight * admitted / people_represented
+            overflow_weight = weight - admitted_weight
             records.append(
                 {
                     "person_id": person.person_id,
                     "state": "shelter_full",
                     "reason": "partial_admission_capacity",
                     "event_time_s": int(arrival),
-                    "weight": float(overflow),
+                    "weight": overflow_weight,
                     "dest_id": str(destination["dest_id"]),
                     "clearance_s": None,
                     "distance_m": round(distance_m, 1),
@@ -417,7 +421,7 @@ def simulate_evacuation(
                     "state": "arrived",
                     "reason": "admitted",
                     "event_time_s": float(arrival),
-                    "weight": float(admitted),
+                    "weight": admitted_weight,
                     "dest_id": str(destination["dest_id"]),
                     "clearance_s": float(arrival - scenario.warning_time_s),
                     "distance_m": round(distance_m, 1),
@@ -443,6 +447,13 @@ def simulate_evacuation(
     frame = pd.DataFrame.from_records(records)
     if frame.empty:
         return frame, _empty_outcome_summary()
+    source_weights = cohort.set_index("person_id")["weight"]
+    frame["source_person_id"] = frame["person_id"]
+    frame["source_weight"] = frame["source_person_id"].map(source_weights).astype(float)
+    fragment = frame.groupby("source_person_id", sort=False).cumcount().astype(str)
+    frame["outcome_id"] = (
+        frame["source_person_id"].astype(str) + ":" + frame["state"].astype(str) + ":" + fragment
+    )
 
     summary = {
         "cohort_weighted": round(float(frame["weight"].sum()), 2),

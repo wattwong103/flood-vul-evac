@@ -730,6 +730,27 @@ def test_capacity_creates_overflow_not_silent_loss() -> None:
     assert outcomes["destinations"][0]["remaining"] == 0
 
 
+def test_integerized_capacity_partitions_fractional_source_weight() -> None:
+    cohort = _cohort(1)
+    cohort.loc[0, "weight"] = 2.5
+    destinations = _destinations()
+    destinations.loc[0, "capacity"] = 1
+    scenario = evacuation.EvacuationScenario(
+        scenario_id="t", warning_time_s=0, warning_reach=1.0, compliance=1.0,
+        preparation_delay_mean_s=0.0, preparation_delay_sd_s=0.0,
+    )
+    states, _ = evacuation.simulate_evacuation(
+        cohort, destinations=destinations,
+        route_lookup=lambda *args: (60.0, 100.0, []), scenario=scenario, seed=1,
+    )
+    by_state = states.set_index("state")
+    assert by_state.loc["arrived", "weight"] == pytest.approx(1.25)
+    assert by_state.loc["shelter_full", "weight"] == pytest.approx(1.25)
+    assert states["weight"].sum() == pytest.approx(2.5)
+    assert states["source_weight"].tolist() == [2.5, 2.5]
+    assert states["outcome_id"].is_unique
+
+
 def test_zero_compliance_means_nobody_departs() -> None:
     cohort = _cohort(10)
     scenario = evacuation.EvacuationScenario(
