@@ -851,6 +851,93 @@ def test_fixed_cohort_rejects_requested_digest_mismatch() -> None:
     assert reference == unchanged
 
 
+def test_denominator_contract_is_fractional_sample_only_and_exposure_uses_present() -> None:
+    full = pd.DataFrame({"person_id": ["p1", "p2", "p3"], "weight": [1.25, 2.5, 4.0]})
+    sample = full.iloc[:2].copy()
+    present = sample.assign(exposed=[False, True])
+    cohort = present.iloc[:1].copy()
+    states = pd.DataFrame({
+        "outcome_id": ["p1:arrived:0"], "source_person_id": ["p1"],
+        "source_weight": [1.25], "state": ["arrived"], "weight": [1.25],
+    })
+    contract = evacuation.build_denominator_contract(full, sample, present, cohort, states)
+    quantities = contract["quantities"]
+    assert quantities["full_population"] == {"rows": 3, "weight": 7.75}
+    assert quantities["sample"] == {"rows": 2, "weight": 3.75}
+    assert quantities["exposed_present"]["weight"] == 2.5  # outside C still exposed
+    assert contract["shares"]["exposed_of_present"] == pytest.approx(2.5 / 3.75)
+    assert contract["clearance_denominator"]["weight"] == 1.25
+    assert contract["scope"]["representative_of_full_district_or_bangkok"] is False
+
+
+def test_denominator_contract_labels_terminal_fragments_and_all_states() -> None:
+    terminal = list(evacuation.TERMINAL_STATES)
+    cohort = pd.DataFrame({"person_id": [f"p{i}" for i in range(5)],
+                           "weight": [0.1, 0.2, 0.3, 0.4, 0.5]})
+    states = pd.DataFrame({
+        "outcome_id": [f"p{i}:{state}:0" for i, state in enumerate(terminal)],
+        "source_person_id": cohort["person_id"], "source_weight": cohort["weight"],
+        "state": terminal, "weight": cohort["weight"],
+    })
+    present = cohort.assign(exposed=False)
+    contract = evacuation.build_denominator_contract(cohort, cohort, present, cohort, states)
+    terms = contract["quantities"]["terminal_states"]
+    assert all(terms[state]["outcome_records"] == 1 for state in terminal)
+    assert all(terms[state]["source_rows"] == 1 for state in terminal)
+    assert contract["conservation"]["residual_abs"] <= 1e-6
+    assert contract["unserved_derived"]["is_conservation_term"] is False
+
+
+@pytest.mark.parametrize("defect", ["gap", "overlap", "weight", "negative", "unknown"])
+def test_denominator_contract_rejects_invalid_partitions_and_weights(defect) -> None:
+    cohort = pd.DataFrame({"person_id": ["p1", "p2"], "weight": [0.4, 0.6]})
+    present = cohort.assign(exposed=False)
+    states = pd.DataFrame({
+        "outcome_id": ["o1", "o2"], "source_person_id": ["p1", "p2"],
+        "source_weight": [0.4, 0.6], "state": ["arrived", "route_failed"],
+        "weight": [0.4, 0.6],
+    })
+    if defect == "gap":
+        states = states.iloc[:1]
+    elif defect == "overlap":
+        states.loc[1, ["source_person_id", "source_weight"]] = ["p1", 0.4]
+    elif defect == "weight":
+        states.loc[1, "weight"] = 0.5
+    elif defect == "negative":
+        present.loc[0, "weight"] = -0.4
+    else:
+        states.loc[1, "state"] = "unknown"
+    with pytest.raises(ValueError):
+        evacuation.build_denominator_contract(cohort, cohort, present, cohort, states)
+
+
+def test_denominator_contract_no_arrivals_has_null_clearance_share() -> None:
+    cohort = pd.DataFrame({"person_id": ["p1"], "weight": [0.75]})
+    present = cohort.assign(exposed=False)
+    states = pd.DataFrame({"outcome_id": ["o1"], "source_person_id": ["p1"],
+                           "source_weight": [0.75], "state": ["did_not_depart"],
+                           "weight": [0.75]})
+    contract = evacuation.build_denominator_contract(cohort, cohort, present, cohort, states)
+    assert contract["clearance_denominator"] == {
+        "outcome_records": 0, "source_rows": 0, "weight": 0.0, "population": "arrivals_only"}
+    assert contract["shares"]["terminal_of_cohort"]["arrived"] == 0.0
+
+
+def test_all_arrived_reordered_fractional_weights_do_not_create_negative_unserved() -> None:
+    cohort = pd.DataFrame({"person_id": ["p1", "p2", "p3"], "weight": [0.3, 0.2, 0.1]})
+    present = cohort.assign(exposed=False)
+    states = pd.DataFrame({
+        "outcome_id": ["o1", "o3", "o2"],
+        "source_person_id": ["p1", "p3", "p2"],
+        "source_weight": [0.3, 0.1, 0.2],
+        "state": ["arrived"] * 3,
+        "weight": [0.3, 0.1, 0.2],
+    })
+    contract = evacuation.build_denominator_contract(cohort, cohort, present, cohort, states)
+    assert contract["unserved_derived"]["weight"] == 0.0
+    assert contract["shares"]["terminal_of_cohort"]["arrived"] == 1.0
+
+
 # --------------------------------------------------------------------------
 # manifest
 # --------------------------------------------------------------------------
