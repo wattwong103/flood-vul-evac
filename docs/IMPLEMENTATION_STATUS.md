@@ -1,13 +1,44 @@
 # BKK/FLOW project state
 
-Updated 4 October 2026. **DONE_WITH_CONCERNS; demonstration only.**
+Updated 9 October 2026. **DONE_WITH_CONCERNS; demonstration only.**
 This page is the shared implementation/evidence handoff. Internal validation
 does not establish empirical validity or operational readiness.
 
-## Merged implementation and verified run
+## Current source and release status
+
+Current `main` is merge commit `d58d08b0430cc47bf10ddb3279ee5b48472ca790`
+with source tree `07bcb0a988c11edc9ef7f0153f17ec0c7cfe8f11`.
+Three human-merged PRs establish the present four-area implementation boundary:
+
+- [PR #49](https://github.com/wattwong103/flood-vul-evac/pull/49) landed the
+  reviewed 43-commit four-area, denominator, replay-audit and report stack.
+- [PR #50](https://github.com/wattwong103/flood-vul-evac/pull/50) preserved
+  full-precision saved network WKT under the unchanged `1e-6 m` replay tolerance.
+- [PR #51](https://github.com/wattwong103/flood-vul-evac/pull/51) made the
+  independent replay sum original terminal outcome records rather than rounded
+  state subtotals, while retaining exact contract equality and the unchanged
+  `1e-6` conservation tolerance.
+
+This source is implemented and reviewed; it is not an accepted comparative
+release. The [four-area contract](MULTI_AREA_PLAN.md) remains authoritative.
+The first release attempt stopped on saved-WKT precision. Its two Khlong San
+bundles are immutable negative evidence. The second attempt stopped on the
+Din Daeng denominator replay after completing five of eight planned bundles.
+Those five bundles and their eight-ID plan are also immutable negative evidence;
+they cannot be pooled with a later release even though the preserved Din Daeng
+bundle passes read-only replay under the corrected #51 source.
+
+No complete, common-boundary eight-run set has been executed or accepted.
+Before another launch, merge the named-pilot identity/traversal regression matrix
+and the pipeline-to-saved-artifact-to-both-API fractional-seconds round-trip
+regression. Then freeze one merged source/configuration/environment boundary,
+issue eight new run IDs and audit all eight runs plus all four pairs. Until that
+happens, no four-area numerical result is approved for the paper.
+
+## Historical city-scale implementation and verified run
 
 [PRs #1–#14](https://github.com/wattwong103/flood-vul-evac/pulls?q=is%3Apr+is%3Amerged)
-are human-merged. Main at `9278893` has source tree
+were human-merged by 4 October. Historical main at `9278893` has source tree
 `07708a7f72ae62832bcd00de6b9771df3da1bb6a`, matching tested commit
 `a5dfc51c59df65a27e136cbce594d73e09179181`.
 
@@ -38,11 +69,11 @@ The earlier 114–138 km² JRC table, 2012 anomaly, “2011 flood absent” clai
 939,006-edge city inventory and roughly 71% reachability figures are withdrawn.
 Older immutable runs remain historical evidence, not the current baseline.
 
-## Current concern-fix branch
+## Historical BKK-009 concern-fix sequence
 
-The [accepted task plan](CONCERN_RESOLUTION_PLAN.md) defines this follow-up.
-These changes are proposed through ordered PRs; their presence in this document
-does not mean the human has merged them or that an older run used them.
+The [BKK-009 plan](CONCERN_RESOLUTION_PLAN.md) records this completed historical
+sequence. These changes were subsequently merged. They do not alter or become
+part of the older city runs attributed above.
 
 | Task | Implemented change | Evidence / remaining limit |
 |---|---|---|
@@ -97,13 +128,21 @@ claim; post-hoc multiplication alone cannot repair mode/destination behaviour.
 Owners below identify the next role; no external organisation has accepted an
 assignment or been contacted on the project's behalf.
 
+The earlier BKK-015 flooded-cost, fixed-cohort, weighted-quantile and denominator
+defects are closed in merged source through #49. The two release-discovered
+serialization and replay-summation defects are closed in merged source through
+#50 and #51. These source closures do not retroactively validate either failed
+release attempt.
+
 | Severity / task | What remains | Next owner and acceptance gate |
 |---|---|---|
+| MEDIUM BKK-021F named-pilot identity | Coverage does not yet exercise the full rejection matrix for configured AOI identity, direct traversal IDs and missing scoped inputs without fallback | Implementer: add a focused tests-first PR; reviewer confirms every mismatched or missing named-pilot identity fails closed. |
+| MEDIUM API fractional-seconds round-trip | Existing API fixtures do not prove that an actual pipeline publication survives saved Parquet/manifest readback through both API routes with fractional event seconds | Implementer: publish a test run, read the saved artifacts through both routes and assert warning-relative weighted quantiles and the canonical non-null contract. |
+| MEDIUM BKK-024 release evidence | No complete eight-run set exists on the current merged boundary | North + implementer: after the two regression gates merge, create eight new IDs, execute all pairs under one frozen code/configuration/environment bundle and pass all run and pair audits. |
 | MEDIUM BKK-009 boundaries | 76.1429 km² of the BMA lies outside the 50 OSM district union; cause unverified | Data steward + North: acquire authoritative geometry with reuse terms and reconcile the difference. The [BMA 50-district catalog](https://data.go.th/en/dataset/50) currently says “License not specified,” so it is a lead, not an admitted input. |
 | MEDIUM BKK-009 population | Controls audited, not ingested or concept-matched | North selects resident/registered/de-facto target; implementer adds district crosswalk, date matching and reconciliation tests. |
 | HIGH scientific gate: terrain/event | Actual bare-earth tiles, datum, forcing and held-out validation absent | Data steward: pursue [RTSD LiDAR catalog](https://data.go.th/en/dataset/lidar-1) and [GISTDA event extent](https://opendata.gistda.or.th/th/dataset/disasters-03). A coverage index or extent product is not depth. |
 | HIGH scientific gate: destinations | No verified capacity, operator, accessibility, inspection date or flood-safe access | North/data steward: obtain district/operator records through [BMA NOW](https://now.bangkok.go.th) and institutional channels; record reuse terms and retrieval evidence. |
-| MEDIUM BKK-015 pilot replay/cost | Legacy pilot replay differs by 53.67 weighted arrivals; open flooded edges use dry cost; percentiles cap weighted repetitions | Implementer + scientific owner: regression-tested impedance and exact weighted statistics, then a fresh source-pinned run and replay. Legacy pilot `a0d11a4d-6c75-4723-90cf-b634e2f2a230` is not submission-ready. |
 | MEDIUM BKK-016 calibration/uncertainty | Two-mode priors, weighted-agent draws and one-at-a-time sensitivity | Scientific owner: define OTP target population, modes/purposes/distributions, weighted-agent interpretation and interaction-aware uncertainty before calibration claims. |
 | MEDIUM BKK-017 driving | City routing is undirected | Implementer: preserve one-way/access restrictions and test direction before publishing vehicle results. Current reported screen is pedestrian. |
 | MEDIUM BKK-018 failed-run visibility | New source-tracked runs are intentionally hidden until published; manifest-bearing failures appear in API `skipped`, but the warning lacks the failure reason | Implementer: expose operator-facing failure state/reason without serving unfinished scientific results. Runs without a manifest still require local diagnostics. |
@@ -113,9 +152,11 @@ assignment or been contacted on the project's behalf.
 ## Handoff and use
 
 North owns review and merge. The paper session owns manuscript and figure edits;
-it has the immutable run, exact numbers, source tree and caveats. Implementation
-changes do not automatically replace paper results. Historical evidence and
-fresh verification are separately identified in every PR handoff.
+it has the historical immutable city run, its exact numbers, source tree and
+caveats. Implementation changes do not automatically replace paper results.
+No four-area number is handed to the paper until the new eight-run release gate
+passes. Historical evidence and fresh verification are separately identified in
+every PR handoff.
 
 Run `python -m pytest pipeline/tests api/tests -q`, then `pnpm test`, `pnpm build`
 and `pnpm lint` from `site/`. Record the actual output and run UUID when promoting
