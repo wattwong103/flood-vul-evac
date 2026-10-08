@@ -15,7 +15,6 @@ The run state machine is:
 from __future__ import annotations
 
 import time
-import traceback
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,9 +41,7 @@ from .util import (
     CURATED_DIR,
     REPO_ROOT,
     RUNS_DIR,
-    ensure_dir,
     read_json,
-    sha256_file,
     utc_now_iso,
     write_json,
 )
@@ -577,7 +574,6 @@ def _finish_run(
     stage_start = time.time()
     from pyproj import Transformer
 
-    to_wgs84 = Transformer.from_crs(analysis_crs, "OGC:CRS84", always_xy=True)
     to_analysis = Transformer.from_crs("OGC:CRS84", analysis_crs, always_xy=True)
     people_present = sample.copy()
     if not activities.empty:
@@ -609,7 +605,7 @@ def _finish_run(
     # water is removed. Using the flood exposure rule for both would make the
     # comparison meaningless, because the dry run would have no cohort at all.
     exposure_threshold = 0.15 if flood_enabled else 0.0
-    cohort, cohort_reconciliation = evacuation_module.select_cohort(
+    cohort, cohort_reconciliation, people_present = evacuation_module.select_cohort(
         people_present,
         surface_depth_at=depth_at,
         scenario_time_s=scenario.start_time_s,
@@ -620,6 +616,7 @@ def _finish_run(
         sample_persons=sample,
         sampling_probability=min(1.0, sample_cap / len(persons)) if len(persons) else 0.0,
         expected_metadata=cohort_reference,
+        return_present=True,
     )
     cohort_reconciliation["run_id"] = context.run_id
     cohort_reconciliation["reference_run_id"] = (
@@ -712,9 +709,18 @@ def _finish_run(
         cohort, destinations=destinations, route_lookup=route_lookup,
         scenario=evacuation_scenario, seed=seed,
     )
+    denominators = evacuation_module.validate_denominator_contract(
+        evacuation_module.build_denominator_contract(
+            persons, sample, people_present, cohort, states,
+            cohort_identity=cohort_reconciliation,
+        )
+    )
+    denominators_path = context.run_dir / "denominators.json"
+    write_json(denominators_path, denominators)
+    register_output(context, "denominators", denominators_path)
     states_path = _write_parquet(context, "evacuation_states.parquet", states)
     register_output(context, "evacuation_states", states_path, rows=len(states))
-    conservation = evacuation_module.check_conservation(states, cohort_reconciliation["cohort_weighted"])
+    conservation = denominators["conservation"]
     context.record("evacuation", time.time() - stage_start, rows=len(states),
                    note=json_note(outcomes.get("clearance_time_minutes", {})))
 
@@ -735,8 +741,8 @@ def _finish_run(
                 "evacuation.conservation",
                 "every cohort member lands in exactly one terminal state",
                 conservation["passed"],
-                conservation.get("tolerance", "residual <= tolerance"),
-                conservation.get("residual"),
+                conservation["absolute_tolerance"],
+                conservation["residual_abs"],
             )
         },
     )
@@ -839,8 +845,8 @@ def _finish_run(
     stats = _build_stats(
         context=context,
         manifest=manifest,
-        cohort_reconciliation=cohort_reconciliation,
         outcomes=outcomes,
+        denominators=denominators,
         edge_states=edge_states,
         scenario=scenario,
         surface=surface,
@@ -882,8 +888,8 @@ def _build_stats(
     *,
     context: RunContext,
     manifest: dict[str, Any],
-    cohort_reconciliation: dict[str, Any],
     outcomes: dict[str, Any],
+    denominators: dict[str, Any],
     edge_states: pd.DataFrame,
     scenario: flood_module.FloodScenario,
     surface: gpd.GeoDataFrame,
@@ -891,7 +897,6 @@ def _build_stats(
     report: validate_module.ValidationReport,
 ) -> dict[str, Any]:
     """Assemble the API-facing statistics payload from the contract."""
-    persons = pd.read_parquet(context.run_dir / "persons.parquet")
     peak_states = edge_states[
         (edge_states["time_s"] == scenario.peak_time_s) & (edge_states["mode"] == mobility_module.MODE_WALK)
     ]
@@ -913,14 +918,10 @@ def _build_stats(
             "analysis_crs": manifest["geography"]["analysis_crs"],
         },
         "population": {
-            "residents_weighted": round(float(persons["weight"].sum()), 2),
-            "people_present": cohort_reconciliation["present_weighted"],
-            "people_exposed": cohort_reconciliation["exposed_weighted"],
-            "exposed_share_of_present": round(
-                cohort_reconciliation["exposed_weighted"]
-                / max(cohort_reconciliation["present_weighted"], 1e-9),
-                6,
-            ),
+            "residents_weighted": denominators["quantities"]["full_population"]["weight"],
+            "people_present": denominators["quantities"]["present"]["weight"],
+            "people_exposed": denominators["quantities"]["exposed_present"]["weight"],
+            "exposed_share_of_present": denominators["shares"]["exposed_of_present"],
             "population_version": manifest["population_model"]["population_version"],
             "time_profile": context.scenario_config.get("analysis_time_of_day", "evening"),
         },
@@ -941,14 +942,18 @@ def _build_stats(
             },
         },
         "evacuation": {
-            "cohort_weighted": outcomes["cohort_weighted"],
-            "arrived_weighted": outcomes["arrived_weighted"],
-            "unserved_weighted": outcomes["unserved_weighted"],
+            "cohort_weighted": denominators["quantities"]["cohort"]["weight"],
+            "arrived_weighted": denominators["quantities"]["terminal_states"]["arrived"]["weight"],
+            "unserved_weighted": denominators["unserved_derived"]["weight"],
             "clearance_time_minutes": outcomes["clearance_time_minutes"],
-            "state_distribution": outcomes["state_distribution"],
+            "state_distribution": {
+                state: values["weight"]
+                for state, values in denominators["quantities"]["terminal_states"].items()
+            },
             "top_bottleneck_edges": outcomes["top_bottleneck_edges"],
             "destinations": outcomes["destinations"],
         },
+        "denominators": denominators,
         "stages": context.stages,
         "validation": {
             "passed": report.passed,

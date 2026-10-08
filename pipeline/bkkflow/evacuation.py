@@ -159,7 +159,11 @@ def select_cohort(
     sample_persons: pd.DataFrame | None = None,
     sampling_probability: float = 1.0,
     expected_metadata: dict[str, Any] | None = None,
-) -> tuple[pd.DataFrame, dict[str, Any]]:
+    return_present: bool = False,
+) -> (
+    tuple[pd.DataFrame, dict[str, Any]]
+    | tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]
+):
     """Filter one deterministic upstream sample, then attach scenario exposure."""
     if max_agents <= 0:
         raise ValueError("fixed cohort max_agents must be positive")
@@ -266,6 +270,8 @@ def select_cohort(
         "min_depth_m": min_depth_m,
         "cohort_rule": "upstream fixed sample; then present AND within order radius; exposure is outcome only",
     }
+    if return_present:
+        return cohort, reconciliation, persons
     return cohort, reconciliation
 
 
