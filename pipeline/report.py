@@ -174,6 +174,241 @@ def load_checked_pair(first_run_id: str, second_run_id: str) -> CheckedPair:
     )
 
 
+BANNED_PAIR_CLAIMS = (
+    "isolates the flood term",
+    "flood caused the change",
+    "representative of bangkok",
+    "operationally safe",
+    "predicts evacuation safety",
+)
+
+
+def _validate_evidence_language(text: str) -> None:
+    lowered = text.casefold()
+    for claim in BANNED_PAIR_CLAIMS:
+        if claim in lowered:
+            raise ValueError(f"banned evidence claim: {claim}")
+
+
+def _cell(value: Any) -> str:
+    if value is None:
+        return "NA"
+    if isinstance(value, float):
+        value = f"{value:.12g}"
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def write_pair_evidence(pair: CheckedPair, report_dir: Path) -> Path:
+    """Write a denominator-explicit, non-causal evidence record from a checked pair."""
+    if not isinstance(pair, CheckedPair) or pair.audit_status != "PASS":
+        raise ValueError("pair evidence requires a PASS CheckedPair")
+    dry, moderate = pair.dry, pair.moderate
+    runs = (("dry", dry), ("moderate", moderate))
+    manifest = dry.bundle.manifest
+    departure = manifest["evacuation_scenario"]["departure_model"]
+    cohort = dry.bundle.cohort_metadata
+    denominator = dry.bundle.denominators
+    code = manifest["code_identity"]
+    lines = [
+        f"# {pair.aoi_label} dry–moderate saved-pair evidence",
+        "",
+        f"AOI: **{pair.aoi_label}** (`{pair.aoi_id}`). Pair audit status: **PASS**.",
+        "This is a within-model fixed-declared-assumption contrast. It is not causal, "
+        "not predictive, not operational, and not safety guidance.",
+        "",
+        "## Run and audit identity",
+        "",
+        "| Active state | Run ID | Audit | manifest.json SHA-256 | stats.json SHA-256 |",
+        "|---|---|---:|---|---|",
+    ]
+    for state, run in runs:
+        hashes = run.audit["audited_hashes"]
+        lines.append(
+            f"| {state} | `{run.run_id}` | {run.audit['status']} | "
+            f"`{hashes['manifest.json']}` | `{hashes['stats.json']}` |"
+        )
+    lines += ["", "Audited artifact hashes:", ""]
+    for state, run in runs:
+        for name, digest in sorted(run.audit["audited_hashes"].items()):
+            lines.append(f"- `{state}:{_cell(name)}`: `{digest}`")
+
+    lines += [
+        "",
+        "## Common source, code, and configuration identity",
+        "",
+        f"- Code commit: `{code['git_commit']}`; tree: `{code['git_tree']}`; "
+        f"source digest: `{code['source_sha256']}`.",
+        f"- Population version: `{manifest['population_model']['population_version']}`; "
+        f"PFLOW contract: `{manifest['pflow_contract']['contract_version']}`.",
+        f"- Configured flood scenario: "
+        f"`{manifest['active_scenario']['configured_scenario_id']}`; model: "
+        f"`{manifest['flood_scenario']['model_name']}` "
+        f"v{manifest['flood_scenario']['model_version']}.",
+        f"- Cohort digest: `{cohort['cohort_digest']}`; sample digest: "
+        f"`{cohort['sample_digest']}`.",
+        f"- Denominator contract: `{denominator['contract_version']}`; capacity: "
+        f"`{denominator['capacity']['method']}` using "
+        f"`{denominator['capacity']['integerization_rule']}`.",
+        "",
+        "Source versions:",
+        "",
+        "| Source ID | Content SHA-256 | Retrieved at |",
+        "|---|---|---|",
+    ]
+    for source in manifest["source_versions"]:
+        lines.append(
+            f"| `{_cell(source['source_id'])}` | `{source['content_sha256']}` | "
+            f"{_cell(source.get('retrieved_at'))} |"
+        )
+
+    meanings = {
+        "F": ("full population", "input weighted resident-agent table"),
+        "S": ("deterministic sample", "F"),
+        "P": ("people present", "S"),
+        "E": ("exposed present", "P"),
+        "C": ("fixed evacuation cohort", "P"),
+        "A": ("arrived", "C; clearance uses A only"),
+    }
+
+    def quantities(run: CheckedRun) -> dict[str, tuple[int, int, Any]]:
+        values = run.bundle.denominators["quantities"]
+        result = {
+            key: (values[name]["rows"], values[name]["rows"], values[name]["weight"])
+            for key, name in (("F", "full_population"), ("S", "sample"),
+                              ("P", "present"), ("E", "exposed_present"),
+                              ("C", "cohort"))
+        }
+        arrived = values["terminal_states"]["arrived"]
+        result["A"] = (arrived["outcome_records"], arrived["source_rows"], arrived["weight"])
+        return result
+
+    dry_q, moderate_q = quantities(dry), quantities(moderate)
+    lines += [
+        "",
+        "## F/S/P/E/C/A quantities and denominators",
+        "",
+        "| Code | Quantity | Denominator | Dry records | Dry source rows | Dry weight | "
+        "Moderate records | Moderate source rows | Moderate weight |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for key, (meaning, basis) in meanings.items():
+        lines.append(
+            f"| `{key}` | {meaning} | {basis} | "
+            f"{_cell(dry_q[key][0])} | {_cell(dry_q[key][1])} | {_cell(dry_q[key][2])} | "
+            f"{_cell(moderate_q[key][0])} | {_cell(moderate_q[key][1])} | "
+            f"{_cell(moderate_q[key][2])} |"
+        )
+    lines += [
+        "",
+        f"- E/P exposure share — dry: "
+        f"{_cell(dry.bundle.denominators['shares']['exposed_of_present'])}; moderate: "
+        f"{_cell(moderate.bundle.denominators['shares']['exposed_of_present'])}.",
+        f"- Declared assignments: exposure = "
+        f"{denominator['pairing']['denominator_assignment']['exposure']}; terminal states = "
+        f"{denominator['pairing']['denominator_assignment']['terminal_states']}; clearance = "
+        f"{denominator['pairing']['denominator_assignment']['clearance']}.",
+        "",
+        "## Terminal outcomes over C",
+        "",
+        "| Terminal state | Dry records | Dry source rows | Dry weight | Dry share/C | "
+        "Moderate records | Moderate source rows | Moderate weight | Moderate share/C |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for state in replay_audit.TERMINAL_STATES:
+        dry_term = dry.bundle.denominators["quantities"]["terminal_states"][state]
+        moderate_term = moderate.bundle.denominators["quantities"]["terminal_states"][state]
+        lines.append(
+            f"| `{state}` | {dry_term['outcome_records']} | {dry_term['source_rows']} | "
+            f"{_cell(dry_term['weight'])} | "
+            f"{_cell(dry.bundle.denominators['shares']['terminal_of_cohort'][state])} | "
+            f"{moderate_term['outcome_records']} | {moderate_term['source_rows']} | "
+            f"{_cell(moderate_term['weight'])} | "
+            f"{_cell(moderate.bundle.denominators['shares']['terminal_of_cohort'][state])} |"
+        )
+
+    lines += [
+        "",
+        "## Arrived-only clearance over A",
+        "",
+        "| Quantile | Dry minutes | Moderate minutes |",
+        "|---|---:|---:|",
+    ]
+    for label, key in (("p5", "p5"), ("p50", "median"), ("p95", "p95")):
+        lines.append(
+            f"| {label} | {_cell(dry.bundle.stats['evacuation']['clearance_time_minutes'][key])} | "
+            f"{_cell(moderate.bundle.stats['evacuation']['clearance_time_minutes'][key])} |"
+        )
+    lines += ["", "## Conservation", "", "| State | cohort_weight | terminal_weight | residual_abs | tolerance | passed |",
+              "|---|---:|---:|---:|---:|---:|"]
+    for state, run in runs:
+        conservation = run.bundle.denominators["conservation"]
+        lines.append(
+            f"| {state} | {_cell(conservation['cohort_weight'])} | "
+            f"{_cell(conservation['terminal_weight'])} | {_cell(conservation['residual_abs'])} | "
+            f"{_cell(conservation['absolute_tolerance'])} | {conservation['passed']} |"
+        )
+
+    destination_rows = {
+        state: {item["dest_id"]: item for item in run.bundle.stats["evacuation"]["destinations"]}
+        for state, run in runs
+    }
+    lines += [
+        "",
+        "## Hypothetical destination capacity",
+        "",
+        "All destinations are `hypothetical_unverified`; capacity is a model assumption.",
+        "",
+        "| Destination ID | Capacity | Dry admitted integer units | Dry remaining | "
+        "Moderate admitted integer units | Moderate remaining |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for destination in sorted(destination_rows["dry"]):
+        dry_destination = destination_rows["dry"][destination]
+        moderate_destination = destination_rows["moderate"][destination]
+        capacity = dry_destination["capacity"]
+        lines.append(
+            f"| `{_cell(destination)}` | {capacity} | {capacity - dry_destination['remaining']} | "
+            f"{dry_destination['remaining']} | {capacity - moderate_destination['remaining']} | "
+            f"{moderate_destination['remaining']} |"
+        )
+
+    compliance = departure["compliance"]
+    lines += [
+        "",
+        "## Executed and unexecuted sensitivities",
+        "",
+        f"- Executed: one active dry baseline and one active moderate scenario at compliance "
+        f"{_cell(compliance)} with the same saved cohort and declared assumptions.",
+        "- Explicitly not executed: non-zero low-severity and high-severity flood "
+        "sensitivities, and compliance sensitivities 0.60 and 0.90.",
+        "- This is incomplete sensitivity evidence; no uncertainty envelope or local "
+        "calibration interval is available.",
+        "",
+        "## Interpretation limits",
+        "",
+        "- Population quantities are sample-only, with no reweighting to an external control "
+        "total; this is not a district or Bangkok total and is non-representative beyond the "
+        "deterministic sample.",
+        "- Flood depth is a non-hydraulic scenario surface without citywide terrain, drainage, "
+        "pumps, tide, subsidence, or conserved runoff physics.",
+        "- Mobility and evacuation behaviour are uncalibrated scenario priors.",
+        "- Destinations and capacities are hypothetical and unverified; admitted and remaining "
+        "values are model-accounting quantities.",
+        "- The contrast holds declared assumptions fixed but is not causal and does not estimate "
+        "an observed intervention effect.",
+        "- Results are not predictive, not operational, and not safety guidance.",
+        "- Sensitivity coverage is incomplete sensitivity evidence: low/high forcing and "
+        "compliance 0.60/0.90 were not run.",
+        "- Saved hashes document provenance and integrity, not external-source authenticity.",
+        "",
+    ]
+    text = "\n".join(lines)
+    _validate_evidence_language(text)
+    path = ensure_dir(Path(report_dir)) / "PAIR_EVIDENCE.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 def _load(run_id: str, name: str) -> pd.DataFrame:
     path = RUNS_DIR / run_id / name
     return pd.read_parquet(path) if path.is_file() else pd.DataFrame()

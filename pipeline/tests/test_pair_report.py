@@ -178,3 +178,48 @@ def test_load_checked_pair_rejects_cross_aoi_and_failed_audit(
     write_json(report.RUNS_DIR / dry_id / "stats.json", stats)
     with pytest.raises(ValueError, match="audit failed"):
         report.load_checked_pair(dry_id, moderate_id)
+
+
+def test_write_pair_evidence_is_complete_and_area_generic(
+    published_pair: tuple[str, str], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audited_run = report._audited_run
+    monkeypatch.setattr(
+        report, "_audited_run",
+        lambda run_id: _as_aoi(audited_run(run_id), "bang-rak-district", "Bang Rak"),
+    )
+    pair = report.load_checked_pair(*published_pair)
+
+    path = report.write_pair_evidence(pair, tmp_path)
+    text = path.read_text(encoding="utf-8")
+
+    assert path.name == "PAIR_EVIDENCE.md"
+    assert text.startswith("# Bang Rak dry–moderate saved-pair evidence")
+    assert "Khlong San" not in text
+    assert all(value in text for value in (*published_pair, "bang-rak-district", "PASS"))
+    assert all(f"`{code}`" in text for code in ("F", "S", "P", "E", "C", "A"))
+    assert all(f"`{state}`" in text for state in replay_audit.TERMINAL_STATES)
+    assert all(value in text for value in ("E/P", "p5", "p50", "p95", "residual_abs"))
+    assert all(value in text for value in ("integerized", "hypothetical_unverified", "remaining"))
+    assert all(value in text for value in ("0.78", "0.60", "0.90", "not executed"))
+    assert all(value in text for value in (
+        "sample-only", "no reweighting", "not a district or Bangkok total",
+        "non-representative", "non-hydraulic", "uncalibrated", "not causal", "not operational",
+        "not predictive", "not safety guidance", "incomplete sensitivity",
+    ))
+    manifest_hash = pair.dry.audit["audited_hashes"]["manifest.json"]
+    assert manifest_hash in text
+    assert pair.dry.bundle.manifest["code_identity"]["git_commit"] in text
+
+
+@pytest.mark.parametrize("claim", [
+    "isolates the flood term",
+    "flood caused the change",
+    "representative of Bangkok",
+    "operationally safe",
+    "predicts evacuation safety",
+])
+def test_pair_evidence_rejects_banned_claims(claim: str) -> None:
+    with pytest.raises(ValueError, match="banned evidence claim"):
+        report._validate_evidence_language(f"Result: {claim}.")
