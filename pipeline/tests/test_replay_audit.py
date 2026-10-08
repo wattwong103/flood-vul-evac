@@ -212,3 +212,35 @@ def test_unique_shortest_route_rejects_unexplained_path_tie() -> None:
 
     with pytest.raises(ValueError, match="path tie"):
         replay_audit.unique_shortest_route(graph, 0, 3)
+
+
+def test_integerized_capacity_partition_preserves_fractional_weight() -> None:
+    assert replay_audit.integerized_capacity_partition(2.4, 1) == (1.2, 1.2, 0)
+    assert replay_audit.integerized_capacity_partition(0.4, 1) == (0.4, 0.0, 0)
+    assert replay_audit.integerized_capacity_partition(2.4, 0) == (0.0, 2.4, 0)
+
+
+def test_replay_evacuation_matches_saved_terminal_evidence(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    audit = replay_audit.replay_evacuation(bundle)
+
+    assert set(audit.states["outcome_id"]) == set(bundle.tables["evacuation_states"]["outcome_id"])
+    assert audit.denominators == bundle.denominators
+    assert audit.clearance_time_minutes == bundle.stats["evacuation"]["clearance_time_minutes"]
+    assert audit.remaining_capacity == {
+        item["dest_id"]: item["remaining"] for item in bundle.stats["evacuation"]["destinations"]
+    }
+    report = replay_audit.final_audit_report(bundle)
+    assert report["status"] == "PASS" and report["audited_hashes"]
+    assert report["reconstructed"]["terminal_records"] == len(audit.states)
+
+
+def test_final_audit_report_never_passes_failed_replay(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    bundle.tables["evacuation_states"].loc[0, "reason"] = "forged"
+
+    report = replay_audit.final_audit_report(bundle)
+
+    assert report["status"] == "FAIL"
+    assert "PASS" not in str(report)
+    assert report["checks"][0]["status"] == "FAIL"

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -81,6 +81,14 @@ class PeakRoutingAudit:
     peak_open_edge_ids: tuple[str, ...]
     peak_closed_edge_ids: tuple[str, ...]
     top_bottleneck_edges: list[dict[str, str | float]]
+
+
+@dataclass(frozen=True)
+class EvacuationReplayAudit:
+    states: pd.DataFrame
+    remaining_capacity: dict[str, int]
+    denominators: dict[str, Any]
+    clearance_time_minutes: dict[str, float | None]
 
 
 def _sha256(path: Path) -> str:
@@ -723,3 +731,205 @@ def reconstruct_peak_routes(bundle: AuditBundle) -> PeakRoutingAudit:
     if top != _field(bundle.stats, "evacuation", "top_bottleneck_edges"):
         raise ValueError("saved route edge identity mismatch")
     return PeakRoutingAudit(routes, open_ids, closed_ids, top)
+
+
+def integerized_capacity_partition(
+    source_weight: float, remaining_capacity: int
+) -> tuple[float, float, int]:
+    """Apply N=max(round(weight),1) and proportionally split source weight."""
+    weight = float(source_weight)
+    if (not math.isfinite(weight) or weight <= 0 or type(remaining_capacity) is not int
+            or remaining_capacity < 0):
+        raise ValueError("invalid source weight or integerized capacity")
+    represented = max(int(round(weight)), 1)
+    admitted = min(represented, max(remaining_capacity, 0))
+    admitted_weight = weight * admitted / represented
+    return admitted_weight, weight - admitted_weight, remaining_capacity - admitted
+
+
+def _compare_terminal_records(actual: pd.DataFrame, saved: pd.DataFrame) -> None:
+    required = {
+        "person_id", "outcome_id", "source_person_id", "source_weight", "state", "reason",
+        "event_time_s", "weight", "dest_id", "clearance_s", "distance_m",
+    }
+    if not required <= set(saved) or set(saved["state"]) - set(TERMINAL_STATES):
+        raise ValueError("saved terminal schema mismatch")
+    if actual["outcome_id"].duplicated().any() or saved["outcome_id"].duplicated().any():
+        raise ValueError("saved terminal identity mismatch")
+    actual_by_id = actual.set_index(actual["outcome_id"].astype(str), drop=False)
+    saved_by_id = saved.set_index(saved["outcome_id"].astype(str), drop=False)
+    if set(actual_by_id.index) != set(saved_by_id.index):
+        raise ValueError("saved terminal identity mismatch")
+
+    def comparable(value: Any) -> Any:
+        return None if pd.isna(value) else value
+
+    categorical = ("person_id", "source_person_id", "state", "reason", "dest_id")
+    numeric = ("source_weight", "event_time_s", "weight", "clearance_s", "distance_m")
+    for outcome_id, expected in actual_by_id.iterrows():
+        observed = saved_by_id.loc[outcome_id]
+        if any(comparable(expected[key]) != comparable(observed[key]) for key in categorical):
+            raise ValueError("saved terminal category mismatch")
+        for key in numeric:
+            left, right = comparable(expected[key]), comparable(observed[key])
+            if (left is None) != (right is None) or (
+                left is not None and abs(float(left) - float(right)) > 1e-6
+            ):
+                raise ValueError("saved terminal numeric mismatch")
+
+
+def replay_evacuation(bundle: AuditBundle) -> EvacuationReplayAudit:
+    """Replay RNG, integerized capacity and terminal records independently."""
+    routing = reconstruct_peak_routes(bundle)
+    sample, present, cohort = _derive_populations(bundle)
+    departure = _field(bundle.manifest, "evacuation_scenario", "departure_model")
+    seed = _field(bundle.manifest, "evacuation_scenario", "seed")
+    warning = float(_field(departure, "warning_time_s"))
+    warning_reach = float(_field(departure, "warning_reach"))
+    compliance = float(_field(departure, "compliance"))
+    delay_mean = float(_field(departure, "preparation_delay_mean_s"))
+    delay_sd = float(_field(departure, "preparation_delay_sd_s"))
+    if warning < 0 or not 0 <= warning_reach <= 1 or not 0 <= compliance <= 1 or delay_sd < 0:
+        raise ValueError("invalid departure-model parameter")
+    rng = np.random.default_rng(seed)
+
+    refuges = bundle.tables["refuges"]
+    capacity: dict[str, int] = {}
+    for destination in refuges.itertuples():
+        if (not isinstance(destination.capacity, (int, np.integer))
+                or isinstance(destination.capacity, bool) or destination.capacity < 0):
+            raise ValueError("destination capacity is not an integer")
+        capacity[str(destination.dest_id)] = int(destination.capacity)
+    remaining = dict(capacity)
+    records: list[dict[str, Any]] = []
+
+    def append(person_id: str, state: str, reason: str, event: float, weight: float,
+               destination_id: str | None, clearance: float | None,
+               distance: float | None) -> None:
+        records.append({
+            "person_id": person_id, "state": state, "reason": reason,
+            "event_time_s": event, "weight": weight, "dest_id": destination_id,
+            "clearance_s": clearance, "distance_m": distance,
+        })
+
+    for person in cohort.itertuples():
+        person_id, weight = str(person.person_id), float(person.weight)
+        if rng.random() > warning_reach:
+            append(person_id, "did_not_depart", "not_warned", warning, weight, None, None, None)
+            continue
+        if rng.random() > compliance:
+            append(person_id, "did_not_depart", "not_compliant", warning, weight, None, None, None)
+            continue
+        delay = float(np.clip(rng.normal(delay_mean, delay_sd), 0, 4 * 3600))
+        departure_time = warning + delay
+        route = routing.routes[person_id]
+        if route.status != "routed":
+            reason = "no_destination" if route.status == "no_destination" else "no_path_under_closure"
+            append(person_id, "route_failed", reason, int(departure_time), weight,
+                   route.destination_id, None, None)
+            continue
+        arrival = departure_time + float(route.cost_s)
+        admitted_weight, overflow_weight, remaining_after = integerized_capacity_partition(
+            weight, remaining.get(str(route.destination_id), 0)
+        )
+        remaining[str(route.destination_id)] = remaining_after
+        distance = round(float(route.distance_m), 1)
+        if admitted_weight == 0:
+            append(person_id, "shelter_full", "destination_capacity_exhausted",
+                   int(arrival), weight, route.destination_id, None, distance)
+            continue
+        if overflow_weight > 0:
+            append(person_id, "shelter_full", "partial_admission_capacity",
+                   int(arrival), overflow_weight, route.destination_id, None, distance)
+        append(person_id, "arrived", "admitted", arrival, admitted_weight,
+               route.destination_id, arrival - warning, distance)
+
+    columns = [
+        "person_id", "state", "reason", "event_time_s", "weight", "dest_id",
+        "clearance_s", "distance_m",
+    ]
+    states = pd.DataFrame.from_records(records, columns=columns)
+    source_weights = cohort.set_index(cohort["person_id"].astype(str))["weight"]
+    states["source_person_id"] = states["person_id"]
+    states["source_weight"] = states["source_person_id"].map(source_weights).astype(float)
+    fragment = states.groupby("source_person_id", sort=False).cumcount().astype(str)
+    states["outcome_id"] = (
+        states["source_person_id"].astype(str) + ":" + states["state"].astype(str) + ":" + fragment
+    )
+    _compare_terminal_records(states, bundle.tables["evacuation_states"])
+
+    replay_tables = dict(bundle.tables)
+    replay_tables["evacuation_states"] = states
+    denominators = _reconstruct_denominators(
+        replace(bundle, tables=replay_tables), sample, present, cohort
+    )
+    clearance = inverse_weighted_clearance(states, warning_time_s=warning)
+    published = _field(bundle.stats, "evacuation")
+    quantities = denominators["quantities"]
+    comparisons = {
+        "cohort_weighted": quantities["cohort"]["weight"],
+        "arrived_weighted": quantities["terminal_states"]["arrived"]["weight"],
+        "unserved_weighted": denominators["unserved_derived"]["weight"],
+    }
+    if any(abs(float(published[key]) - value) > 0.01 for key, value in comparisons.items()):
+        raise ValueError("published evacuation weight mismatch")
+    state_distribution = published.get("state_distribution")
+    if not isinstance(state_distribution, dict) or set(state_distribution) != set(TERMINAL_STATES):
+        raise ValueError("published terminal distribution mismatch")
+    if any(abs(float(state_distribution[key]) - quantities["terminal_states"][key]["weight"]) > 0.01
+           for key in TERMINAL_STATES):
+        raise ValueError("published terminal distribution mismatch")
+    for key, value in clearance.items():
+        observed = published["clearance_time_minutes"].get(key)
+        if (value is None) != (observed is None) or (
+            value is not None and abs(value - float(observed)) > 0.01
+        ):
+            raise ValueError("published clearance mismatch")
+    destination_summary = published.get("destinations")
+    if not isinstance(destination_summary, list):
+        raise ValueError("published destination capacity mismatch")
+    observed_capacity = {
+        str(item["dest_id"]): (item["capacity"], item["remaining"])
+        for item in destination_summary if isinstance(item, dict)
+    }
+    expected_capacity = {key: (capacity[key], remaining[key]) for key in capacity}
+    if observed_capacity != expected_capacity:
+        raise ValueError("published destination capacity mismatch")
+    return EvacuationReplayAudit(states, remaining, denominators, clearance)
+
+
+def final_audit_report(bundle: AuditBundle) -> dict[str, Any]:
+    """Return PASS only after the full independent replay succeeds."""
+    base = {
+        "run_id": bundle.run_id, "aoi_id": bundle.aoi_id,
+        "audited_hashes": dict(sorted(bundle.file_hashes.items())),
+    }
+    try:
+        audit = replay_evacuation(bundle)
+    except Exception as exc:
+        return {**base, "status": "FAIL", "checks": [
+            {"name": "independent_saved_bundle_replay", "status": "FAIL", "detail": str(exc)}
+        ]}
+    terminal = audit.denominators["quantities"]["terminal_states"]
+    return {
+        **base, "status": "PASS",
+        "checks": [{"name": "independent_saved_bundle_replay", "status": "PASS"}],
+        "reconstructed": {
+            "terminal_records": len(audit.states),
+            "terminal_weights": {key: terminal[key]["weight"] for key in TERMINAL_STATES},
+            "remaining_capacity": audit.remaining_capacity,
+            "clearance_time_minutes": audit.clearance_time_minutes,
+            "conservation": audit.denominators["conservation"],
+        },
+    }
+
+
+def audit_saved_run(run_dir: str | Path) -> dict[str, Any]:
+    """Load one immutable run and emit a JSON-serializable fail-closed report."""
+    try:
+        bundle = load_audit_bundle(run_dir)
+    except Exception as exc:
+        return {"status": "FAIL", "audited_hashes": {}, "checks": [
+            {"name": "saved_bundle_integrity", "status": "FAIL", "detail": str(exc)}
+        ]}
+    return final_audit_report(bundle)
