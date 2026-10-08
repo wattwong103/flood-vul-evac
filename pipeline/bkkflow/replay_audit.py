@@ -461,7 +461,7 @@ def _reconstruct_denominators(
             "weight": weight,
         }
         terminal_shares[state] = weight / cohort_weight if cohort_weight else None
-    terminal_weight = math.fsum(item["weight"] for item in terminal_quantities.values())
+    terminal_weight = math.fsum(float(value) for value in states["weight"])
     if abs(terminal_weight - cohort_weight) > 1e-6:
         raise ValueError("terminal conservation mismatch")
     exposed = present["exposed"].astype(bool).to_numpy()
