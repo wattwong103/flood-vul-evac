@@ -66,6 +66,17 @@ def test_unknown_named_pilot_fails_without_fallback(tmp_path):
         load_pilot_bundle("not-a-pilot", config_dir=tmp_path, curated_dir=tmp_path)
 
 
+def test_named_pilot_id_rejects_direct_path_traversal(tmp_path):
+    config_dir = tmp_path / "config"
+    (config_dir / "pilots").mkdir(parents=True)
+    (config_dir / "escape.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unknown pilot"):
+        load_pilot_bundle(
+            "../escape", config_dir=config_dir, curated_dir=tmp_path / "curated"
+        )
+
+
 def test_mismatched_named_pilot_fails(tmp_path):
     (tmp_path / "pilots").mkdir()
     (tmp_path / "population.json").write_text("{}", encoding="utf-8")

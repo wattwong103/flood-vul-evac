@@ -1,4 +1,5 @@
 """Exercise the complete pilot path through its separate publication helper."""
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -290,6 +291,73 @@ def test_named_pilot_rejects_mismatched_scoped_provenance(pilot_inputs):
 
     with pytest.raises(ValueError, match="staged provenance AOI mismatch"):
         runner.execute_run(pilot_id="khlong-san-district", max_agents=10)
+
+
+@pytest.mark.parametrize(("path", "value", "message"), [
+    (("aoi", "aoi_id"), "sai-mai-district", "does not match"),
+    (("input_scope",), "sai-mai-district", "does not match"),
+    (("aoi", "osm_relation_id"), 3147281, "geometry does not match configuration"),
+    (("sources", "osm"), "wrong-osm-source", "stage source identity mismatch"),
+    (("sources", "population"), "wrong-population-source", "stage source identity mismatch"),
+    (("source_sha256", "osm"), "a" * 64, "stage source hash mismatch"),
+    (("source_sha256", "population"), "b" * 64, "stage source hash mismatch"),
+    (("source_sha256", "geometry"), "c" * 64, "stage source hash mismatch"),
+    (("analysis_crs",), "EPSG:3857", "stage analysis CRS mismatch"),
+    (
+        ("versions", "population"),
+        "bkk-pop-v0.3-khlong-san-district-2020",
+        "population version mismatch",
+    ),
+])
+def test_named_pilot_rejects_configured_identity_matrix_before_run(
+    pilot_inputs, path, value, message,
+):
+    config_path = pilot_inputs.parent / "config/pilots/khlong-san-district.json"
+    payload = read_json(config_path)
+    target = payload
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    write_json(config_path, payload)
+
+    with pytest.raises(ValueError, match=message):
+        runner.execute_run(
+            run_id="identity-rejected",
+            pilot_id="khlong-san-district",
+            max_agents=10,
+        )
+    rejected = pilot_inputs / "identity-rejected"
+    assert not (rejected / "manifest.json").exists()
+    if (rejected / "run_state.json").exists():
+        assert read_json(rejected / "run_state.json")["state"] != "published"
+
+
+def test_named_pilot_missing_scoped_stage_never_falls_back(
+    tmp_path, monkeypatch,
+):
+    config_dir = Path(__file__).resolve().parents[2] / "config"
+    curated = tmp_path / "curated"
+    curated.mkdir()
+    write_json(curated / "stage_manifest.json", {
+        "state": "complete",
+        "aoi_id": "khlong-san-district",
+    })
+    runs = tmp_path / "runs"
+    monkeypatch.setattr(runner, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(runner, "CURATED_DIR", curated)
+    monkeypatch.setattr(runner, "RUNS_DIR", runs)
+    expected = curated / "pilots/sai-mai-district/stage_manifest.json"
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(f"Named pilot stage is incomplete: {expected}"),
+    ):
+        runner.execute_run(
+            run_id="no-legacy-fallback",
+            pilot_id="sai-mai-district",
+            max_agents=1,
+        )
+    assert not runs.exists()
 
 
 def test_named_pilot_rejects_tampered_stage_before_run(pilot_inputs):
