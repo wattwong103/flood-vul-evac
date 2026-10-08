@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
+import geopandas as gpd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -244,7 +245,9 @@ def test_comparison_figure_is_area_generic_and_noncausal(
         return figure, axes
 
     monkeypatch.setattr(report.plt, "subplots", capture)
-    saved_aoi = report.load_aoi("khlong-san-district")
+    saved_aoi = gpd.read_parquet(
+        report.RUNS_DIR.parent / "curated/pilots/khlong-san-district/aoi.parquet"
+    )
     monkeypatch.setattr(report, "load_aoi", lambda _aoi_id: saved_aoi)
     comparison = report.figure_comparison(pair, tmp_path)
     overview = report.figure_scenario_overview(pair.moderate, tmp_path)
