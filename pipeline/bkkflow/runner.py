@@ -369,7 +369,7 @@ def execute_run(
     )
     edges = build.edges
     edges_out = edges.copy()
-    edges_out["geometry_wkt"] = edges_out.geometry.to_wkt()
+    edges_out["geometry_wkt"] = edges_out.geometry.to_wkt(rounding_precision=-1)
     edges_path = _write_parquet(context, "network_edges.parquet", edges_out.drop(columns="geometry"))
     register_output(context, "network_edges", edges_path, rows=len(edges), crs=analysis_crs)
     for fetch in osm_provenance["fetches"]:
