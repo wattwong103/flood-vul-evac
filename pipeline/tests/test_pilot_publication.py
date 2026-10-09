@@ -14,6 +14,10 @@ from rasterio.transform import from_origin
 from shapely.geometry import LineString, box
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# The repo root hosts the `api` package and there is no root conftest.py or pytest config,
+# so add it explicitly. Without this, collection fails for every test in this file under a
+# bare `pytest` invocation (or any cwd other than the repo root).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from api.app import create_app
 from bkkflow import runner
 from bkkflow.sources import pilot_stage
