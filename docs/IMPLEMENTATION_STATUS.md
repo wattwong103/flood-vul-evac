@@ -1,14 +1,14 @@
 # BKK/FLOW project state
 
-Updated 9 October 2026. **DONE_WITH_CONCERNS; demonstration only.**
+Updated 10 October 2026. **DONE_WITH_CONCERNS; demonstration only.**
 This page is the shared implementation/evidence handoff. Internal validation
 does not establish empirical validity or operational readiness.
 
 ## Current source and release status
 
-Current `main` is merge commit `d58d08b0430cc47bf10ddb3279ee5b48472ca790`
-with source tree `07bcb0a988c11edc9ef7f0153f17ec0c7cfe8f11`.
-Three human-merged PRs establish the present four-area implementation boundary:
+Current `main` is merge commit `21c6841d238c62a6e451097fefeb683e9ae7afad`
+with source tree `23a072809fb6f319fbbf7f6c3461436a82deefab`.
+Four human-merged PRs establish the present four-area implementation boundary:
 
 - [PR #49](https://github.com/wattwong103/flood-vul-evac/pull/49) landed the
   reviewed 43-commit four-area, denominator, replay-audit and report stack.
@@ -18,6 +18,9 @@ Three human-merged PRs establish the present four-area implementation boundary:
   independent replay sum original terminal outcome records rather than rounded
   state subtotals, while retaining exact contract equality and the unchanged
   `1e-6` conservation tolerance.
+- [PR #53](https://github.com/wattwong103/flood-vul-evac/pull/53) closed the
+  BKK-021F named-pilot identity/traversal regression matrix as tests-only
+  coverage, with no production, configuration or method change.
 
 This source is implemented and reviewed; it is not an accepted comparative
 release. The [four-area contract](MULTI_AREA_PLAN.md) remains authoritative.
@@ -29,11 +32,14 @@ they cannot be pooled with a later release even though the preserved Din Daeng
 bundle passes read-only replay under the corrected #51 source.
 
 No complete, common-boundary eight-run set has been executed or accepted.
-Before another launch, merge the named-pilot identity/traversal regression matrix
-and the pipeline-to-saved-artifact-to-both-API fractional-seconds round-trip
-regression. Then freeze one merged source/configuration/environment boundary,
-issue eight new run IDs and audit all eight runs plus all four pairs. Until that
-happens, no four-area numerical result is approved for the paper.
+Both named pre-release regression gates are now merged or proposed as
+tests-only change: the named-pilot identity/traversal matrix through #53, and
+the pipeline-to-saved-artifact-to-both-API fractional-seconds round-trip
+regression on branch `task/api-fractional-roundtrip`. Once that second gate
+merges, the precondition is to freeze one merged
+source/configuration/environment boundary, issue eight new run IDs and audit
+all eight runs plus all four pairs. Until that happens, no four-area numerical
+result is approved for the paper.
 
 ## Historical city-scale implementation and verified run
 
@@ -136,9 +142,9 @@ release attempt.
 
 | Severity / task | What remains | Next owner and acceptance gate |
 |---|---|---|
-| MEDIUM BKK-021F named-pilot identity | Coverage does not yet exercise the full rejection matrix for configured AOI identity, direct traversal IDs and missing scoped inputs without fallback | Implementer: add a focused tests-first PR; reviewer confirms every mismatched or missing named-pilot identity fails closed. |
-| MEDIUM API fractional-seconds round-trip | Existing API fixtures do not prove that an actual pipeline publication survives saved Parquet/manifest readback through both API routes with fractional event seconds | Implementer: publish a test run, read the saved artifacts through both routes and assert warning-relative weighted quantiles and the canonical non-null contract. |
-| MEDIUM BKK-024 release evidence | No complete eight-run set exists on the current merged boundary | North + implementer: after the two regression gates merge, create eight new IDs, execute all pairs under one frozen code/configuration/environment bundle and pass all run and pair audits. |
+| CLOSED MEDIUM BKK-021F named-pilot identity | Rejection matrix for configured AOI identity, direct traversal IDs and missing scoped inputs is covered by #53 | Merged tests-only coverage; bounded to the named cases, not exhaustive identity hardening. Three LOW follow-ups are parked in the PR description. |
+| CLOSED MEDIUM API fractional-seconds round-trip | A real publication now survives saved Parquet/manifest readback through both clearance routes with fractional event seconds, with the canonical non-null denominator contract | `api/tests/test_publication_roundtrip.py`, pending merge on `task/api-fractional-roundtrip`. Recomputes the weighted-clearance definition independently rather than calling the pipeline helper; verified to fail on both whole-second truncation and absolute-event-time regressions. No production change: the pipeline and both routes were already correct. |
+| MEDIUM BKK-024 release evidence | No complete eight-run set exists on the current merged boundary | North + implementer: both pre-release gates are now covered, so freeze one code/config/environment bundle, create eight new IDs, execute all pairs and pass all run and pair audits. |
 | MEDIUM BKK-009 boundaries | 76.1429 km² of the BMA lies outside the 50 OSM district union; cause unverified | Data steward + North: acquire authoritative geometry with reuse terms and reconcile the difference. The [BMA 50-district catalog](https://data.go.th/en/dataset/50) currently says “License not specified,” so it is a lead, not an admitted input. |
 | MEDIUM BKK-009 population | Controls audited, not ingested or concept-matched | North selects resident/registered/de-facto target; implementer adds district crosswalk, date matching and reconciliation tests. |
 | HIGH scientific gate: terrain/event | Actual bare-earth tiles, datum, forcing and held-out validation absent | Data steward: pursue [RTSD LiDAR catalog](https://data.go.th/en/dataset/lidar-1) and [GISTDA event extent](https://opendata.gistda.or.th/th/dataset/disasters-03). A coverage index or extent product is not depth. |
@@ -161,5 +167,28 @@ every PR handoff.
 Run `python -m pytest pipeline/tests api/tests -q`, then `pnpm test`, `pnpm build`
 and `pnpm lint` from `site/`. Record the actual output and run UUID when promoting
 any new evidence. Internal success alone never promotes a run beyond demonstration.
+
+### Known pre-existing test failures, 10 October 2026
+
+The combined suite currently reports **346 passed, 6 failed, 0 errors** on this
+machine. All six failures are in `api/tests/test_city_endpoints.py` and are
+unrelated to the fractional-seconds work. They reproduce with that test file run
+alone, with no other change present.
+
+The cause is fixture selection, not the service. `test_city_endpoints.py` picks
+its subject with `_city_run_id()`, which selects the **newest** run containing an
+`observed_water.json` **and** a `manifest.json`. On this machine that resolves to
+`784ffce7-7ee0-4af8-8a49-2e9844dd487a`, which carries
+`connectivity_screening.json` and the drainage index but has **no**
+`observed_water_cells.parquet` and **no** `destinations.parquet`. The failing
+assertions are exactly the ones that need those two artefacts: the cells route
+returns no features and no `is_observation`/`year` keys, and the destinations
+route reports `available: false`.
+
+The 4 October verification recorded a green suite because a different run was
+then the newest. Any promotion of evidence must state which run these tests
+resolved against. Choosing the canonical run, or requiring the full artefact
+set in `_city_run_id()`, is a separate decision for North and is deliberately
+not made here.
 
 DONE_WITH_CONCERNS
