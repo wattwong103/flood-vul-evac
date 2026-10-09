@@ -44,9 +44,9 @@ from test_pilot_publication import pilot_inputs  # noqa: E402,F401
 
 QUANTILES = (("p5", 0.05), ("median", 0.50), ("p95", 0.95))
 
-#: Clearance is small next to the 64,800 s warning, so a route that reported
-#: absolute event time rather than time since the warning is off by ~1080
-#: minutes. Anything above a day cannot be a legitimate warning-relative value.
+#: A coarse sanity ceiling only. The warning sits at 64,800 s (1080 minutes), so
+#: absolute event time would land just under this bound; the load-bearing
+#: warning-relative assertion is the explicit comparison further down.
 MAX_PLAUSIBLE_CLEARANCE_MINUTES = 24 * 60
 
 FATAL_WARNING_CODES = {
@@ -56,7 +56,7 @@ FATAL_WARNING_CODES = {
     "empty_table",
     "invalid_denominator_contract",
     "missing_warning_time",
-    "invalid_clearance",
+    "invalid_clearance_data",
 }
 
 
@@ -142,9 +142,16 @@ def test_published_fractional_seconds_survive_both_clearance_routes(published_ru
     assert all(
         abs(value - round(value)) > 1e-9 for value in expected.values()
     ), "clearance minutes must not be whole numbers"
-    assert max(expected.values()) < MAX_PLAUSIBLE_CLEARANCE_MINUTES, (
-        "clearance must be relative to the warning, not absolute event time"
-    )
+
+    # Measured against absolute event time these same rows are 1080 minutes
+    # larger, which would still clear a coarse magnitude bound. Assert the two
+    # readings are genuinely distinct rather than trusting a plausibility
+    # ceiling to separate them.
+    absolute = _independent_clearance_minutes(states, 0.0)
+    assert all(
+        abs(expected[label] - absolute[label]) > 1.0 for label, _ in QUANTILES
+    ), "clearance must be measured from the warning, not from absolute event time"
+    assert max(expected.values()) < MAX_PLAUSIBLE_CLEARANCE_MINUTES
 
     client = TestClient(create_app())
     stats_response = client.get("/v1/runs/roundtrip/stats")

@@ -175,20 +175,37 @@ machine. All six failures are in `api/tests/test_city_endpoints.py` and are
 unrelated to the fractional-seconds work. They reproduce with that test file run
 alone, with no other change present.
 
-The cause is fixture selection, not the service. `test_city_endpoints.py` picks
-its subject with `_city_run_id()`, which selects the **newest** run containing an
+They have **two different causes**, not one.
+
+**Five failures — missing artefacts.** `_city_run_id()` in
+`api/tests/test_city_endpoints.py` selects the **newest** run containing an
 `observed_water.json` **and** a `manifest.json`. On this machine that resolves to
 `784ffce7-7ee0-4af8-8a49-2e9844dd487a`, which carries
 `connectivity_screening.json` and the drainage index but has **no**
-`observed_water_cells.parquet` and **no** `destinations.parquet`. The failing
-assertions are exactly the ones that need those two artefacts: the cells route
-returns no features and no `is_observation`/`year` keys, and the destinations
-route reports `available: false`.
+`observed_water_cells.parquet` and **no** `destinations.parquet`. The cells route
+returns no features and no `is_observation`/`year` keys; the destinations route
+reports `available: false`.
 
-The 4 October verification recorded a green suite because a different run was
-then the newest. Any promotion of evidence must state which run these tests
-resolved against. Choosing the canonical run, or requiring the full artefact
-set in `_city_run_id()`, is a separate decision for North and is deliberately
-not made here.
+**One failure — a wording divergence.** `test_observed_water_states_annual_
+observation_limits` needs only `observed_water.json`, which **is** present. It
+fails because the test requires the literal phrases `"annual water classes"` and
+`"no observations is not dry land"` in `interpretation_notes`, and the served
+notes instead read "An annual Landsat composite under-detects short-lived
+inundation…". None of the four candidate runs in `runs/` containing both files
+carries either phrase.
+
+Consequences that matter for evidence:
+
+- Requiring the full artefact set in `_city_run_id()` would fix the five and
+  **would not** fix the wording failure. The two need separate handling.
+- **No run in `runs/` contains `observed_water_cells.parquet` or
+  `destinations.parquet` at all.** The 4 October green suite therefore cannot be
+  explained by run selection, and the earlier green record must be attributed to
+  a `runs/` state that no longer exists rather than to a different chosen run.
+- Any promotion of evidence must state which run these tests resolved against.
+
+Both causes are pre-existing and are deliberately **not** fixed here: selecting
+the canonical run, aligning the note wording with the test, or deleting the
+generated tree are decisions for North.
 
 DONE_WITH_CONCERNS
