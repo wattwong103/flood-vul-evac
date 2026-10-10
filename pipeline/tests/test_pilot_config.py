@@ -57,7 +57,11 @@ def test_omitted_pilot_preserves_legacy_configuration():
     assert not bundle.named
     assert bundle.aoi_id == "khlong-san-district"
     assert bundle.input_root == curated
-    assert bundle.population["population_version"] == "bkk-pop-v0.1-khlongsan-2020"
+    # Read the version from the shipped config rather than pinning a literal:
+    # the value changes whenever the population content changes.
+    import json
+    expected = json.loads((config_dir / "population.json").read_text(encoding="utf-8"))
+    assert bundle.population["population_version"] == expected["population_version"]
     assert bundle.scenario["flood"]["scenario_id"] == "khlong-san-moderate-2011-analogue"
 
 

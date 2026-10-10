@@ -376,25 +376,9 @@ def execute_run(
             "status": "unavailable",
             "reason": "no external administrative control total was ingested in this build",
         },
-        demographics={
-            "age_bands": (
-                {label: float(share) for label, share in age_config["bands"].items()}
-                if age_mode == "national" and age_config.get("bands")
-                else {"unknown": 1.0}
-            ),
-            "age_structure_mode": age_mode,
-            "sex_split": sex_shares or {"male": 0.5, "female": 0.5},
-            # Record what actually happened. "not_configured" means this build
-            # supplies no age structure; it does NOT mean a licence gate
-            # refused one. The registry holds approved age/sex sources that are
-            # simply not ingested, and reporting that as a licence failure
-            # would state something false in the run record.
-            "age_structure_source": (
-                age_config.get("source_id", "unknown") if age_mode != "none" else "not_configured"
-            ),
-            "age_structure_status": age_config.get("status", "unknown"),
-            "age_structure_spatial": age_mode == "per_cell",
-        },
+        demographics=population_module.age_band_report(
+            population_config, age_config, age_mode, age_bands, age_by_cell, cells
+        ),
         building_allocation={
             "status": "none",
             "reason": "OSM building use does not prove residential occupancy; allocation would be an invention",
