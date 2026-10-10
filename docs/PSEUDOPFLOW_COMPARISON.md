@@ -145,6 +145,50 @@ parameter exists; nothing passes it.
 **So the plumbing is done and the input is approved. The gap is one wiring
 step away.**
 
+### Feasibility verified 10 October 2026 — with two corrections
+
+The source was probed, not assumed. Dataset: **Thailand 100m Age and Sex
+Structures, 2026, R2025A v1, Constrained**, EPSG:4326, float32, nodata −99999,
+CC BY 4.0, DOI `10.5258/SOTON/WP00841`.
+
+Download pattern is `tha_{sex}_{band}_2026_CN_100m_R2025A_v1.tif` where
+`sex` ∈ {m, f, t} and `band` ∈ {00, 01, 05, 10 … 90} (19 bands).
+
+**Correction 1 — it is one wiring step plus a 2.4 GB acquisition, not just
+wiring.** The marginals are not published as a table; they must be derived from
+the rasters:
+
+| Need | Files | Size |
+|---|---:|---:|
+| Age-band marginals | 19 × `tha_t_*` | ≈ 2.2 GB |
+| Sex split | `tha_T_M_*`, `tha_T_F_*` | ≈ 232 MB |
+| **Total** | **21** | **≈ 2.4 GB** |
+
+A probe download of one band (`tha_t_30`, age 30–34, both sexes) confirms the
+content is sane: **5,053,734.5** people nationally, ≈ 7 % of Thailand, which is
+a plausible share for a five-year band.
+
+**Correction 2 — the age/sex grid does not match the population grid.**
+Same CRS, resolution, dtype and nodata, but **different dimensions**:
+
+| Raster | Size | Bounds |
+|---|---|---|
+| `tha_t_30` (age/sex) | 9953 × 17824 | 97.3433, 5.6125, 105.6375, 20.4658 |
+| `tha_ppp_2020` (population) | 9952 × 17816 | 97.3454, 5.6163, 105.6387, 20.4629 |
+
+One column and eight rows apart. Consequence:
+
+- **National marginals are safe.** `assign_demographics` consumes
+  `age_bands: dict[str, float]` — a national marginal — so the mismatch is
+  irrelevant for the wiring described here.
+- **Per-cell age structure is not available without an explicit reprojection.**
+  Assigning age per cell would require resampling onto the population grid, and
+  that is a real methodological step that must be declared, not a detail.
+
+This is exactly the class of silent misalignment that would corrupt results
+without raising an error. It is recorded here rather than left to be discovered
+mid-implementation.
+
 ### What this would and would not fix
 
 Would fix:
@@ -164,7 +208,7 @@ Would **not** fix:
 
 | # | Gap vs Pseudo-PFLOW | Cost | Why it matters |
 |---|---|---|---|
-| 1 | **Age/sex wiring** | Low | Implemented, source already approved. Closes the largest single attribute gap. |
+| 1 | **Age/sex wiring** | Low code, 2.4 GB data | Implemented; source already approved and verified reachable. Closes the largest single attribute gap. National marginals only — see the grid caveat above. |
 | 2 | **Behaviour calibration** | High | Pseudo-PFLOW tunes 7 parameters to mode-share targets; BKK/FLOW declares priors. The paper already rejects a calibrated-mobility claim on the 1.97 vs 3.712 trips/person/day mismatch. Adopting a similar LHS framework against BMA Household Travel Survey targets is the honest path. |
 | 3 | **Output cadence** | Medium | 500 m / 10 min mesh vs 1 km public grid. Not a correctness gap, but it limits comparability. |
 | 4 | **Directionality** | Low | City routing is undirected; vehicle one-way restrictions unenforced. Already tracked as BKK-017. |
