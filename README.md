@@ -12,13 +12,13 @@ Bangkok, built on the PFLOW people–activities–trips–trajectories contract.
 > See [current project status and owners](docs/IMPLEMENTATION_STATUS.md) for
 > merged work, verified results, pending fixes and evidence gates.
 
-> **Dated source/evidence snapshot — 11 October 2026.** Merged `main` was
-> `bb16608` through PR #72. PRs #73–#75 were reviewed and ready, but were not
-> merged at that snapshot. PR #73 is the required population-identity
-> prerequisite for the authorised four-pilot restage and eight-run rerun; no
-> replacement run had started. The `f466288` release and its local ZIP remain
-> immutable historical demonstration evidence. Test totals in the project
-> record are command- and head-scoped and must not be added together.
+> **Admitted release — 11 October 2026.** PRs #73–#76 are merged. Four named
+> pilots were freshly staged at `db0a96b`, then eight dry/moderate fixed-cohort
+> runs, eight saved-run replays and four checked pairs passed. The external
+> candidate has 239 ledger-matched files and an independently verified ZIP.
+> See the [replacement release evidence](docs/RELEASE_EVIDENCE_2026-10-11.md).
+> The older `f466288` release remains immutable historical evidence; neither
+> set is calibrated, causal or operational.
 
 ## What is here
 
@@ -49,8 +49,9 @@ Bangkok, built on the PFLOW people–activities–trips–trajectories contract.
 A second, larger scope covers the whole BMA. It is a **separate run** and
 never silently substitutes for a pilot result. The table below documents an
 immutable historical run; there is **no current city result** on the admitted
-Geofabrik source. See the [release evidence record](docs/RELEASE_EVIDENCE_2026-10-10.md)
-for the current four-area demonstration boundary.
+Geofabrik source. See the
+[replacement release evidence](docs/RELEASE_EVIDENCE_2026-10-11.md) for the
+current four-area demonstration boundary.
 
 | Property | Value |
 |---|---|
