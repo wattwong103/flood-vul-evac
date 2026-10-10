@@ -1,4 +1,5 @@
 """Exercise the complete pilot path through its separate publication helper."""
+import math
 import re
 import shutil
 import sys
@@ -222,19 +223,45 @@ def test_pilot_publishes_verified_source_identity(pilot_inputs, flood_enabled):
     assert runner.manifest_module.validate_manifest(manifest) == []
 
 
+def _weighted_quantiles_minutes(clearances, weights) -> dict[str, float]:
+    """Independent inverse weighted-ECDF, deliberately not the production helper."""
+    ordered = sorted(zip(clearances, weights))
+    total = math.fsum(float(weight) for _, weight in ordered)
+    result = {}
+    for label, quantile in (("p5", 0.05), ("median", 0.50), ("p95", 0.95)):
+        cumulative = 0.0
+        for clearance, weight in ordered:
+            cumulative += float(weight)
+            if cumulative >= quantile * total:
+                result[label] = clearance / 60.0
+                break
+        assert label in result
+    return result
+
+
 def test_pilot_saved_fractional_clearance_round_trips_through_both_api_routes(
     pilot_inputs, monkeypatch
 ):
-    expected = {
-        "p5": 60.25 / 60.0,
-        "median": 180.75 / 60.0,
-        "p95": 240.125 / 60.0,
-    }
+    """Fractional seconds and unequal weights must survive the API readback.
+
+    The clearances are derived from the run's own cohort rather than pinned, so
+    the test survives a population change. What it must still guarantee is the
+    discriminating property: the weighted median has to differ from the
+    unweighted one, otherwise an implementation ignoring weights would pass.
+    """
+    emitted: dict[str, list[float]] = {}
 
     def fractional_evacuation(cohort, *, destinations, route_lookup, scenario, seed):
-        ordered = cohort.sort_values("person_id", kind="stable").reset_index(drop=True)
-        assert ordered["weight"].tolist() == pytest.approx([51.1, 97.8, 102.2, 48.9])
-        clearance_s = [60.25, 120.5, 180.75, 240.125]
+        # Heaviest person gets the shortest clearance. Sorting by weight first
+        # guarantees the weighted median lands earlier than the unweighted one
+        # while leaving the cohort total untouched -- the total-weight
+        # conservation the denominator contract depends on still holds.
+        ordered = cohort.sort_values(
+            "weight", ascending=False, kind="stable"
+        ).reset_index(drop=True)
+        clearance_s = [60.25 + index * 17.0 for index in range(len(ordered))]
+        emitted["clearance_s"] = list(clearance_s)
+        emitted["weights"] = [float(value) for value in ordered["weight"]]
         destination_id = str(destinations.iloc[0]["dest_id"])
         states = pd.DataFrame(
             {
@@ -257,7 +284,9 @@ def test_pilot_saved_fractional_clearance_round_trips_through_both_api_routes(
             "state_distribution": {"arrived": total_weight},
             "arrived_weighted": total_weight,
             "unserved_weighted": 0.0,
-            "clearance_time_minutes": expected,
+            "clearance_time_minutes": _weighted_quantiles_minutes(
+                clearance_s, emitted["weights"]
+            ),
             "top_bottleneck_edges": [],
             "destinations": [],
         }
@@ -275,9 +304,22 @@ def test_pilot_saved_fractional_clearance_round_trips_through_both_api_routes(
     persisted = pd.read_parquet(run_dir / "evacuation_states.parquet")
     manifest = read_json(run_dir / "manifest.json")
     warning_time_s = manifest["evacuation_scenario"]["departure_model"]["warning_time_s"]
+
     assert (persisted["event_time_s"] - warning_time_s).tolist() == pytest.approx(
-        [60.25, 120.5, 180.75, 240.125]
+        emitted["clearance_s"]
     )
+    expected = _weighted_quantiles_minutes(
+        [float(value) for value in persisted["clearance_s"]],
+        [float(value) for value in persisted["weight"]],
+    )
+
+    # The weights are unequal, so an unweighted ECDF must give a different median.
+    ordered_clearances = sorted(float(value) for value in persisted["clearance_s"])
+    unweighted_median = ordered_clearances[len(ordered_clearances) // 2] / 60.0
+    assert expected["median"] != pytest.approx(unweighted_median), (
+        "the cohort must discriminate weighted from unweighted quantiles"
+    )
+
     saved_denominators = read_json(run_dir / "denominators.json")
     saved_stats = read_json(run_dir / "stats.json")
     assert saved_denominators["contract_version"] == "sample-denominators-v1"
