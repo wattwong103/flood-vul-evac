@@ -255,6 +255,68 @@ def test_no_age_structure_reports_complete_unknown_coverage() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "age_bands, age_bands_by_cell",
+    [
+        ({"working": 0.5, "unknown": 0.5}, None),
+        (None, {"c1": {"working": 0.5, "unknown": 0.5}}),
+    ],
+)
+def test_applied_age_mapping_cannot_mix_known_and_unknown_shares(
+    age_bands, age_bands_by_cell
+) -> None:
+    cells = _cells()
+    cells["pop_scaled"] = cells["pop_count"]
+
+    with pytest.raises(ValueError, match="must not mix.*unknown"):
+        population.assign_demographics(
+            cells,
+            sex_shares={"male": 0.5, "female": 0.5},
+            age_bands=age_bands,
+            age_bands_by_cell=age_bands_by_cell,
+        )
+
+
+def test_unused_per_cell_mapping_is_not_validated_or_applied() -> None:
+    cells = _cells()
+    cells["pop_scaled"] = cells["pop_count"]
+    demographics = population.assign_demographics(
+        cells,
+        sex_shares={"male": 0.5, "female": 0.5},
+        age_bands=None,
+        age_bands_by_cell={"outside-aoi": {"working": 0.5, "unknown": 0.5}},
+    )
+
+    assert set(demographics["age_band"]) == {"unknown"}
+    assert demographics["weight"].sum() == pytest.approx(600.0)
+
+
+def test_explicit_unknown_only_mapping_is_allowed_and_conserves_weight() -> None:
+    cells = _cells()
+    cells["pop_scaled"] = cells["pop_count"]
+    demographics = population.assign_demographics(
+        cells,
+        sex_shares={"male": 0.5, "female": 0.5},
+        age_bands={"unknown": 2.0},
+    )
+
+    assert set(demographics["age_band"]) == {"unknown"}
+    assert demographics["weight"].sum() == pytest.approx(600.0)
+
+
+def test_national_age_report_matches_normalised_assignment() -> None:
+    cells = _cells()
+    report = population.age_band_report(
+        {}, {"source_id": "age-source"}, "national",
+        {"working": 2.0, "65_plus": 1.0}, None, cells,
+    )
+
+    assert report["age_bands"] == pytest.approx(
+        {"working": 2.0 / 3.0, "65_plus": 1.0 / 3.0}
+    )
+    assert report["age_coverage"]["covered_population_share"] == pytest.approx(1.0)
+
+
 def test_demographics_with_age_bands_are_sourced_and_conserve_weight() -> None:
     """A configured age structure replaces 'unknown' and conserves the total."""
     cells = _cells()
