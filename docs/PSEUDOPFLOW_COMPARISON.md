@@ -169,8 +169,14 @@ verified from the acquired files.
 
 ### Marginals now acquired and computed
 
-All 22 rasters were downloaded and summed. Artefact with per-file SHA-256,
-national totals and shares: `data/staged/population/agesex/national_marginals.json`.
+All 22 rasters were downloaded and summed. Evidence records, tracked under
+`data/curated/population/` because `data/staged/` is deliberately git-ignored:
+
+| File | Contents |
+|---|---|
+| `age_sex_national_marginals.json` | totals, shares, per-file SHA-256, applicability status |
+| `age_sex_national_totals.json` | raw unrounded per-band counts |
+| `age_sex_source_checksums.json` | SHA-256 and byte size for all 22 rasters |
 
 | Quantity | Value |
 |---|---:|
