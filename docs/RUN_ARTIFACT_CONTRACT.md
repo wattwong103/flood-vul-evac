@@ -48,6 +48,13 @@ This is not process isolation: a transient edit restored between checks is not
 detected, and installed dependencies are not frozen by the digest. Release runs
 must use a quiescent checkout and record their environment separately.
 
+New manifests also record `population_model.age_structure.coverage`: occupied
+cell counts, population weights and covered/unknown shares. The block is
+optional so manifests created before the coverage extension remain readable.
+For per-cell inputs, `band_shares` uses the
+`population_weighted_over_covered_cells` basis and is conditional on that
+reported coverage.
+
 ## 2. Validation status vocabulary
 
 `demonstration | research | reviewed | operational`
@@ -64,7 +71,7 @@ polish, latency or how good the numbers look.
 | `person_id` | string | run-scoped synthetic id, never a source key |
 | `population_version` | string | immutable synthesis version |
 | `weight` | float | people represented by this record |
-| `age_band` | string | `unknown` when no age source passed the gate |
+| `age_band` | string | `unknown` when age structure is absent or the admitted source has no valid value at the home cell |
 | `sex_code` | string | `M` / `F` / `unknown` |
 | `home_cell_id` | string | 100 m base cell |
 | `home_building_id` | string \| null | null when evidence is insufficient |

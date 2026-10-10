@@ -95,12 +95,28 @@
             "mode": { "enum": ["none", "national", "per_cell"] },
             "source_id": { "type": "string", "minLength": 1 },
             "status": { "type": "string" },
-            "basis": { "enum": ["none", "national_marginal", "population_weighted_over_cells"] },
+            "basis": { "enum": ["none", "national_marginal", "population_weighted_over_cells", "population_weighted_over_covered_cells"] },
             "spatial": { "type": "boolean" },
             "band_shares": {
               "type": "object",
-              "description": "Label to share. For mode per_cell this is the population-weighted aggregate over the cells used, not a national marginal.",
+              "description": "Label to share. For mode per_cell this is the population-weighted aggregate over covered cells, not a national marginal.",
               "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+            },
+            "coverage": {
+              "type": "object",
+              "description": "Optional for backward compatibility; new runs report occupied-cell and population-weight coverage of the applied age structure.",
+              "additionalProperties": false,
+              "required": ["occupied_cells_total", "occupied_cells_covered", "occupied_cells_unknown", "population_weight_total", "population_weight_covered", "population_weight_unknown", "covered_population_share", "unknown_population_share"],
+              "properties": {
+                "occupied_cells_total": { "type": "integer", "minimum": 0 },
+                "occupied_cells_covered": { "type": "integer", "minimum": 0 },
+                "occupied_cells_unknown": { "type": "integer", "minimum": 0 },
+                "population_weight_total": { "type": "number", "minimum": 0 },
+                "population_weight_covered": { "type": "number", "minimum": 0 },
+                "population_weight_unknown": { "type": "number", "minimum": 0 },
+                "covered_population_share": { "type": "number", "minimum": 0, "maximum": 1 },
+                "unknown_population_share": { "type": "number", "minimum": 0, "maximum": 1 }
+              }
             }
           }
         },
