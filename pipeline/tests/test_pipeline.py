@@ -189,6 +189,33 @@ def test_demographics_without_age_source_is_unknown() -> None:
     assert set(demographics["sex_code"]) == {"M", "F"}
 
 
+def test_demographics_with_age_bands_are_sourced_and_conserve_weight() -> None:
+    """A configured age structure replaces 'unknown' and conserves the total."""
+    cells = _cells()
+    cells["pop_scaled"] = cells["pop_count"]
+    bands = {"0_4": 0.2, "5_17": 0.3, "18_64": 0.4, "65_plus": 0.1}
+    demographics = population.assign_demographics(
+        cells, sex_shares={"male": 0.5, "female": 0.5}, age_bands=bands
+    )
+    assert "unknown" not in set(demographics["age_band"])
+    assert set(demographics["age_band"]) == set(bands)
+    assert demographics["weight"].sum() == pytest.approx(600.0, rel=1e-9)
+
+
+def test_demographics_normalise_unnormalised_band_weights() -> None:
+    """Band weights are shares; an arbitrary scale must not shift them."""
+    cells = _cells()
+    cells["pop_scaled"] = cells["pop_count"]
+    scaled = {"a": 2.0, "b": 3.0, "c": 5.0}
+    demographics = population.assign_demographics(
+        cells, sex_shares={"male": 0.5, "female": 0.5}, age_bands=scaled
+    )
+    shares = demographics.groupby("age_band")["weight"].sum() / 600.0
+    assert shares["a"] == pytest.approx(0.2, rel=1e-9)
+    assert shares["b"] == pytest.approx(0.3, rel=1e-9)
+    assert shares["c"] == pytest.approx(0.5, rel=1e-9)
+
+
 def test_demographics_preserve_total_regardless_of_sex_split() -> None:
     cells = _cells()
     cells["pop_scaled"] = cells["pop_count"]

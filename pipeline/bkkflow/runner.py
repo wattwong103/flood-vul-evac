@@ -315,13 +315,19 @@ def execute_run(
     seed = int(population_config["seed"])
 
     sex_shares = population_config.get("sex_split")
+    # Optional, config-supplied age structure. Absent or null means this build
+    # ingests no age/sex marginal, so age_band stays "unknown" for every person.
+    age_config = population_config.get("age_structure") or {}
     demographics = population_module.assign_demographics(
         cells.assign(pop_scaled=cells["pop_count"].to_numpy()),
         sex_shares=sex_shares,
-        age_bands=None,  # no age source passed the gate: recorded as unknown
+        age_bands=age_config.get("bands") or None,
     )
     if "unknown" in set(demographics["age_band"]):
-        context.warn("age_band is 'unknown' for every person; no age-structure source passed the licence gate.")
+        context.warn(
+            "age_band is 'unknown' for every person; this build ingests no "
+            "age-structure marginal."
+        )
 
     persons = population_module.make_weighted_persons(
         cells,
@@ -347,9 +353,17 @@ def execute_run(
             "reason": "no external administrative control total was ingested in this build",
         },
         demographics={
-            "age_bands": {"unknown": 1.0},
+            "age_bands": age_config.get("bands") or {"unknown": 1.0},
             "sex_split": sex_shares or {"male": 0.5, "female": 0.5},
-            "age_structure_source": "none_passed_licence_gate",
+            # Record what actually happened. "not_configured" means this build
+            # supplies no age structure; it does NOT mean a licence gate
+            # refused one. The registry holds approved age/sex sources that are
+            # simply not ingested for an AOI-scoped pull, and reporting that as
+            # a licence failure would state something false in the run record.
+            "age_structure_source": (
+                age_config["source_id"] if age_config.get("bands") else "not_configured"
+            ),
+            "age_structure_status": age_config.get("status", "unknown"),
         },
         building_allocation={
             "status": "none",

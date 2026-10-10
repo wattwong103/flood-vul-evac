@@ -62,6 +62,12 @@
       "source": "scenario"
     }
   ],
+  "age_structure": {
+    "source_id": "worldpop-tha-age-sex-2026-r2025a",
+    "status": "not_ingested",
+    "bands": null,
+    "note": "The registry approves this source and it is publicly retrievable (CC BY 4.0, DOI 10.5258/SOTON/WP00841). It is not ingested here for two reasons: the country rasters are out of scope for an AOI-scoped pull, and only a NATIONAL marginal is usable because the age/sex grid does not align with the population grid. Setting bands to a {label: weight} object here assigns that national structure and stops age_band being 'unknown'; leave null to keep the gap visible."
+  },
   "sex_split": {
     "male": 0.489,
     "female": 0.511,
@@ -81,7 +87,7 @@
   "warnings": [
     "Resident counts are a 2020 modelled surface, not a count of people present at any moment.",
     "No external administrative control total was ingested, so population control error is unverified.",
-    "Age structure is unknown for every person; no age-structure source passed the licence gate.",
+    "Age structure is unknown for every person; this build ingests no age-structure marginal (the registry-approved national age/sex source is out of scope for an AOI-scoped pull).",
     "Sex split is a declared prior, not a measured Bangkok marginal.",
     "Household membership, vehicle access and assistance needs are scenario fields, not observations.",
     "Mobility behaviour parameters are uncalibrated priors; results remain demonstration status."

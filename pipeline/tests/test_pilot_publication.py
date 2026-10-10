@@ -415,3 +415,48 @@ def test_pilot_drift_at_either_publication_check_stays_failed(pilot_inputs, monk
     run = next(pilot_inputs.iterdir())
     assert read_json(run / "run_state.json")["state"] == "failed_source_changed"
     assert (run / "manifest.json").exists() == (check_number == 2)
+
+
+def test_published_population_qa_does_not_claim_a_licence_failure(pilot_inputs):
+    """A run must not state that a licence gate refused a source it never asked for.
+
+    The registry approves an age/sex source that this build simply does not
+    ingest for an AOI-scoped pull. Recording that as a licence failure writes a
+    false provenance claim into an immutable run record.
+    """
+    result = runner.execute_run(
+        run_id="qa-honest", pilot_id="khlong-san-district", flood_enabled=True, max_agents=5
+    )
+    demographics = read_json(Path(result["run_dir"]) / "population_qa.json")["demographics"]
+
+    assert demographics["age_bands"] == {"unknown": 1.0}
+    assert demographics["age_structure_source"] == "not_configured"
+    assert "licence" not in demographics["age_structure_source"]
+    # The approved-but-uningested source stays named, so the gap remains visible.
+    assert demographics["age_structure_status"] == "not_ingested"
+
+
+def test_configured_age_structure_flows_through_to_persons(pilot_inputs):
+    """When bands are configured, persons carry them and the QA reports the source."""
+    config_path = runner.CONFIG_DIR / "population.json"
+    original = read_json(config_path)
+    config = dict(original)
+    config["age_structure"] = dict(original.get("age_structure", {}))
+    config["age_structure"]["bands"] = {"0_17": 0.25, "18_64": 0.60, "65_plus": 0.15}
+    write_json(config_path, config)
+    try:
+        result = runner.execute_run(
+            run_id="qa-aged", pilot_id="khlong-san-district", flood_enabled=True, max_agents=5
+        )
+    finally:
+        write_json(config_path, original)
+
+    run_dir = Path(result["run_dir"])
+    demographics = read_json(run_dir / "population_qa.json")["demographics"]
+    assert demographics["age_structure_source"] == "worldpop-tha-age-sex-2026-r2025a"
+    assert demographics["age_bands"] == {"0_17": 0.25, "18_64": 0.60, "65_plus": 0.15}
+
+    persons = pd.read_parquet(run_dir / "persons.parquet")
+    assert "unknown" not in set(persons["age_band"])
+    assert set(persons["age_band"]) == {"0_17", "18_64", "65_plus"}
+    assert not any("no age-structure source passed the licence gate" in w for w in demographics.get("warnings", []))
