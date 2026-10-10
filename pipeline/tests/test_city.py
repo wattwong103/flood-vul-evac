@@ -357,3 +357,23 @@ def test_manually_staged_osm_requires_download_provenance(tmp_path):
     source.write_bytes(b"manual source")
     with pytest.raises(ValueError, match="download provenance.*re-download"):
         city_osm.source_provenance(source, "https://example.test/source")
+
+
+def test_clip_mask_for_aoi_binds_the_transform_submodule() -> None:
+    """Regression: `rasterio` was unbound in this scope, so every DEM fetch died.
+
+    `import rasterio.features as rfeatures` binds only `rfeatures`. The body then
+    calls `rasterio.transform.from_bounds`, which raised NameError. The function
+    is on the live DEM path (terrain.fetch_dem), so nothing exercised it.
+    """
+    from shapely.geometry import box
+
+    aoi = box(100.5, 13.72, 100.6, 13.8)
+    mask = terrain.clip_mask_for_aoi(aoi, (100.4, 13.6, 100.7, 13.9), (6, 6))
+
+    assert mask.dtype == bool
+    assert mask.shape == (6, 6)
+    # The AOI covers the middle of the mosaic, so some cells are inside and
+    # some are not; an all-True mask would mean the geometry was ignored.
+    assert mask.any()
+    assert not mask.all()
