@@ -315,13 +315,43 @@ def execute_run(
     seed = int(population_config["seed"])
 
     sex_shares = population_config.get("sex_split")
+    # Optional, config-supplied age structure. mode "none" (the default) ingests
+    # no marginal, so age_band stays "unknown" for every person. "national"
+    # applies one country marginal to every cell. "per_cell" samples the age/sex
+    # rasters at each cell centre, which preserves spatial variation but changes
+    # the population, so it must be enabled deliberately.
+    age_config = population_config.get("age_structure") or {}
+    age_mode = age_config.get("mode") or ("national" if age_config.get("bands") else "none")
+    age_bands = None
+    age_by_cell = None
+    if age_mode == "per_cell":
+        from bkkflow.sources import population_age
+        from bkkflow.util import REPO_ROOT
+
+        configured = Path(age_config["raster_dir"]).expanduser()
+        age_dir = configured if configured.is_absolute() else REPO_ROOT / configured
+        age_by_cell = population_age.age_weights_by_cell(cells, age_dir)
+        if not age_by_cell:
+            raise ValueError(
+                "per_cell age structure produced no weights; check raster coverage "
+                "against this AOI"
+            )
+    elif age_mode == "national":
+        age_bands = age_config.get("bands") or None
+    elif age_mode != "none":
+        raise ValueError(f"unknown age_structure.mode: {age_mode!r}")
+
     demographics = population_module.assign_demographics(
         cells.assign(pop_scaled=cells["pop_count"].to_numpy()),
         sex_shares=sex_shares,
-        age_bands=None,  # no age source passed the gate: recorded as unknown
+        age_bands=age_bands,
+        age_bands_by_cell=age_by_cell,
     )
     if "unknown" in set(demographics["age_band"]):
-        context.warn("age_band is 'unknown' for every person; no age-structure source passed the licence gate.")
+        context.warn(
+            "age_band is 'unknown' for every person; this build ingests no "
+            "age-structure marginal."
+        )
 
     persons = population_module.make_weighted_persons(
         cells,
@@ -347,9 +377,23 @@ def execute_run(
             "reason": "no external administrative control total was ingested in this build",
         },
         demographics={
-            "age_bands": {"unknown": 1.0},
+            "age_bands": (
+                {label: float(share) for label, share in age_config["bands"].items()}
+                if age_mode == "national" and age_config.get("bands")
+                else {"unknown": 1.0}
+            ),
+            "age_structure_mode": age_mode,
             "sex_split": sex_shares or {"male": 0.5, "female": 0.5},
-            "age_structure_source": "none_passed_licence_gate",
+            # Record what actually happened. "not_configured" means this build
+            # supplies no age structure; it does NOT mean a licence gate
+            # refused one. The registry holds approved age/sex sources that are
+            # simply not ingested, and reporting that as a licence failure
+            # would state something false in the run record.
+            "age_structure_source": (
+                age_config.get("source_id", "unknown") if age_mode != "none" else "not_configured"
+            ),
+            "age_structure_status": age_config.get("status", "unknown"),
+            "age_structure_spatial": age_mode == "per_cell",
         },
         building_allocation={
             "status": "none",

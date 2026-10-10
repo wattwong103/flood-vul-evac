@@ -1,5 +1,5 @@
 {
-  "population_version": "bkk-pop-v0.1-khlongsan-2020",
+  "population_version": "bkk-pop-v0.3-khlongsan-2020-agesex",
   "status": "demonstration",
   "method": "weighted-persons",
   "seed": 29092026,
@@ -21,8 +21,8 @@
     {
       "source_id": "worldpop-tha-age-sex-2026-r2025a",
       "dimensions": ["age_band", "sex"],
-      "status": "registered_but_not_ingested",
-      "note": "Country age/sex rasters were out of scope for the AOI-scoped pull. age_band is therefore 'unknown' for every person rather than an invented distribution."
+      "status": "ingested_per_cell",
+      "note": "Ingested per cell from the 20 band rasters, not as a national marginal. The age/sex rasters are 2026 estimates while the resident baseline is 2020, so the age structure is structurally plausible but not contemporaneous with the population it is applied to."
     }
   ],
   "agent_representation": {
@@ -62,6 +62,14 @@
       "source": "scenario"
     }
   ],
+  "age_structure": {
+    "source_id": "worldpop-tha-age-sex-2026-r2025a",
+    "status": "ingested_per_cell",
+    "mode": "per_cell",
+    "bands": null,
+    "raster_dir": "data/staged/population/agesex",
+    "note": "ENABLED 2026-10-10 on North's decision. Samples the 20 WorldPop age-band rasters at each population cell centre (nearest-neighbour). The nearest-neighbour lookup IS the declared reprojection: the age/sex grid is 9953x17824 and the population grid is 9952x17816, one column and eight rows apart, so the grids are aligned explicitly rather than assumed to coincide. Acquire the 22 rasters (2.5 GB, CC BY 4.0, DOI 10.5258/SOTON/WP00841) into raster_dir before any run; a missing raster aborts the run rather than silently falling back. Per-file SHA-256, the national marginal and the per-AOI comparison are recorded in data/curated/population/age_sex_national_marginals.json and age_sex_aoi_comparison.json. mode 'national' is available but NOT defensible here: the national 65+ share is 16.35% while the four pilot AOIs actually run 9.48% to 19.29%."
+  },
   "sex_split": {
     "male": 0.489,
     "female": 0.511,
@@ -81,7 +89,7 @@
   "warnings": [
     "Resident counts are a 2020 modelled surface, not a count of people present at any moment.",
     "No external administrative control total was ingested, so population control error is unverified.",
-    "Age structure is unknown for every person; no age-structure source passed the licence gate.",
+    "Age structure comes from a 2026 modelled age/sex raster applied to a 2020 resident baseline; the years differ, and the structure is aggregate, not household composition.",
     "Sex split is a declared prior, not a measured Bangkok marginal.",
     "Household membership, vehicle access and assistance needs are scenario fields, not observations.",
     "Mobility behaviour parameters are uncalibrated priors; results remain demonstration status."

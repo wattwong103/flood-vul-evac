@@ -496,3 +496,134 @@ def test_pilot_drift_at_either_publication_check_stays_failed(pilot_inputs, monk
     run = next(pilot_inputs.iterdir())
     assert read_json(run / "run_state.json")["state"] == "failed_source_changed"
     assert (run / "manifest.json").exists() == (check_number == 2)
+
+
+def test_published_population_qa_does_not_claim_a_licence_failure(pilot_inputs):
+    """A run must not state that a licence gate refused a source it never asked for.
+
+    The registry approves an age/sex source that this build simply does not
+    ingest for an AOI-scoped pull. Recording that as a licence failure writes a
+    false provenance claim into an immutable run record.
+    """
+    result = runner.execute_run(
+        run_id="qa-honest", pilot_id="khlong-san-district", flood_enabled=True, max_agents=5
+    )
+    demographics = read_json(Path(result["run_dir"]) / "population_qa.json")["demographics"]
+
+    assert demographics["age_bands"] == {"unknown": 1.0}
+    assert demographics["age_structure_source"] == "not_configured"
+    assert "licence" not in demographics["age_structure_source"]
+    # The approved-but-uningested source stays named, so the gap remains visible.
+    assert demographics["age_structure_status"] == "not_ingested"
+
+
+def test_configured_age_structure_flows_through_to_persons(pilot_inputs):
+    """When bands are configured, persons carry them and the QA reports the source."""
+    config_path = runner.CONFIG_DIR / "population.json"
+    original = read_json(config_path)
+    config = dict(original)
+    config["age_structure"] = dict(original.get("age_structure", {}))
+    config["age_structure"]["mode"] = "national"
+    config["age_structure"]["bands"] = {"0_17": 0.25, "18_64": 0.60, "65_plus": 0.15}
+    write_json(config_path, config)
+    try:
+        result = runner.execute_run(
+            run_id="qa-aged", pilot_id="khlong-san-district", flood_enabled=True, max_agents=5
+        )
+    finally:
+        write_json(config_path, original)
+
+    run_dir = Path(result["run_dir"])
+    demographics = read_json(run_dir / "population_qa.json")["demographics"]
+    assert demographics["age_structure_source"] == "worldpop-tha-age-sex-2026-r2025a"
+    assert demographics["age_bands"] == {"0_17": 0.25, "18_64": 0.60, "65_plus": 0.15}
+
+    persons = pd.read_parquet(run_dir / "persons.parquet")
+    assert "unknown" not in set(persons["age_band"])
+    assert set(persons["age_band"]) == {"0_17", "18_64", "65_plus"}
+    assert not any("no age-structure source passed the licence gate" in w for w in demographics.get("warnings", []))
+
+
+def test_per_cell_age_structure_uses_the_real_rasters(pilot_inputs, tmp_path, monkeypatch):
+    """The per_cell path must reach real persons without inventing anything.
+
+    Uses a tiny synthetic raster set standing in for the WorldPop band files, so
+    the test proves the wiring, the normalisation and the fallback, not the
+    contents of a 2.5 GB external download.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+    from bkkflow.sources import population_age
+
+    raster_dir = tmp_path / "agesex"
+    raster_dir.mkdir()
+    # Cover the pilot AOI (approx lon 100.4995-100.5025, lat 13.7195-13.7215)
+    # at the WorldPop 3-arc resolution, so the real pilot cells land inside.
+    size = 16
+    transform = from_origin(100.4950, 13.7250, 0.0008333, 0.0008333)
+    rows, cols = np.mgrid[0:size, 0:size]
+    arrays = {
+        "05": np.full((size, size), 100.0, dtype="float32"),
+        # Vary strongly with position so cells genuinely disagree.
+        "30": (cols * 10.0 + rows).astype("float32"),
+    }
+    for code in population_age.BAND_CODES:
+        data = arrays.get(code, np.zeros((size, size), dtype="float32"))
+        path = raster_dir / f"tha_t_{code}_2026_CN_100m_R2025A_v1.tif"
+        with rasterio.open(
+            path, "w", driver="GTiff", height=size, width=size, count=1,
+            dtype="float32", crs="EPSG:4326", transform=transform, nodata=-99999.0,
+        ) as dst:
+            dst.write(data, 1)
+
+    cells = pd.DataFrame({
+        "cell_id": ["left", "right"],
+        "lon": [100.4996, 100.5024],
+        "lat": [13.7214, 13.7214],
+    })
+    weights = population_age.age_weights_by_cell(cells, raster_dir)
+    assert weights["left"] != weights["right"], "per-cell sampling must vary by cell"
+    for cell in weights.values():
+        assert sum(cell.values()) == pytest.approx(1.0, rel=1e-6)
+
+    config_path = runner.CONFIG_DIR / "population.json"
+    original = read_json(config_path)
+    config = dict(original)
+    config["age_structure"] = {
+        **dict(original.get("age_structure", {})),
+        "mode": "per_cell",
+        "raster_dir": str(raster_dir),
+    }
+    write_json(config_path, config)
+    try:
+        result = runner.execute_run(
+            run_id="qa-percell", pilot_id="khlong-san-district", flood_enabled=True, max_agents=5
+        )
+    finally:
+        write_json(config_path, original)
+
+    run_dir = Path(result["run_dir"])
+    demographics = read_json(run_dir / "population_qa.json")["demographics"]
+    assert demographics["age_structure_mode"] == "per_cell"
+    assert demographics["age_structure_spatial"] is True
+    assert demographics["age_structure_source"] == "worldpop-tha-age-sex-2026-r2025a"
+
+    persons = pd.read_parquet(run_dir / "persons.parquet")
+    assert "unknown" not in set(persons["age_band"])
+    assert set(persons["age_band"]) <= {"5_9", "30_34"}
+    # Spatial variation must survive into the persons, not be flattened.
+    per_cell_share = persons.groupby("home_cell_id").apply(
+        lambda g: g.loc[g["age_band"] == "5_9", "weight"].sum() / g["weight"].sum(),
+        include_groups=False,
+    )
+    assert per_cell_share.nunique() > 1, "all cells collapsed to one share"
+
+
+def test_missing_band_rasters_fail_loudly_rather_than_silently(tmp_path):
+    """A partial download must not be mistaken for a real age structure."""
+    from bkkflow.sources import population_age
+
+    cells = pd.DataFrame({"cell_id": ["a"], "lon": [0.5], "lat": [0.5]})
+    with pytest.raises(FileNotFoundError, match="band rasters are absent"):
+        population_age.age_weights_by_cell(cells, tmp_path / "empty")

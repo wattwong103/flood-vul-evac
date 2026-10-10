@@ -83,7 +83,6 @@ def build_population_cells(
     if geometry.geom_type == "MultiPolygon":
         geometry = max(geometry.geoms, key=lambda part: part.area)
 
-    rows: list[dict[str, Any]] = []
     with rasterio.open(raster_path) as dataset:
         nodata = dataset.nodata if dataset.nodata is not None else 0
         source_crs = dataset.crs
@@ -224,17 +223,42 @@ def reconcile_to_controls(
     return rebuilt, report
 
 
+def _normalised_bands(mapping: dict[str, float]) -> tuple[list[str], np.ndarray]:
+    """Turn an arbitrary band->weight mapping into normalised labels and shares.
+
+    Callers supply shares, but any scale is accepted so a caller never has to
+    pre-divide. Non-positive weights drop out; an empty or all-zero mapping
+    collapses to the explicit ``unknown`` band rather than producing NaNs.
+    """
+    labels: list[str] = []
+    weights: list[float] = []
+    for label, value in mapping.items():
+        weight = float(value)
+        if weight > 0:
+            labels.append(label)
+            weights.append(weight)
+    if not labels:
+        return ["unknown"], np.array([1.0])
+    array = np.array(weights, dtype="float64")
+    return labels, array / array.sum()
+
+
 def assign_demographics(
     cells: pd.DataFrame,
     *,
     sex_shares: dict[str, float] | None,
     age_bands: dict[str, float] | None,
+    age_bands_by_cell: dict[str, dict[str, float]] | None = None,
 ) -> pd.DataFrame:
     """Attach demographic classes to cells from approved aggregate marginals.
 
-    When an age structure source has not passed the licence gate, ``age_band``
-    is set to ``unknown`` for every person. That is a deliberate, visible gap:
-    the alternative would be an invented age distribution presented as data.
+    ``age_bands`` is a single national marginal applied to every cell.
+    ``age_bands_by_cell`` carries a separate marginal per ``cell_id`` and takes
+    precedence, which is what makes spatially varying structure possible; a
+    cell with no entry falls back to ``age_bands``, then to ``unknown``.
+
+    ``unknown`` is a deliberate, visible gap: an invented age distribution
+    presented as data would be worse than admitting the missing source.
     """
     if sex_shares:
         male = float(sex_shares.get("male", 0.5))
@@ -244,19 +268,18 @@ def assign_demographics(
     else:
         male, female = 0.5, 0.5
 
-    if age_bands:
-        bands = list(age_bands.items())
-        band_labels = [label for label, _ in bands]
-        band_weights = np.array([weight for _, weight in bands], dtype="float64")
-        band_weights = band_weights / band_weights.sum()
-    else:
-        band_labels, band_weights = ["unknown"], np.array([1.0])
+    fallback = _normalised_bands(age_bands) if age_bands else (["unknown"], np.array([1.0]))
+    per_cell = {
+        str(cell_id): _normalised_bands(mapping)
+        for cell_id, mapping in (age_bands_by_cell or {}).items()
+    }
 
     records = []
     for row in cells.itertuples():
         cell_total = float(row.pop_scaled)
         if cell_total <= 0:
             continue
+        band_labels, band_weights = per_cell.get(str(row.cell_id), fallback)
         remaining = cell_total
         for index, (label, share) in enumerate(zip(band_labels, band_weights)):
             for sex_code, sex_share in (("F", female), ("M", male)):
