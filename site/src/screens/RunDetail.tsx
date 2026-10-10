@@ -96,10 +96,12 @@ export function StageRail({
     <>
       <ol className="stage-rail">
         {names.map((name) => {
-          const match = stages.find(
-            (stage) => stageName(stage.stage).includes(name) ||
-              name.includes(stageName(stage.stage)),
-          );
+          const match = scale === "city"
+            ? stages.find((stage) => stageName(stage.stage) === name)
+            : stages.find(
+                (stage) => stageName(stage.stage).includes(name) ||
+                  name.includes(stageName(stage.stage)),
+              );
           const state = normaliseStatus(match?.status ?? null) || "not reported";
           return (
             <li key={name} className={`stage state-${state.replace(/\s+/g, "-")}`}>

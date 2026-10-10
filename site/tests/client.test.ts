@@ -71,6 +71,8 @@ test("run detail uses recorded city stages but keeps the canonical pilot rail", 
     const stages = [
       { stage: "sources", status: "completed", rows: 3, seconds: 1 },
       { stage: "network", status: "completed", rows: 60, seconds: 2 },
+      { stage: "water", status: "completed", rows: 7, seconds: 4 },
+      { stage: "observed_water", status: "partial", rows: 11, seconds: 9 },
       { stage: "map_index", status: "partial", rows: 50, seconds: 3 },
     ];
     const city = renderToStaticMarkup(createElement(StageRail, { scale: "city", stages }));
@@ -78,6 +80,14 @@ test("run detail uses recorded city stages but keeps the canonical pilot rail", 
     assert.match(city, /<b>network<\/b>/);
     assert.match(city, /<b>map_index<\/b>/);
     assert.doesNotMatch(city, /<b>(?:people|activities|trips|trajectories)<\/b>/);
+    const stageItem = (name: string) => {
+      const marker = `<b>${name}</b>`;
+      const markerAt = city.indexOf(marker);
+      assert.notEqual(markerAt, -1);
+      return city.slice(city.lastIndexOf("<li", markerAt), city.indexOf("</li>", markerAt));
+    };
+    assert.match(stageItem("water"), /completed[\s\S]*7 rows[\s\S]*4\.0 s/);
+    assert.match(stageItem("observed_water"), /partial[\s\S]*11 rows[\s\S]*9\.0 s/);
 
     const pilot = renderToStaticMarkup(createElement(StageRail, {
       scale: "pilot", stages: [{ stage: "people", status: "completed", rows: 10 }],
