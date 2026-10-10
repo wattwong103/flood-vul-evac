@@ -150,8 +150,9 @@ Immutable city run `be6a4e08-e2d7-4dd9-bf8b-4f2a02a12a81` executed entirely
 at that commit on 4 October: 831 seconds, 8/8 internal checks, zero schema
 issues and 12/12 recorded output hashes verified. Source identity is external
 evidence for this historical run, not a field retrospectively added to its manifest.
-The source-matched test gate was 212 Python/API and 14 frontend tests; build and
-lint passed, with 11 existing lint warnings. No GitHub CI checks are configured.
+The source-matched test gate was 212 Python/API and 14 frontend tests; the
+frontend build and ESLint passed with 11 warnings. No GitHub CI checks are
+configured.
 
 | Result | Verified value | Interpretation |
 |---|---|---|
@@ -192,7 +193,8 @@ PR descriptions. Generated runs and data stay outside Git. The app serves real
 saved artifacts; it does not fabricate absent hazard or capacity fields.
 
 Final combined verification on 4 October passed 230 Python/API tests and 17
-frontend tests; production build and lint passed (11 existing lint warnings).
+frontend tests; the frontend production build and ESLint passed with 11
+warnings.
 Fresh city run `4ecad6e0-c072-46e5-b818-6c4f3f259eaf` completed in 857.3 seconds
 at source `0ecf18a2107631a23442da3c3274cea3dbe6507d`, tree
 `638ba97c225669cc759992f333e8b70c6d59cb4f`. Its manifest records clean scoped
@@ -202,6 +204,11 @@ It passed 8/8 internal checks with zero schema issues. This is a new run;
 the historical evidence above remains attributed to its original source.
 Later README/status edits only document this result and correct city height
 coverage to 92.0% unknown; they do not change the executable source.
+
+The README city table belongs to `be6a4e08`, not `4ecad6e0`. The later
+`4ecad6e0` verification reproduced the same headline network, building and
+population inventories, but it is a separate historical run and does not
+reattribute that table. Neither run is current after the OSM source re-freeze.
 
 ## External evidence now available
 
@@ -247,13 +254,13 @@ release attempt.
 | HIGH city result superseded | Every city number, including the README city table and the 76.1429 km² unreconciled-area figure, was derived from the earlier BBBike cache. Geofabrik staging produced 71% more road ways and 57% more buildings, but that delta is not a completeness estimate. No city run exists on the re-frozen source. | North + implementer: decide whether to re-run the city baseline on `geofabrik-thailand-osm-20261009`, and resolve the unattributed `bangkok-bma` AOI polygon first. Until then the city layer has **no current result** and its README numbers must not be cited. |
 | MEDIUM BKK-009 boundaries | 76.1429 km² of the BMA lies outside the 50 OSM district union; cause unverified | Data steward + North: acquire authoritative geometry with reuse terms and reconcile the difference. The [BMA 50-district catalog](https://data.go.th/en/dataset/50) currently says “License not specified,” so it is a lead, not an admitted input. |
 | MEDIUM BKK-009 population | Controls audited, not ingested or concept-matched | North selects resident/registered/de-facto target; implementer adds district crosswalk, date matching and reconciliation tests. |
-| HIGH scientific gate: terrain/event | Actual bare-earth tiles, datum, forcing and held-out validation absent | Data steward: pursue [RTSD LiDAR catalog](https://data.go.th/en/dataset/lidar-1) and [GISTDA event extent](https://opendata.gistda.or.th/th/dataset/disasters-03). A coverage index or extent product is not depth. |
+| HIGH scientific gate: terrain/event | Actual bare-earth tiles, datum, forcing and held-out validation absent | Data steward: pursue the [RTARF-published catalog of RTSD LiDAR surveys](https://data.go.th/en/dataset/lidar-1) and [GISTDA event extent](https://opendata.gistda.or.th/th/dataset/disasters-03). A coverage index or extent product is not depth. |
 | HIGH scientific gate: destinations | No verified capacity, operator, accessibility, inspection date or flood-safe access | North/data steward: obtain district/operator records through [BMA NOW](https://now.bangkok.go.th) and institutional channels; record reuse terms and retrieval evidence. |
 | MEDIUM BKK-016 calibration/uncertainty | Two-mode priors, weighted-agent draws and one-at-a-time sensitivity | Scientific owner: define OTP target population, modes/purposes/distributions, weighted-agent interpretation and interaction-aware uncertainty before calibration claims. |
 | MEDIUM BKK-017 driving | City routing is undirected | Implementer: preserve one-way/access restrictions and test direction before publishing vehicle results. Current reported screen is pedestrian. |
 | MEDIUM BKK-018 failed-run visibility | New source-tracked runs are intentionally hidden until published; manifest-bearing failures appear in API `skipped`, but the warning lacks the failure reason | Implementer: expose operator-facing failure state/reason without serving unfinished scientific results. Runs without a manifest still require local diagnostics. |
 | LOW BKK-019 display consistency | City stage table is complete, but the rail uses pilot stage names; an error phase with no error object would display loading | Implementer: use scale-specific stage names and preserve the error-state invariant. Current statistics hook supplies an error object on failure. |
-| LOW maintenance | Repeated viewport counts, visibility-toggle refetches, anchor-loop performance, existing lint warnings | Implementer: profile first; preserve public-layer completeness and method semantics. |
+| LOW maintenance | Repeated viewport counts, visibility-toggle refetches, anchor-loop performance, historical frontend lint warnings | Implementer: profile first; preserve public-layer completeness and method semantics. |
 
 ## Handoff and use
 
@@ -406,21 +413,25 @@ Each contains three PNG figures and one evidence markdown file.
 ## Age structure enabled per cell — North, 10 October 2026
 
 `config/population.json` now sets `age_structure.mode: "per_cell"` with
-`raster_dir: data/staged/population/agesex`. Age is sampled from the 20 WorldPop
-age-band rasters at each population cell centre, supplying a known band for
-most people rather than assigning a national marginal.
+`raster_dir: data/staged/population/agesex`. Age is sampled from 20 total-sex
+WorldPop age-band rasters at each population cell centre, supplying a known
+band for most people rather than assigning a national marginal. Two additional
+male/female national-total rasters support acquisition QA only; the run keeps
+sex as a declared prior rather than presenting those totals as local sex data.
 
 | | |
 |---|---|
 | `population_version` in config | `bkk-pop-v0.3-khlongsan-2020-agesex` — **not** what the eight release runs record; see the defect above |
 | Source | `worldpop-tha-age-sex-2026-r2025a`, CC BY 4.0, DOI 10.5258/SOTON/WP00841 |
-| Acquisition | 22 rasters, 2.5 GB, under `data/staged/` (git-ignored) |
+| Acquisition | 22 rasters, 2.5 GB: 20 age bands used by the runner + 2 national sex-total QA rasters; all under `data/staged/` (git-ignored) |
 | Reprojection | nearest-neighbour at cell centres; age grid 9953×17824 vs population 9952×17816 |
 
 Why per cell rather than the national marginal: the national 65+ share is
-16.35 %, but the four pilot AOIs actually run **9.48 % to 19.29 %**. Because
-`65+` drives `assistance_need`, a national marginal would misstate who needs
-assisted evacuation in three of the four areas, worst in Min Buri by 6.87 pp.
+16.35 %, but the four pilot AOIs actually run **9.48 % to 19.29 %**. A national
+marginal would flatten that spatial variation and misstate AOI age composition,
+worst in Min Buri by 6.87 pp. It would not change `assistance_need`, which the
+current model derives from the sampled mobility profile's declared assistance
+flag rather than age; it is not an independently calibrated probability draw.
 
 Reported release `age_bands` for a `per_cell` run is a
 **population-weighted aggregate over covered cells**. The release label
@@ -447,9 +458,9 @@ Temporal caveat, carried in the config warnings: the age/sex rasters are 2026
 estimates applied to a 2020 resident baseline. The structure is plausible but
 not contemporaneous.
 
-Measured marginals and per-file checksums are committed under
-`data/curated/population/`; the rasters themselves are not, so a fresh clone
-must acquire them before any run.
+Existing small marginal and source-checksum metadata are tracked under
+`data/curated/population/`; the 2.5 GB rasters and run outputs are not. A fresh
+clone must acquire the rasters before any age-structured run.
 
 That the fix works is verified from the code, not assumed. `city_runner.py`
 writes all three missing artefacts into the run directory and registers each as

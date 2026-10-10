@@ -13,7 +13,7 @@ canal-distance surface to a Bangkok depth model.
 
 | Priority | Gate | Current evidence | Next action | Pass condition |
 |---|---|---|---|---|
-| P0 | Terrain | SRTM-lineage surfaces fail local checks. Copernicus GLO-30 is a DSM whose published vertical accuracy is too coarse for the 0–2 m signal. | Obtain the RTARF Central Basin LiDAR index and determine whether referenced ground data cover Bangkok. | Exact tiles, explicit reuse terms, CRS and vertical datum recorded; ground-classified DTM passes held-out checkpoints. |
+| P0 | Terrain | SRTM-lineage surfaces fail local checks. Copernicus GLO-30 is a DSM whose published vertical accuracy is too coarse for the 0–2 m signal. | Obtain the RTARF-published index of RTSD Central Basin LiDAR surveys and determine whether referenced ground data cover Bangkok. | Exact tiles, explicit reuse terms, CRS and vertical datum recorded; ground-classified DTM passes held-out checkpoints. |
 | P0 | Event forcing | No reusable rainfall and water-level series is in a run. | Clear a specific BMA/TMD rainfall resource and river/tide boundary series through the licence gate. | Timestamped, gap-audited forcing spans the chosen event and is archived with checksums. |
 | P0 | Flood validation | JRC annual water is observed extent but cannot resolve a short event or depth. | Add time-specific GISTDA extent or independently classified Sentinel-1 acquisitions for held-out events. | Acquisition time and uncertainty recorded; extent metrics are reported on dates excluded from calibration. |
 | P0 | Refuge safety | OSM supplies 1,400 candidates and zero verified refuges. | Build an operator-reviewed inventory with capacity, opening conditions, accessible entrance, usable floor and review date. | A record is routable as a refuge only after every required field is verified. |
@@ -28,7 +28,7 @@ canal-distance surface to a Bangkok depth model.
    WorldPop totals, official registered totals and reconciled totals side by
    side. Never call any of these a daytime population.
 2. **Resolve LiDAR access before writing a city depth solver.** The official
-   RTARF catalogue describes 1 m Central Basin surveys with better than 15 cm
+   RTARF-published catalogue describes 1 m RTSD Central Basin surveys with better than 15 cm
    vertical accuracy, but the public resource found here is a coverage index.
    Treat the underlying tiles as unavailable until download, licence and
    Bangkok coverage are proven.
@@ -65,7 +65,7 @@ canal-distance surface to a Bangkok depth model.
 
 ## Primary source record
 
-- RTARF LiDAR coverage index: <https://data.go.th/en/dataset/lidar>
+- RTARF-published RTSD LiDAR coverage index: <https://data.go.th/en/dataset/lidar-1>
 - Copernicus DEM specification and access: <https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM>
 - DOPA/NSO district population controls: <https://data.go.th/en/dataset/0405_01_0005>
 - Google Open Buildings 2.5D: <https://sites.research.google/gr/open-buildings/temporal/>

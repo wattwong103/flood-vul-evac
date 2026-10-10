@@ -6,10 +6,12 @@ BKK/FLOW claim is from this repository's code or docs.
 
 **Headline: BKK/FLOW is not yet better than Pseudo-PFLOW as a mobility dataset.**
 Pseudo-PFLOW has census-derived person attributes, calibrated behaviour and
-validated accuracy. BKK/FLOW has none of those yet. What BKK/FLOW has that
-Pseudo-PFLOW does not is **evidence integrity and a hazard dimension**. That is
-a real differentiator, but it is not a substitute, and claiming otherwise
-would be the fastest way to lose a reviewer's trust.
+validated accuracy. BKK/FLOW now has modelled per-cell age for covered
+population, but still lacks census household composition, calibrated behaviour
+and external accuracy validation; sex remains a scenario prior. What BKK/FLOW
+has that Pseudo-PFLOW does not is **evidence integrity and a hazard dimension**.
+That is a real differentiator, but it is not a substitute, and claiming
+otherwise would be the fastest way to lose a reviewer's trust.
 
 ---
 
@@ -87,7 +89,7 @@ application. **Reproducibility by an outside group is currently weak.**
 
 | Capability | Pseudo-PFLOW (JP) | BKK/FLOW (Bangkok) | Verdict |
 |---|---|---|---|
-| Person age / sex / household | Census-derived, per person | **`age_band` = `unknown` for every person**; sex split is a config literal | **JP far ahead** |
+| Person age / sex / household | Census-derived, per person | Modelled per-cell age for covered population; missing coverage stays `unknown`; sex is a scenario prior; no household synthesis | **JP ahead** |
 | Behaviour calibration | Markov + MNL, LHS-tuned to mode-share targets | Two-mode generator, explicitly uncalibrated; OTP control 1.97 trips/person/day vs pilot audit 3.712 | **JP ahead** |
 | Accuracy validation | R² 0.81 vs mobile phone; R² 0.5–0.98 across metrics | Internal checks only; a calibrated-mobility claim is explicitly rejected | **JP ahead** |
 | Geographic scale | 1,724 municipalities, 130 M people | 5.96 km² pilot + 1,643 km² city | **JP ahead** |
@@ -110,40 +112,42 @@ they are different axes.
 
 ---
 
-## 3. The single biggest actionable gap
+## 3. Historical age-attribute gap and its resolution
 
-Pseudo-PFLOW's first product is per-person demographics. BKK/FLOW currently
-ships **`age_band = "unknown"` for 100% of people**.
+Pseudo-PFLOW's first product is per-person demographics. Before per-cell age was
+enabled, BKK/FLOW shipped **`age_band = "unknown"` for 100% of people**.
 
-That is the right call *as things stand* — an invented age distribution
-presented as data would be worse. But the justification recorded in the code
-is now **contradicted by the project's own source registry**.
+That was the right call for the evidence available to that code path: an
+invented age distribution presented as data would have been worse. The audit
+then found that its justification was contradicted by the project's own source
+registry, which prompted the source acquisition and per-cell work below.
 
-`pipeline/bkkflow/runner.py:321` hardcodes:
+The pre-enablement runner recorded in this audit hardcoded:
 
 ```python
 age_bands=None,  # no age source passed the gate: recorded as unknown
 ```
 
-and `population_qa` reports `"age_structure_source": "none_passed_licence_gate"`.
-`pipeline/bkkflow/city_runner.py:361` similarly hardcodes
-`sex_shares={"male": 0.49, "female": 0.51}`.
+and reported `"age_structure_source": "none_passed_licence_gate"`.
+The city runner similarly used a declared sex prior. These are historical
+diagnostics, not the current age-availability state; sex remains a prior.
 
-Meanwhile `data/source-registry.json` contains **two approved, licence-cleared
-sources that are never wired in**:
+At that stage `data/source-registry.json` already contained **two approved,
+licence-cleared sources that were not yet wired in**:
 
 | source_id | Dataset | Licence | Status |
 |---|---|---|---|
 | `worldpop-tha-age-sex-2026-r2025a` | Thailand age and sex structures 2026 R2025A | CC BY 4.0 | `approved` |
 | `nso-dopa-population-district-sex-2564-2568` | Registered population by area, sex, district, 2021–2025 | CC Attribution | `approved` |
 
-And the capability is **already implemented**:
-`population.assign_demographics(cells, *, sex_shares, age_bands)` normalises
-and applies band weights at `pipeline/bkkflow/population.py:247-253`. The
-parameter exists; nothing passes it.
+The base capability to apply one age mapping was **already implemented**:
+`population.assign_demographics(cells, *, sex_shares, age_bands)` normalised
+and applied band weights, but no caller then supplied the source. The current
+implementation also accepts per-cell bands and reports missing coverage.
 
-**The plumbing is done and the input is approved.** But whether the gap closes
-depends on geography, not plumbing — see below.
+The audit therefore moved from plumbing to the geographic applicability test
+below. That test led to the current per-cell implementation, rather than use of
+the unsuitable national marginal.
 
 ### Feasibility verified 10 October 2026 — with two corrections
 
@@ -154,9 +158,9 @@ CC BY 4.0, DOI `10.5258/SOTON/WP00841`.
 Download pattern is `tha_{sex}_{band}_2026_CN_100m_R2025A_v1.tif` where
 `sex` ∈ {m, f, t} and `band` ∈ {00, 01, 05, 10 … 90} (**20** bands).
 
-**Correction 1 — it is one wiring step plus a 2.5 GB acquisition, not just
-wiring.** The marginals are not published as a table; they must be derived from
-the rasters:
+**Correction 1 — at the feasibility stage this required one wiring step plus a
+2.5 GB acquisition, not just wiring.** The marginals are not published as a
+table; they must be derived from the rasters:
 
 | Need | Files | Size |
 |---|---:|---:|
@@ -199,7 +203,7 @@ Derived national structure:
 | 65 and over | 16.35 % |
 | Male / female | 48.62 % / 51.38 % |
 
-### The recommendation changes — do not apply these to the pilot AOIs
+### Historical national-marginal decision — do not apply these to the pilot AOIs
 
 **Sex needs no change.** The measured national split (48.62 / 51.38) sits within
 **0.28 percentage points** of the existing declared prior (48.9 / 51.1). The
@@ -212,12 +216,12 @@ under-15 share to every cell of an inner-Bangkok district would materially
 overstate children and distort trip generation, because school-age and
 pre-school children do not drive and travel on a different pattern.
 
-So the artefact is recorded as `status: NOT_APPLIED` with the reason, and the
-visible `age_band: unknown` gap **stays open**. That is the honest outcome: the
-plumbing exists, the source is approved and acquired, but the only marginal
-currently available is the wrong geography.
+At this audit stage the national-marginal artefact was recorded as
+`status: NOT_APPLIED`, and the then-visible `age_band: unknown` gap stayed open.
+That historical decision remains correct for the national marginal, but the
+availability statement is superseded by the per-cell implementation below.
 
-### Per-cell sampling was tried, and it changes the recommendation
+### Per-cell sampling changed the recommendation and is now implemented
 
 The national marginal was rejected above on the grounds that it would erase
 spatial variation. That claim was then **tested rather than asserted** by
@@ -248,17 +252,15 @@ The national marginal is not a small approximation error. Across the four AOIs
 the **65+ share ranges from 9.48 % to 19.29 %** — a factor of two — and the
 national figure (16.35 %) is wrong by up to **6.87 pp in Min Buri**.
 
-That matters more than the headline suggests. In this project `65+` drives
-`assistance_need`, which drives who is assumed to need assisted evacuation.
-Applying a national marginal would **overstate the assisted-evacuation
-population in three of four AOIs**, worst in Min Buri by nearly 7 pp.
+That difference matters for truthful demographic reporting, but it must not be
+translated into an assisted-evacuation effect. The current model assigns
+`assistance_need` from the sampled mobility profile's declared assistance flag,
+not from `age_band`; it is not an independently calibrated probability draw.
 
-**Therefore: gap 1 is closable, and per-cell age shares are the right route.**
-The obstacle is not data availability or licensing — the rasters are acquired,
-checksummed and approved. It is that `assign_demographics` currently consumes a
-single national `dict`, so using this requires changing it to accept per-cell
-bands. That is a real code change, and it should ship as its own PR with the
-temporal caveat below.
+**Therefore: per-cell age shares are the right reporting route, and they are now
+implemented.** The rasters are acquired, checksummed and approved, and
+`assign_demographics` accepts per-cell bands. This closes the age-availability
+gap; it does not calibrate assistance or evacuation behaviour.
 
 Temporal note: age/sex is **2026** while the population baseline is a **2020**
 modelled surface. The comparison is structural, not contemporaneous, and any use
@@ -276,23 +278,28 @@ Same CRS (EPSG:4326), resolution (0.0008333), dtype (float32) and nodata
 
 One column and eight rows apart. Consequence:
 
-- **National marginals are safe.** `assign_demographics` consumes
-  `age_bands: dict[str, float]` — a national marginal — so the mismatch is
-  irrelevant to what was computed above.
-- **Per-cell age structure is not available without an explicit reprojection.**
+- **The national comparison is grid-safe but geographically unsuitable.** It
+  aggregates each raster independently, so the one-column/eight-row mismatch
+  does not affect the national percentages reported above.
+- **Per-cell age structure now uses an explicit nearest-neighbour lookup.** The
+  implemented path samples the age rasters at population-cell centres and
+  reports uncovered population separately rather than silently aligning grids.
 
 This is exactly the class of silent misalignment that would corrupt results
 without raising an error. It is recorded here rather than left to be discovered
 mid-implementation.
 
-### What this would and would not fix
+### What the implemented per-cell age wiring does and does not fix
 
-Would fix:
-- `age_band` becomes sourced instead of `unknown` for every person.
-- `sex_split` stops being a hardcoded 0.49/0.51 literal.
-- Removes a HIGH-severity differentiator against Pseudo-PFLOW.
+Now fixed:
+- `age_band` is sourced for covered population cells; missing coverage remains
+  explicit as `unknown` and is reported rather than imputed.
+- The age-attribute availability gap against Pseudo-PFLOW is closed, subject to
+  the coverage and temporal caveats above.
 
-Would **not** fix:
+Still **not** fixed:
+- `sex_split` remains a declared scenario prior. The two sex-total rasters are
+  acquisition QA inputs, not local sex calibration.
 - Household composition. WorldPop age/sex is *modelled aggregate*; the registry
   note is explicit: "do not treat cells as individual records or exact
   household composition". Pseudo-PFLOW's census household synthesis stays ahead.
@@ -304,13 +311,14 @@ Would **not** fix:
 
 | # | Gap vs Pseudo-PFLOW | Cost | Why it matters |
 |---|---|---|---|
-| 1 | **Age/sex wiring** | Medium | Data acquired and checksummed. Per-cell shares are computable and vary materially across AOIs (65+ from 9.48% to 19.29%). Needs \ssign_demographics\ to accept per-cell bands. Closes the largest single attribute gap. |
+| 1 | **Age/sex validation and contemporaneity** | Medium | Per-cell age is implemented and coverage is reported, but the 2026 age structure is applied to a 2020 resident baseline, sex remains a declared prior, and new age-structured runs still need correct version labels and release evidence. |
 | 2 | **Behaviour calibration** | High | Pseudo-PFLOW tunes 7 parameters to mode-share targets; BKK/FLOW declares priors. The paper already rejects a calibrated-mobility claim on the 1.97 vs 3.712 trips/person/day mismatch. Adopting a similar LHS framework against BMA Household Travel Survey targets is the honest path. |
 | 3 | **Output cadence** | Medium | 500 m / 10 min mesh vs 1 km public grid. Not a correctness gap, but it limits comparability. |
 | 4 | **Directionality** | Low | City routing is undirected; vehicle one-way restrictions unenforced. Already tracked as BKK-017. |
 | 5 | **Transit** | High | No transit mode at all. Bangkok without transit is a structural difference, not a bug. |
 
-Gaps 1 and 4 are tractable now. Gaps 2 and 5 are research projects.
+Gap 4 is a tractable engineering change. Gap 1 requires validation and new-run
+evidence rather than more wiring. Gaps 2 and 5 are research projects.
 
 ---
 
@@ -332,13 +340,15 @@ wiring sources that are *already approved in our own registry*.
 
 ## 6. Open questions for North
 
-1. Should the age/sex wiring ship as a scoped PR alongside #55/#56, or wait
-   until the eight-run release is complete? Wiring it first changes the
-   `population_version` and therefore invalidates any run produced before it.
-2. Is the BMA Household Travel Survey obtainable with reuse terms? It is the
+The earlier age-wiring question is resolved: per-cell age is implemented, while
+the existing eight release bundles remain unchanged and do not gain age
+assignments retrospectively. Any new age-structured run must carry its current
+population version and coverage report.
+
+1. Is the BMA Household Travel Survey obtainable with reuse terms? It is the
    only credible route to closing the calibration gap, and without it gap 2 is
    permanent.
-3. Does the withdrawn Pseudo-PFLOW GitHub repository need requesting from the
+2. Does the withdrawn Pseudo-PFLOW GitHub repository need requesting from the
    Sekimoto lab for comparison, or is the specification v2.0 plus the local
    Java workspace sufficient?
 

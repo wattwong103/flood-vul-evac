@@ -1,5 +1,11 @@
 # Historical BKK-009 concern resolution and current handoff
 
+> **Historical planning snapshot.** Repository and release statements below
+> describe the 4 October 2026 freeze. For current source, the executed BKK-024
+> demonstration release and remaining gates, use
+> [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) and
+> [`RELEASE_EVIDENCE_2026-10-10.md`](RELEASE_EVIDENCE_2026-10-10.md).
+
 Updated 9 October 2026. This document began as task BKK-009, authorised to
 address the 4 October concerns and update the project state. Its historical
 baseline was merged PRs #1–#14 at main `9278893`, whose source tree matched the
@@ -27,15 +33,15 @@ test, targeted verification, then the repository-wide checks where contracts
 change. Fresh-context and separate cross-harness Claude reviews precede ready
 status. The human owns merges.
 
-## Current merged boundary and release status
+## Merged boundary and release status at the plan freeze
 
-Current `main` is `d58d08b0430cc47bf10ddb3279ee5b48472ca790`, tree
+At this plan's freeze, `main` was `d58d08b0430cc47bf10ddb3279ee5b48472ca790`, tree
 `07bcb0a988c11edc9ef7f0153f17ec0c7cfe8f11`. Human-merged PR #49 placed the
 reviewed four-area stack on main. PR #50 fixed saved-network WKT precision, and
 PR #51 fixed independent denominator reconstruction to sum original terminal
 outcome records. Exact comparisons and the approved `1e-6` tolerances remain.
 
-There is no accepted BKK-024 comparison. Release v1 stopped at the WKT replay
+At that freeze there was no accepted BKK-024 comparison. Release v1 stopped at the WKT replay
 gate after two Khlong San bundles. Release v2 stopped at the denominator replay
 gate after five of eight planned bundles. Both sets remain immutable negative
 evidence and cannot be completed, patched or pooled with a later release.
