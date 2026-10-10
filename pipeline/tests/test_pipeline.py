@@ -277,6 +277,38 @@ def test_applied_age_mapping_cannot_mix_known_and_unknown_shares(
         )
 
 
+def test_direct_age_report_rejects_mixed_known_and_unknown_shares() -> None:
+    with pytest.raises(ValueError, match="must not mix.*unknown"):
+        population.age_band_report(
+            {},
+            {"source_id": "age-source"},
+            "national",
+            {"working": 0.5, "unknown": 0.5},
+            None,
+            _cells(),
+        )
+
+
+@pytest.mark.parametrize("helper", ["assignment", "report"])
+def test_per_cell_age_validation_identifies_the_cell(helper: str) -> None:
+    cells = _cells()
+    cells["pop_scaled"] = cells["pop_count"]
+    mixed = {"c2": {"working": 0.5, "unknown": 0.5}}
+
+    with pytest.raises(ValueError, match=r"cell 'c2'.*must not mix.*unknown"):
+        if helper == "assignment":
+            population.assign_demographics(
+                cells,
+                sex_shares={"male": 0.5, "female": 0.5},
+                age_bands=None,
+                age_bands_by_cell=mixed,
+            )
+        else:
+            population.age_band_report(
+                {}, {"source_id": "age-source"}, "per_cell", None, mixed, cells
+            )
+
+
 def test_unused_per_cell_mapping_is_not_validated_or_applied() -> None:
     cells = _cells()
     cells["pop_scaled"] = cells["pop_count"]
@@ -288,6 +320,39 @@ def test_unused_per_cell_mapping_is_not_validated_or_applied() -> None:
     )
 
     assert set(demographics["age_band"]) == {"unknown"}
+    assert demographics["weight"].sum() == pytest.approx(600.0)
+
+
+def test_empty_aoi_does_not_validate_unused_per_cell_mapping() -> None:
+    cells = _cells().iloc[0:0]
+    report = population.age_band_report(
+        {},
+        {"source_id": "age-source"},
+        "per_cell",
+        None,
+        {"outside-aoi": {"working": 0.5, "unknown": 0.5}},
+        cells,
+    )
+
+    assert report["age_bands"] == {"unknown": 1.0}
+    assert report["age_coverage"]["occupied_cells_total"] == 0
+    assert report["age_coverage"]["population_weight_total"] == pytest.approx(0.0)
+    assert population.age_coverage_warning(report) is None
+
+
+def test_fully_overridden_fallback_is_not_validated_or_applied() -> None:
+    cells = _cells()
+    cells["pop_scaled"] = cells["pop_count"]
+    per_cell = {str(cell_id): {"working": 1.0} for cell_id in cells["cell_id"]}
+
+    demographics = population.assign_demographics(
+        cells,
+        sex_shares={"male": 0.5, "female": 0.5},
+        age_bands={"working": 0.5, "unknown": 0.5},
+        age_bands_by_cell=per_cell,
+    )
+
+    assert set(demographics["age_band"]) == {"working"}
     assert demographics["weight"].sum() == pytest.approx(600.0)
 
 

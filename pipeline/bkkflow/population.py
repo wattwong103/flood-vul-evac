@@ -253,6 +253,16 @@ def _normalised_bands(mapping: dict[str, float]) -> tuple[list[str], np.ndarray]
     return labels, array / array.sum()
 
 
+def _normalised_cell_bands(
+    cell_id: str, mapping: dict[str, float]
+) -> tuple[list[str], np.ndarray]:
+    """Normalise an applied cell mapping while preserving diagnostic context."""
+    try:
+        return _normalised_bands(mapping)
+    except ValueError as exc:
+        raise ValueError(f"invalid age mapping for cell {cell_id!r}: {exc}") from exc
+
+
 def assign_demographics(
     cells: pd.DataFrame,
     *,
@@ -278,12 +288,7 @@ def assign_demographics(
     else:
         male, female = 0.5, 0.5
 
-    has_population = bool((cells["pop_scaled"] > 0).any())
-    fallback = (
-        _normalised_bands(age_bands)
-        if age_bands and has_population
-        else (["unknown"], np.array([1.0]))
-    )
+    fallback: tuple[list[str], np.ndarray] | None = None
     per_cell = {str(cell_id): mapping for cell_id, mapping in (age_bands_by_cell or {}).items()}
     normalised_per_cell: dict[str, tuple[list[str], np.ndarray]] = {}
 
@@ -295,9 +300,17 @@ def assign_demographics(
         cell_id = str(row.cell_id)
         if cell_id in per_cell:
             if cell_id not in normalised_per_cell:
-                normalised_per_cell[cell_id] = _normalised_bands(per_cell[cell_id])
+                normalised_per_cell[cell_id] = _normalised_cell_bands(
+                    cell_id, per_cell[cell_id]
+                )
             band_labels, band_weights = normalised_per_cell[cell_id]
         else:
+            if fallback is None:
+                fallback = (
+                    _normalised_bands(age_bands)
+                    if age_bands
+                    else (["unknown"], np.array([1.0]))
+                )
             band_labels, band_weights = fallback
         remaining = cell_total
         for index, (label, share) in enumerate(zip(band_labels, band_weights)):
@@ -366,7 +379,7 @@ def age_band_report(
             mapping = applied_mapping(cell_id)
             if not has_known_band(mapping):
                 continue
-            labels, shares = _normalised_bands(mapping or {})
+            labels, shares = _normalised_cell_bands(cell_id, mapping or {})
             for label, share in zip(labels, shares):
                 if label == "unknown":
                     continue
