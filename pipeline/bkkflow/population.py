@@ -302,6 +302,64 @@ def assign_demographics(
     return pd.DataFrame.from_records(records)
 
 
+def age_band_report(
+    population_config: dict,
+    age_config: dict,
+    mode: str,
+    age_bands: dict[str, float] | None,
+    age_by_cell: dict[str, dict[str, float]] | None,
+    cells: pd.DataFrame,
+) -> dict[str, Any]:
+    """Describe the age structure actually applied, for the run manifest.
+
+    ``per_cell`` has no single national marginal, so the reported figure is the
+    population-weighted aggregate over the cells that were actually used. That
+    is a summary of real spatial variation, not an invented flat structure, and
+    it must not be mistaken for a national one.
+    """
+    if mode == "per_cell" and age_by_cell:
+        # `cells` carries pop_count; pop_scaled is only materialised on the
+        # frame handed to assign_demographics, so read whichever is present.
+        weight_column = "pop_scaled" if "pop_scaled" in cells.columns else "pop_count"
+        totals: dict[str, float] = {}
+        for row in cells.itertuples():
+            weight = float(getattr(row, weight_column, 0.0) or 0.0)
+            if weight <= 0:
+                continue
+            for label, share in age_by_cell.get(str(row.cell_id), {}).items():
+                totals[label] = totals.get(label, 0.0) + weight * float(share)
+        grand = sum(totals.values())
+        reported = (
+            {label: round(value / grand, 6) for label, value in sorted(totals.items())}
+            if grand > 0
+            else {"unknown": 1.0}
+        )
+    elif mode == "national" and age_bands:
+        reported = {label: float(share) for label, share in age_bands.items()}
+    else:
+        reported = {"unknown": 1.0}
+
+    return {
+        "age_bands": reported,
+        "age_band_basis": (
+            "population_weighted_over_cells"
+            if mode == "per_cell"
+            else ("national_marginal" if mode == "national" else "none")
+        ),
+        "age_structure_mode": mode,
+        "sex_split": population_config.get("sex_split") or {"male": 0.5, "female": 0.5},
+        # Record what actually happened. "not_configured" means this build
+        # supplies no age structure; it does NOT mean a licence gate refused
+        # one. The registry holds approved age/sex sources, and reporting a
+        # licence failure would state something false in the run record.
+        "age_structure_source": (
+            age_config.get("source_id", "unknown") if mode != "none" else "not_configured"
+        ),
+        "age_structure_status": age_config.get("status", "unknown"),
+        "age_structure_spatial": mode == "per_cell",
+    }
+
+
 def make_weighted_persons(
     cells: gpd.GeoDataFrame,
     demographics: pd.DataFrame,

@@ -148,21 +148,25 @@ def test_reconstruct_cohort_metrics_matches_saved_bundle(published_run: Path) ->
 
 def _split_terminal_bundle(bundle: replay_audit.AuditBundle) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     sample, present, cohort = replay_audit._derive_populations(bundle)
-    splits = (
-        (8.882412251852449, 88.91758774814755),
-        (52.13314519160798, 50.06685480839202),
-        (24.649969248210954, 24.250030751789044),
+    # Split each source row's own weight across two terminal outcomes. The
+    # fractions are fixed, but the weights are read from the run: hardcoding
+    # absolute weights would silently break the moment the population changes
+    # (as it did when per-cell age structure was enabled).
+    fractions = (
+        8.882412251852449 / 97.8,
+        52.13314519160798 / 102.2,
+        24.649969248210954 / 48.9,
     )
+    rows = bundle.tables["evacuation_states"].to_dict("records")
     records = []
-    for row, (arrived_weight, full_weight) in zip(
-        bundle.tables["evacuation_states"].to_dict("records"), splits, strict=True,
-    ):
-        records.append({**row, "weight": arrived_weight})
+    for row, fraction in zip(rows, fractions, strict=True):
+        total = float(row["weight"])
+        records.append({**row, "weight": total * fraction})
         records.append({
             **row,
             "state": "shelter_full",
             "reason": "capacity_exhausted",
-            "weight": full_weight,
+            "weight": total * (1.0 - fraction),
             "outcome_id": f"{row['source_person_id']}:shelter_full:1",
         })
     states = pd.DataFrame(records, columns=bundle.tables["evacuation_states"].columns)
