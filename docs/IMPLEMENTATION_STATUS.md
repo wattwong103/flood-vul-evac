@@ -280,6 +280,20 @@ immutable observed-water cell snapshot; regenerate the run"*, and
 replaces the BBBike-derived city numbers with ones from the re-frozen Geofabrik
 source, so it must happen before any evidence is promoted.
 
+That the fix works is verified from the code, not assumed. `city_runner.py`
+writes all three missing artefacts into the run directory and registers each as
+a manifest output:
+
+| Output | Written by | Registered at |
+|---|---|---|
+| `observed_water_cells.parquet` | `build_observed_cells.build(out_dir=run_dir)` | `city_runner.py:666` |
+| `destinations.parquet` | `destinations_source.extract_destinations(out_dir=run_dir, …)` | `city_runner.py:307`, `:672` |
+| `observed_water.json` | current `gsw.py` notes | `city_runner.py:673` |
+
+A fresh run therefore carries its own immutable snapshots and the current note
+wording, which is exactly what the five artefact tests and the wording test
+require.
+
 Recording this correctly matters. An earlier revision of this note attributed
 the six failures to two independent causes and proposed changing run selection.
 That was wrong, and that change would have broken the per-run snapshot contract.
