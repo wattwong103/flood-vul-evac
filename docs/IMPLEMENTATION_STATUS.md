@@ -276,9 +276,53 @@ immutable observed-water cell snapshot; regenerate the run"*, and
 `api/tests/test_api.py:175-187` deliberately plants a cache file belonging to a
 *different* run and asserts the selected run's own snapshot wins.
 
-**Fix: regenerate the city run.** One action resolves all six failures *and*
-replaces the BBBike-derived city numbers with ones from the re-frozen Geofabrik
-source, so it must happen before any evidence is promoted.
+Fixing all six requires regenerating the city run. **North decided on 10 October
+2026 that the city run is NOT re-run.** Consequences, recorded rather than
+smoothed over:
+
+- The six `test_city_endpoints.py` failures **remain**. They are a known,
+  documented stale-run condition, not a regression from any change here. Any
+  green-suite claim must exclude them explicitly.
+- The city numbers derived from run `be6a4e08` stay in the README and stay
+  **superseded**: they were computed from the BBBike extract, now known to be
+  materially incomplete. The city layer therefore has **no current result**.
+- The verified fix path remains documented above, so the decision is reversible
+  if the city layer is ever needed.
+
+## Age structure enabled per cell — North, 10 October 2026
+
+`config/population.json` now sets `age_structure.mode: "per_cell"` with
+`raster_dir: data/staged/population/agesex`. Age is sampled from the 20 WorldPop
+age-band rasters at each population cell centre instead of being `unknown` for
+every person.
+
+| | |
+|---|---|
+| `population_version` | `bkk-pop-v0.3-khlongsan-2020-agesex` |
+| Source | `worldpop-tha-age-sex-2026-r2025a`, CC BY 4.0, DOI 10.5258/SOTON/WP00841 |
+| Acquisition | 22 rasters, 2.5 GB, under `data/staged/` (git-ignored) |
+| Reprojection | nearest-neighbour at cell centres; age grid 9953×17824 vs population 9952×17816 |
+
+Why per cell rather than the national marginal: the national 65+ share is
+16.35 %, but the four pilot AOIs actually run **9.48 % to 19.29 %**. Because
+`65+` drives `assistance_need`, a national marginal would misstate who needs
+assisted evacuation in three of the four areas, worst in Min Buri by 6.87 pp.
+
+Reported `age_bands` for a `per_cell` run is the **population-weighted aggregate
+over the cells actually used**, labelled `age_band_basis:
+population_weighted_over_cells`. It must not be read as a national marginal.
+
+A missing or partial raster set **aborts the run** with `FileNotFoundError`. It
+does not fall back to `unknown` or to a national figure: silently degrading the
+demographics would be the worst available outcome.
+
+Temporal caveat, carried in the config warnings: the age/sex rasters are 2026
+estimates applied to a 2020 resident baseline. The structure is plausible but
+not contemporaneous.
+
+Measured marginals and per-file checksums are committed under
+`data/curated/population/`; the rasters themselves are not, so a fresh clone
+must acquire them before any run.
 
 That the fix works is verified from the code, not assumed. `city_runner.py`
 writes all three missing artefacts into the run directory and registers each as
