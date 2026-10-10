@@ -1,0 +1,838 @@
+{
+  "release": "bkkflow-four-area-2026-10-10",
+  "boundary": {
+    "git_commit": "f4662880523c71a8439750a7fca282c5d488d97e",
+    "git_tree": "1fe700d33c2ed6c18aa1adc23caa09c9cf39d773",
+    "git_status": "clean",
+    "verification": "matched_before_publication"
+  },
+  "osm_source_id": "geofabrik-thailand-osm-20261009",
+  "note": "runs/ is git-ignored; these artefacts exist only on the producing machine. This manifest lets the set be verified after a restore and makes an accidental edit or partial deletion detectable. It does not preserve the data itself.",
+  "run_count": 8,
+  "runs": [
+    {
+      "aoi": "khlong-san-district",
+      "scenario": "dry",
+      "run_id": "2c4dcb04-a332-4f86-971c-771ba48fad3f",
+      "file_count": 21,
+      "files": {
+        "activities.parquet": {
+          "sha256": "9c945348b1bc5cde3a873a5efad2dfdf82586b81c75063a59162e63828f7dcbb",
+          "bytes": 255613
+        },
+        "aoi.parquet": {
+          "sha256": "e45dfd4b1640ee7df35a7bd2eaf60fd651fd6e2fc7b8334d048ebb84eee5f012",
+          "bytes": 19197
+        },
+        "buildings.parquet": {
+          "sha256": "937e775e875e53913175228cf1d1314d87a420bcc6496f726b5a78653945f74d",
+          "bytes": 392419
+        },
+        "cohort.parquet": {
+          "sha256": "da35316a456fe73d858a156bfbee87a3353831453da8d797a50b67d244a32c6f",
+          "bytes": 127214
+        },
+        "cohort_metadata.json": {
+          "sha256": "1b5f57f3a404608ae2b03226fc084021ee7acf49be8b6b507315268370c401bf",
+          "bytes": 1270
+        },
+        "denominators.json": {
+          "sha256": "1853d3633bbac3732abac788ac5805a1d4b7af2a3f984f980d61f76164b0bbab",
+          "bytes": 3680
+        },
+        "edge_states.parquet": {
+          "sha256": "0d214b27353cb2f57b2fd64536d9dca927044c4e37349e68d79f99eef503ad59",
+          "bytes": 1440109
+        },
+        "evacuation_states.parquet": {
+          "sha256": "6a736a54fc93d71d7eeea93e93cf62dc035ab59aeb86a3d497bfe4646094f000",
+          "bytes": 131504
+        },
+        "flood_slices.parquet": {
+          "sha256": "33fc77051f6cb9a634c7c32e0e333946025e59fc503e01921c54cd430cff9c5d",
+          "bytes": 12726
+        },
+        "link_volume.parquet": {
+          "sha256": "c242985ba52e0d53a22cdde9e51e2005ec34a5d61bce10830ed022572589ca20",
+          "bytes": 146756
+        },
+        "manifest.json": {
+          "sha256": "afda8623b13d53bffa22fbd053a04fc8077112dab635e5e142310681bee408a4",
+          "bytes": 10905
+        },
+        "mesh_volume.parquet": {
+          "sha256": "90218c28d3b75d1b4cd8286dcbdc59340d32afc6417de2fd3a3be511b76aec21",
+          "bytes": 597879
+        },
+        "network_edges.parquet": {
+          "sha256": "173f33a26c28e0f70fdc74da4d50d3a22715c0f9cdebec7d6d98efb40a26a3e1",
+          "bytes": 656211
+        },
+        "persons.parquet": {
+          "sha256": "38633929381c3fd7350b94a43af224a7084852a393bafb7f00980c82843257bc",
+          "bytes": 1035530
+        },
+        "population_qa.json": {
+          "sha256": "2818310eb04daca907649b0f577e365681e239fdb0d40991f58e07461fd05139",
+          "bytes": 2424
+        },
+        "refuges.parquet": {
+          "sha256": "63d80600a331331eace06a2bf70e9241aeb8bbd70b8e2175e759796da716c9d6",
+          "bytes": 6326
+        },
+        "run_state.json": {
+          "sha256": "32721f594a845494060a09bfc5997469db09cb80ae84123bc190ae1ee6a75180",
+          "bytes": 4613
+        },
+        "stats.json": {
+          "sha256": "a7d60965708abae136bf3213a5c8b362b2a761a17a40d4794005c2e1ec97fa85",
+          "bytes": 11501
+        },
+        "trips.parquet": {
+          "sha256": "2abfd8d52a85c86be7961dd22bfce13677a0fe7489f0479c1e7590687a0e2bd8",
+          "bytes": 339336
+        },
+        "validation.json": {
+          "sha256": "51bd8b40e38dd712d50224c48729c865fe6d770f60f7a2535e5633e2efe2e207",
+          "bytes": 5064
+        },
+        "waypoints.parquet": {
+          "sha256": "f63759499723ee982673f2228c56bc3ce979eab9fd784372ae7d43ac0ee3193c",
+          "bytes": 3353839
+        }
+      },
+      "pair_reports": {}
+    },
+    {
+      "aoi": "khlong-san-district",
+      "scenario": "moderate",
+      "run_id": "ebc2e5fc-6040-42e1-bb21-7f7e7d376aa7",
+      "file_count": 22,
+      "files": {
+        ".probe.txt": {
+          "sha256": "b35e09fa2ced9ebcad9d16336fb961146fe34bfbebc562679da85f8a314c9dca",
+          "bytes": 3
+        },
+        "activities.parquet": {
+          "sha256": "9c945348b1bc5cde3a873a5efad2dfdf82586b81c75063a59162e63828f7dcbb",
+          "bytes": 255613
+        },
+        "aoi.parquet": {
+          "sha256": "e45dfd4b1640ee7df35a7bd2eaf60fd651fd6e2fc7b8334d048ebb84eee5f012",
+          "bytes": 19197
+        },
+        "buildings.parquet": {
+          "sha256": "23d92b0922af608de3870fb2687de7d2451e026401c829701756acc3c982cb9f",
+          "bytes": 399656
+        },
+        "cohort.parquet": {
+          "sha256": "e982a62e70fd4291f1065af5e9d9c1e96ad1aa3fbe4fa08d25f91359289d183c",
+          "bytes": 132287
+        },
+        "cohort_metadata.json": {
+          "sha256": "f2a0023f9124302a9666b12b58d3f4df366fe5ae76852adcb04f172bfddbb4d4",
+          "bytes": 1309
+        },
+        "denominators.json": {
+          "sha256": "4ca57b3e823b9f6c7334673dbb663dcafe15447b70a636cfe10899d2ddeb7c8d",
+          "bytes": 3711
+        },
+        "edge_states.parquet": {
+          "sha256": "c4b05b395f6a071c32a49954ee6fc99c3bf5e2f73c4223b94c252dd92e250dcc",
+          "bytes": 5432647
+        },
+        "evacuation_states.parquet": {
+          "sha256": "344bef47beb047c6daca2e0076fddc892f570b88ee8d84bad70206b9838c3e00",
+          "bytes": 129374
+        },
+        "flood_slices.parquet": {
+          "sha256": "0142f5b254cc8a4ea07c9b6f18d4e586a36d1e8ebffd105b563b164065cc4bd6",
+          "bytes": 665384
+        },
+        "link_volume.parquet": {
+          "sha256": "c242985ba52e0d53a22cdde9e51e2005ec34a5d61bce10830ed022572589ca20",
+          "bytes": 146756
+        },
+        "manifest.json": {
+          "sha256": "c00fc509c53730ff8cd42de8fe760318aeb7996398aca4dfc58738625fd78dcd",
+          "bytes": 11170
+        },
+        "mesh_volume.parquet": {
+          "sha256": "90218c28d3b75d1b4cd8286dcbdc59340d32afc6417de2fd3a3be511b76aec21",
+          "bytes": 597879
+        },
+        "network_edges.parquet": {
+          "sha256": "173f33a26c28e0f70fdc74da4d50d3a22715c0f9cdebec7d6d98efb40a26a3e1",
+          "bytes": 656211
+        },
+        "persons.parquet": {
+          "sha256": "38633929381c3fd7350b94a43af224a7084852a393bafb7f00980c82843257bc",
+          "bytes": 1035530
+        },
+        "population_qa.json": {
+          "sha256": "2818310eb04daca907649b0f577e365681e239fdb0d40991f58e07461fd05139",
+          "bytes": 2424
+        },
+        "refuges.parquet": {
+          "sha256": "63d80600a331331eace06a2bf70e9241aeb8bbd70b8e2175e759796da716c9d6",
+          "bytes": 6326
+        },
+        "run_state.json": {
+          "sha256": "9dde58cad96a5cf3beaec6da03d6c88a043de780dc1b0e80e420db68e80f2302",
+          "bytes": 4874
+        },
+        "stats.json": {
+          "sha256": "1422813948594d679345a6dd4320a20398e3600d1b0ea031a474c1bdc50993fe",
+          "bytes": 11831
+        },
+        "trips.parquet": {
+          "sha256": "2abfd8d52a85c86be7961dd22bfce13677a0fe7489f0479c1e7590687a0e2bd8",
+          "bytes": 339336
+        },
+        "validation.json": {
+          "sha256": "4b9293ba11f17e29701684075155fa7b49594bc054baf9be0788b7411adaf44c",
+          "bytes": 5072
+        },
+        "waypoints.parquet": {
+          "sha256": "f63759499723ee982673f2228c56bc3ce979eab9fd784372ae7d43ac0ee3193c",
+          "bytes": 3353839
+        }
+      },
+      "pair_reports": {
+        "khlong-san-pair-report-2c4dcb04-a332-4f86-971c-771ba48fad3f-ebc2e5fc-6040-42e1-bb21-7f7e7d376aa7": {
+          "khlong-san-dry-vs-moderate.png": {
+            "sha256": "e9bf400af343f8b0c4f579a8008e58df8bc6c7739f186fe58c8fd15285415f11",
+            "bytes": 93404
+          },
+          "khlong-san-moderate-overview.png": {
+            "sha256": "f83c50d3d94e94ca9405c213d1245f3b16694f61faf65b0c121042c32ccc57a1",
+            "bytes": 674321
+          },
+          "khlong-san-moderate-present-profile.png": {
+            "sha256": "6daaf705af59d5987df24464d37e70c648778a41b3b148d248e2b8bf5e50707b",
+            "bytes": 56752
+          },
+          "khlong-san-pair-evidence.md": {
+            "sha256": "ca3743623db33d0258a622c31b1838c7f598e4faf06a1138d1ab9334559046ed",
+            "bytes": 9641
+          }
+        }
+      }
+    },
+    {
+      "aoi": "sai-mai-district",
+      "scenario": "dry",
+      "run_id": "40fec9c2-f21a-43a7-9e5c-4f29cf3b40e2",
+      "file_count": 21,
+      "files": {
+        "activities.parquet": {
+          "sha256": "fbd438ca85fa1538a5eb96a8036bcc347c47f38b9d2e1890e457786c6e4b71bb",
+          "bytes": 288920
+        },
+        "aoi.parquet": {
+          "sha256": "c144c42bb5e48c453d09a444fdaa712769cc13cc168c3712f324470954ad6ad2",
+          "bytes": 15529
+        },
+        "buildings.parquet": {
+          "sha256": "69e24ee67a130a9fbf7b524f362648bb5a715f929cf0ae96aeacda2c0b8d7ccb",
+          "bytes": 818538
+        },
+        "cohort.parquet": {
+          "sha256": "872d82811674e4c954ea9098221319d9b373e0c273e4636a7a50aba655a139f3",
+          "bytes": 140397
+        },
+        "cohort_metadata.json": {
+          "sha256": "591c98a026fb7f5e3c9e07b724f7973b33db6c5a7d5183121d95ac1c5aad3813",
+          "bytes": 1267
+        },
+        "denominators.json": {
+          "sha256": "f751952d82c6d03a6adb253848181620bec897abf374b93b23ed67493286c8d2",
+          "bytes": 3676
+        },
+        "edge_states.parquet": {
+          "sha256": "d9afe1de23319c7194bab16a311ad75fafadc0f852a427d080b57866091b19f2",
+          "bytes": 6987837
+        },
+        "evacuation_states.parquet": {
+          "sha256": "c67498a2d8201c7519932d7e2c9e8027d34a3c17deab5ff6aa26a7e04d6aaa8f",
+          "bytes": 119021
+        },
+        "flood_slices.parquet": {
+          "sha256": "33fc77051f6cb9a634c7c32e0e333946025e59fc503e01921c54cd430cff9c5d",
+          "bytes": 12726
+        },
+        "link_volume.parquet": {
+          "sha256": "edd65d1c5084666fe1b505a4cf8b984ce4260ee8d1fcc7ab4e2c4eb7170c9ede",
+          "bytes": 370505
+        },
+        "manifest.json": {
+          "sha256": "27374542b450c06d258291e83086a2bff8b54784e29153ec1488bbea118bbaa8",
+          "bytes": 10895
+        },
+        "mesh_volume.parquet": {
+          "sha256": "c48c321e5a17e231f7f382be89c6977f8ae42094c0e80f8231467ba2597335d6",
+          "bytes": 930742
+        },
+        "network_edges.parquet": {
+          "sha256": "396ae8c26c1dd8c1606c2183392c33a7dbc87a5d11fc4f3daffbde7d4d1d38ed",
+          "bytes": 2401859
+        },
+        "persons.parquet": {
+          "sha256": "894338525d2f2b4d36963a2f50072ce2840297883cfdea453510c1092da35f18",
+          "bytes": 7748371
+        },
+        "population_qa.json": {
+          "sha256": "df4c6b95c176413f9f7631d61c62f0d1bc3efdc01bcabe32742fd9f0cfb987f6",
+          "bytes": 2423
+        },
+        "refuges.parquet": {
+          "sha256": "0da74ec6c2c48eee3eb5ce371f5b79c455e62d13cc0c6412f2f51be5b7de4fe2",
+          "bytes": 6324
+        },
+        "run_state.json": {
+          "sha256": "df7b73d51f354e59a6fb212b59cc3384aedd701c91613918172f7f834493a84c",
+          "bytes": 4610
+        },
+        "stats.json": {
+          "sha256": "41c3ed793b32c1f5fa233f7aabc672ffe28671a739fc1bed91b7923745e03660",
+          "bytes": 11477
+        },
+        "trips.parquet": {
+          "sha256": "c448ecdebfda4a607f9e523e78998889b353e015faaa16872824048f9407d53c",
+          "bytes": 378254
+        },
+        "validation.json": {
+          "sha256": "c79440a6dc7ab00eda44b2eff7192323ce56fb12ef1eacd089f45086164788da",
+          "bytes": 5065
+        },
+        "waypoints.parquet": {
+          "sha256": "716dab3eae6813714e9a22596530187f1bd7ee6bcce4c89108e3a6c8b19a7132",
+          "bytes": 7790045
+        }
+      },
+      "pair_reports": {}
+    },
+    {
+      "aoi": "sai-mai-district",
+      "scenario": "moderate",
+      "run_id": "547379f5-bc92-47be-9c46-487f7c9dabf2",
+      "file_count": 21,
+      "files": {
+        "activities.parquet": {
+          "sha256": "fbd438ca85fa1538a5eb96a8036bcc347c47f38b9d2e1890e457786c6e4b71bb",
+          "bytes": 288920
+        },
+        "aoi.parquet": {
+          "sha256": "c144c42bb5e48c453d09a444fdaa712769cc13cc168c3712f324470954ad6ad2",
+          "bytes": 15529
+        },
+        "buildings.parquet": {
+          "sha256": "345515708f475919533a63d04fdb318c569fa404dcca7aabeec456ce8a7c52f9",
+          "bytes": 833008
+        },
+        "cohort.parquet": {
+          "sha256": "79dbd6158ceec1c7c788e935b519c61f640607d2427d1e994c96b48213963238",
+          "bytes": 147057
+        },
+        "cohort_metadata.json": {
+          "sha256": "0f820964666efd8c2cfe706f751a7fb1ca4ce0b9865c1964535cf9230f2e370c",
+          "bytes": 1305
+        },
+        "denominators.json": {
+          "sha256": "31e009f3e78df0b1016a053edf30a86770ba7ca6abd4abc63924b534e6fd7062",
+          "bytes": 3707
+        },
+        "edge_states.parquet": {
+          "sha256": "14972e56e7c29353b69f3e86651fa169436277732f50f6451fd0033ed0708378",
+          "bytes": 20372939
+        },
+        "evacuation_states.parquet": {
+          "sha256": "0b58ace43c3f6f890785cc1a5201a1625855f4beefe0657fca9f063be67ce476",
+          "bytes": 110620
+        },
+        "flood_slices.parquet": {
+          "sha256": "7e32d5eec7d6e372ff04de4ab04f744497502b3950a8a2f6ca6db1326c27bbd7",
+          "bytes": 5929814
+        },
+        "link_volume.parquet": {
+          "sha256": "edd65d1c5084666fe1b505a4cf8b984ce4260ee8d1fcc7ab4e2c4eb7170c9ede",
+          "bytes": 370505
+        },
+        "manifest.json": {
+          "sha256": "e904a7cd576e720549c0e85cde0a4a030ca0b1c8be5356b654d74ceb5e8f8fff",
+          "bytes": 11160
+        },
+        "mesh_volume.parquet": {
+          "sha256": "c48c321e5a17e231f7f382be89c6977f8ae42094c0e80f8231467ba2597335d6",
+          "bytes": 930742
+        },
+        "network_edges.parquet": {
+          "sha256": "396ae8c26c1dd8c1606c2183392c33a7dbc87a5d11fc4f3daffbde7d4d1d38ed",
+          "bytes": 2401859
+        },
+        "persons.parquet": {
+          "sha256": "894338525d2f2b4d36963a2f50072ce2840297883cfdea453510c1092da35f18",
+          "bytes": 7748371
+        },
+        "population_qa.json": {
+          "sha256": "df4c6b95c176413f9f7631d61c62f0d1bc3efdc01bcabe32742fd9f0cfb987f6",
+          "bytes": 2423
+        },
+        "refuges.parquet": {
+          "sha256": "0da74ec6c2c48eee3eb5ce371f5b79c455e62d13cc0c6412f2f51be5b7de4fe2",
+          "bytes": 6324
+        },
+        "run_state.json": {
+          "sha256": "b8c08b0926c7ed09651aa83ee91d43eb2ce28debfdbea0ae032e81a4845511d6",
+          "bytes": 4872
+        },
+        "stats.json": {
+          "sha256": "2786b093b2f2e25957eef17b0d34450d3c1e95c1529f5aac9b0a371e57501178",
+          "bytes": 11810
+        },
+        "trips.parquet": {
+          "sha256": "c448ecdebfda4a607f9e523e78998889b353e015faaa16872824048f9407d53c",
+          "bytes": 378254
+        },
+        "validation.json": {
+          "sha256": "4da305bb75bf68f10825b1025a5d7889fb4d438bb22c4354d8e8cc9d4369ab20",
+          "bytes": 5073
+        },
+        "waypoints.parquet": {
+          "sha256": "716dab3eae6813714e9a22596530187f1bd7ee6bcce4c89108e3a6c8b19a7132",
+          "bytes": 7790045
+        }
+      },
+      "pair_reports": {
+        "sai-mai-pair-report-40fec9c2-f21a-43a7-9e5c-4f29cf3b40e2-547379f5-bc92-47be-9c46-487f7c9dabf2": {
+          "sai-mai-dry-vs-moderate.png": {
+            "sha256": "c2312cdcc70afb5ac0ac4295d708f159eece25cc2618b36ffcca71252bd33da0",
+            "bytes": 93783
+          },
+          "sai-mai-moderate-overview.png": {
+            "sha256": "8627df8d5d1070dfcf257ce510d1f34fcb00df0a6d3ab1205c4a11780ae593c4",
+            "bytes": 875776
+          },
+          "sai-mai-moderate-present-profile.png": {
+            "sha256": "efd38e670e587df64fe9e63bd924157c8d7649b41016f0bbe66bc50053831336",
+            "bytes": 54554
+          },
+          "sai-mai-pair-evidence.md": {
+            "sha256": "439e681547f21ac852dda37c885c8a3f5abc75a68f40c87605069bf6ae10cdc3",
+            "bytes": 9627
+          }
+        }
+      }
+    },
+    {
+      "aoi": "din-daeng-district",
+      "scenario": "dry",
+      "run_id": "924a7bfa-c80d-421d-b675-8432ec1c94d2",
+      "file_count": 21,
+      "files": {
+        "activities.parquet": {
+          "sha256": "1382e790f930f2559151330ea4a2fb6ae599bfd64570038df69710ae3edc95b9",
+          "bytes": 301932
+        },
+        "aoi.parquet": {
+          "sha256": "b50c5730a82c0a0738793fd33affc503c0360d6310f9005e18a8041390132542",
+          "bytes": 20293
+        },
+        "buildings.parquet": {
+          "sha256": "e4dab7020a2582bad5f6465a450d553b325d3520d2a5c48361733b2bb34e749e",
+          "bytes": 2385598
+        },
+        "cohort.parquet": {
+          "sha256": "34a6d618a14a89c0440eed392cc5084ed4e94e17422b4e36a5e93b93dae5704f",
+          "bytes": 135702
+        },
+        "cohort_metadata.json": {
+          "sha256": "3713f143b51d27d27a7d1a1122a98e819ed094a49f5f4aa73ea0831bc0d70717",
+          "bytes": 1269
+        },
+        "denominators.json": {
+          "sha256": "7a15939ca85112d86eb44dea9c67c7e18dc3b864163acd824d0b0eaa69bbbc6c",
+          "bytes": 3712
+        },
+        "edge_states.parquet": {
+          "sha256": "9f6be93d2502cbf0ee68d32d62587d88582abf859f3d41919acbec4d2210c2a3",
+          "bytes": 2581390
+        },
+        "evacuation_states.parquet": {
+          "sha256": "1e3b9463d205aa6e070eba38254fdc5f9abb18b7ce449929d600d463ef6cb540",
+          "bytes": 131895
+        },
+        "flood_slices.parquet": {
+          "sha256": "33fc77051f6cb9a634c7c32e0e333946025e59fc503e01921c54cd430cff9c5d",
+          "bytes": 12726
+        },
+        "link_volume.parquet": {
+          "sha256": "52a53d128b8129e2f3f7a6b4849dc3c6e0a4c86ef079d173df8916babf731b07",
+          "bytes": 233665
+        },
+        "manifest.json": {
+          "sha256": "8659026f741c163e35cfb0bac32f32587654bbb46c15f3d8c2525bb52e7c70aa",
+          "bytes": 10802
+        },
+        "mesh_volume.parquet": {
+          "sha256": "fe9357de097ff23879442883320d4e1d3e8055dfbbfbf07b76bf2c244630fa70",
+          "bytes": 785270
+        },
+        "network_edges.parquet": {
+          "sha256": "aa72c574b89e6236ca2f0747956bb20868619b0ebee4d7ce447bf2b4758dbd7f",
+          "bytes": 1114065
+        },
+        "persons.parquet": {
+          "sha256": "c2da04bc6694d7929f75960ad0308baf01d5b4df21e3cd270eb720e46e3587c8",
+          "bytes": 1648265
+        },
+        "population_qa.json": {
+          "sha256": "be5a81dc885d5e58682bce9b3fd63de96a61925898031e290bd2b89b959d754d",
+          "bytes": 2334
+        },
+        "refuges.parquet": {
+          "sha256": "888c3a2806442219993b7a5df7cae60274f06073aa0fdcf50ed348b1fcf00d15",
+          "bytes": 6302
+        },
+        "run_state.json": {
+          "sha256": "02e1fcaf4dba233049766e23c69a13061df75d89bc742e5be8209209dd2f3c8d",
+          "bytes": 4524
+        },
+        "stats.json": {
+          "sha256": "48e8ab5a465d7c3d246bb55df20290ff3c8d5d6de57bfccd29b85f5ef4d5e09f",
+          "bytes": 11454
+        },
+        "trips.parquet": {
+          "sha256": "17c4ef84f26e8ebea4c6421c6dc2707645308e36dd51afbf4524da375ece8ed5",
+          "bytes": 383784
+        },
+        "validation.json": {
+          "sha256": "4929ed44a49f182366b82e4f3dfabe50394b5467129a7a4078a650ac988ae2e8",
+          "bytes": 5065
+        },
+        "waypoints.parquet": {
+          "sha256": "57c7e1b4c4eb479bd02db2feaedb2f306fd491f4e92e7f0c13530e65e58e1ad0",
+          "bytes": 4273139
+        }
+      },
+      "pair_reports": {}
+    },
+    {
+      "aoi": "din-daeng-district",
+      "scenario": "moderate",
+      "run_id": "b9c3f055-1079-4313-a5a5-f019f2c5a65d",
+      "file_count": 21,
+      "files": {
+        "activities.parquet": {
+          "sha256": "1382e790f930f2559151330ea4a2fb6ae599bfd64570038df69710ae3edc95b9",
+          "bytes": 301932
+        },
+        "aoi.parquet": {
+          "sha256": "b50c5730a82c0a0738793fd33affc503c0360d6310f9005e18a8041390132542",
+          "bytes": 20293
+        },
+        "buildings.parquet": {
+          "sha256": "a0297d058345f21c6b89138160a8b75e93dc0fe8a6477d0fcea49edec8e7f185",
+          "bytes": 2416242
+        },
+        "cohort.parquet": {
+          "sha256": "653e6648c6210c27a4ac8429a1567909863cd0f6c32472bdcc054f58f3478e2b",
+          "bytes": 141550
+        },
+        "cohort_metadata.json": {
+          "sha256": "4f5418590abe423ae38ded75950205c4c0c200d5b8e88fe8b0c1df329148fd02",
+          "bytes": 1308
+        },
+        "denominators.json": {
+          "sha256": "d1d6e3cf91bff73201f0593b3d7da15d2622f77318c9a654cc31da32cb7fe9cb",
+          "bytes": 3746
+        },
+        "edge_states.parquet": {
+          "sha256": "8a9ac09e492e59371a485503f25e964f1d6ad23b7bf357b44eef8daeba63d130",
+          "bytes": 8709915
+        },
+        "evacuation_states.parquet": {
+          "sha256": "44bf0528d4eed5856225c9323294c9f9d83734b664e646113aca7aa499167aee",
+          "bytes": 131715
+        },
+        "flood_slices.parquet": {
+          "sha256": "a4471e24fa87e8b1130e2a02fb36996053ec8a93b092b60066fe76e1ae9ae820",
+          "bytes": 1043014
+        },
+        "link_volume.parquet": {
+          "sha256": "52a53d128b8129e2f3f7a6b4849dc3c6e0a4c86ef079d173df8916babf731b07",
+          "bytes": 233665
+        },
+        "manifest.json": {
+          "sha256": "2fdede252ebfb30c77435edd0402190687d27bf080b797612b801fdd29eed8af",
+          "bytes": 11067
+        },
+        "mesh_volume.parquet": {
+          "sha256": "fe9357de097ff23879442883320d4e1d3e8055dfbbfbf07b76bf2c244630fa70",
+          "bytes": 785270
+        },
+        "network_edges.parquet": {
+          "sha256": "aa72c574b89e6236ca2f0747956bb20868619b0ebee4d7ce447bf2b4758dbd7f",
+          "bytes": 1114065
+        },
+        "persons.parquet": {
+          "sha256": "c2da04bc6694d7929f75960ad0308baf01d5b4df21e3cd270eb720e46e3587c8",
+          "bytes": 1648265
+        },
+        "population_qa.json": {
+          "sha256": "be5a81dc885d5e58682bce9b3fd63de96a61925898031e290bd2b89b959d754d",
+          "bytes": 2334
+        },
+        "refuges.parquet": {
+          "sha256": "888c3a2806442219993b7a5df7cae60274f06073aa0fdcf50ed348b1fcf00d15",
+          "bytes": 6302
+        },
+        "run_state.json": {
+          "sha256": "3addee233bc78985795aebed8dffd68023bc351147e9ef4c8f4669b25cae7f7d",
+          "bytes": 4786
+        },
+        "stats.json": {
+          "sha256": "d8fbd194bb46778ed0bbbe90d6fcb6f91b13d43c3aaad8d4b021140058321ead",
+          "bytes": 11790
+        },
+        "trips.parquet": {
+          "sha256": "17c4ef84f26e8ebea4c6421c6dc2707645308e36dd51afbf4524da375ece8ed5",
+          "bytes": 383784
+        },
+        "validation.json": {
+          "sha256": "d852197e4f4b2dc4943252ce0bc39c3551fa605ebe53ab69d9e8005b34835b50",
+          "bytes": 5073
+        },
+        "waypoints.parquet": {
+          "sha256": "57c7e1b4c4eb479bd02db2feaedb2f306fd491f4e92e7f0c13530e65e58e1ad0",
+          "bytes": 4273139
+        }
+      },
+      "pair_reports": {
+        "din-daeng-pair-report-924a7bfa-c80d-421d-b675-8432ec1c94d2-b9c3f055-1079-4313-a5a5-f019f2c5a65d": {
+          "din-daeng-dry-vs-moderate.png": {
+            "sha256": "43f26047faf29e5a9be3507c1c7a8358f9a162914fbfb47a79705aa74144f85f",
+            "bytes": 93993
+          },
+          "din-daeng-moderate-overview.png": {
+            "sha256": "1ea744b13b1dd9974e0d171227d06a22d6fe35acb1de8c825d112d6de9a355d0",
+            "bytes": 667949
+          },
+          "din-daeng-moderate-present-profile.png": {
+            "sha256": "c7a7068d864a220365f7e489da556e5735e59a7cc0bea03bc3ba2963cdec260d",
+            "bytes": 59075
+          },
+          "din-daeng-pair-evidence.md": {
+            "sha256": "6da41ffe4f5dedb25143d3152aea5623575a6e129d497eb2b22d062ae036a47f",
+            "bytes": 9687
+          }
+        }
+      }
+    },
+    {
+      "aoi": "min-buri-district",
+      "scenario": "dry",
+      "run_id": "547d0b10-7ded-47bf-a17b-23647f7e060b",
+      "file_count": 21,
+      "files": {
+        "activities.parquet": {
+          "sha256": "8bdc96ae60b0d1da8895823a50f515986cb48905d665929707951786ca0b18d3",
+          "bytes": 256185
+        },
+        "aoi.parquet": {
+          "sha256": "76227e1e042caee848b982cfd2977956dfb9b64502a5d121b7412eebf440d008",
+          "bytes": 15601
+        },
+        "buildings.parquet": {
+          "sha256": "7d371f9bcbd3f7eb8d1f24d5417e3ff81df5664f57f0ceb99746cea41be31c6d",
+          "bytes": 287165
+        },
+        "cohort.parquet": {
+          "sha256": "bb7d18766d3a29093420540794081f2869ab7f8fed361c52ac4c9fc072f9fa38",
+          "bytes": 113642
+        },
+        "cohort_metadata.json": {
+          "sha256": "dc1743279a9e871693bdeec7c26d0610d9bd83472b755a6fb5e402e55eec0a8e",
+          "bytes": 1265
+        },
+        "denominators.json": {
+          "sha256": "5aa955bfa0a1e246d56d2bcd3e969099bb486e2e4748751313efdc07b6758d62",
+          "bytes": 3679
+        },
+        "edge_states.parquet": {
+          "sha256": "c8aa46646b021238678087f45643a6469271aa8b5395526498588f8450571be8",
+          "bytes": 7191454
+        },
+        "evacuation_states.parquet": {
+          "sha256": "df6f407a5f911672d487579df938e959f7c821055321ef1ea8ccf4b193b2271f",
+          "bytes": 94016
+        },
+        "flood_slices.parquet": {
+          "sha256": "33fc77051f6cb9a634c7c32e0e333946025e59fc503e01921c54cd430cff9c5d",
+          "bytes": 12726
+        },
+        "link_volume.parquet": {
+          "sha256": "906381138754d74e5af845f13f6a8b8495a439e33c9e40641273e5a4b6012538",
+          "bytes": 338645
+        },
+        "manifest.json": {
+          "sha256": "8b6bec5977c5b04754c7400a313a627743ce0b74e399bfdd66f570564f371578",
+          "bytes": 10899
+        },
+        "mesh_volume.parquet": {
+          "sha256": "77567ca333555ab2adf35203ac91fe1de9cf800882a67217244d709d9255fd69",
+          "bytes": 906972
+        },
+        "network_edges.parquet": {
+          "sha256": "a30d68b5cd13a667910316cd32cd1f004d1a50ce4d34fae7dc43f0c5f4643422",
+          "bytes": 2476902
+        },
+        "persons.parquet": {
+          "sha256": "324d9dc40f0dafd6e8483014d487aed47d8300f4ed6356a57228a3a0511a59fc",
+          "bytes": 10091085
+        },
+        "population_qa.json": {
+          "sha256": "26c7e543ae09d1fd9623b4a7e7bb8f4b5b1757994fbc594ee1590c739385d6f6",
+          "bytes": 2421
+        },
+        "refuges.parquet": {
+          "sha256": "ff9165b986cba54c8ff6f89aa5160129d8cdd5fc2a21dc418906c38bc997a3cb",
+          "bytes": 6321
+        },
+        "run_state.json": {
+          "sha256": "f9d2266be4256cb869e803e807933fdf8c5d676636d8445e9414a6581189eca1",
+          "bytes": 4612
+        },
+        "stats.json": {
+          "sha256": "bd5236aac85e06f2f91733cd501817cef917bf4c35651f0f40b586cc24dda5c8",
+          "bytes": 11488
+        },
+        "trips.parquet": {
+          "sha256": "bd91ddb7820c0cc6b0cefd07227c803dfcc28fde5aaefe8a05a268b6303aac5a",
+          "bytes": 342912
+        },
+        "validation.json": {
+          "sha256": "c505238561329421f6d2b4cb4e7f1a1b872f8a88c69e033832e9806beb907557",
+          "bytes": 5065
+        },
+        "waypoints.parquet": {
+          "sha256": "798f5b2e7a8b600fbe2f388d40d5046e64387e27301d5d791f3bfc6aa693fedf",
+          "bytes": 4005320
+        }
+      },
+      "pair_reports": {}
+    },
+    {
+      "aoi": "min-buri-district",
+      "scenario": "moderate",
+      "run_id": "d3dd91f1-cb9a-482e-88e0-371482a0cdd9",
+      "file_count": 21,
+      "files": {
+        "activities.parquet": {
+          "sha256": "8bdc96ae60b0d1da8895823a50f515986cb48905d665929707951786ca0b18d3",
+          "bytes": 256185
+        },
+        "aoi.parquet": {
+          "sha256": "76227e1e042caee848b982cfd2977956dfb9b64502a5d121b7412eebf440d008",
+          "bytes": 15601
+        },
+        "buildings.parquet": {
+          "sha256": "bde96b6cf3353c705cbfa0572019876b672c39225df0e360ce30ef6294be62c2",
+          "bytes": 292654
+        },
+        "cohort.parquet": {
+          "sha256": "653f10835d52a1745477ee5dd694e2a0c69eebfd91281f3541ec1838b653d4fd",
+          "bytes": 118733
+        },
+        "cohort_metadata.json": {
+          "sha256": "4feccab5536c7166f6ec08286c0e880a603a9a1ba08708dbd8361ee48418df8a",
+          "bytes": 1303
+        },
+        "denominators.json": {
+          "sha256": "f97dc1d8ddf06ccdcc7794a9180afbc5a9b5e86cfc50cedb7be2f17c2a295be5",
+          "bytes": 3715
+        },
+        "edge_states.parquet": {
+          "sha256": "6ac54041369c8513457bee46c0b665bf9a2c68cb33c97ca88146420c55a232c0",
+          "bytes": 21004956
+        },
+        "evacuation_states.parquet": {
+          "sha256": "69b3cf76beeecff1ed85e32057e4939f38b364d6ec80a5fd4b7d9c4c30e450b6",
+          "bytes": 88696
+        },
+        "flood_slices.parquet": {
+          "sha256": "361ce741d302ed636b1309db8f634ec97ae95ff88d09c5ee748436068145fa98",
+          "bytes": 8353774
+        },
+        "link_volume.parquet": {
+          "sha256": "906381138754d74e5af845f13f6a8b8495a439e33c9e40641273e5a4b6012538",
+          "bytes": 338645
+        },
+        "manifest.json": {
+          "sha256": "e997520143b39ad271a27a1465a20a55d90b55e75aa4fbe9f93e03051fee3e71",
+          "bytes": 11164
+        },
+        "mesh_volume.parquet": {
+          "sha256": "77567ca333555ab2adf35203ac91fe1de9cf800882a67217244d709d9255fd69",
+          "bytes": 906972
+        },
+        "network_edges.parquet": {
+          "sha256": "a30d68b5cd13a667910316cd32cd1f004d1a50ce4d34fae7dc43f0c5f4643422",
+          "bytes": 2476902
+        },
+        "persons.parquet": {
+          "sha256": "324d9dc40f0dafd6e8483014d487aed47d8300f4ed6356a57228a3a0511a59fc",
+          "bytes": 10091085
+        },
+        "population_qa.json": {
+          "sha256": "26c7e543ae09d1fd9623b4a7e7bb8f4b5b1757994fbc594ee1590c739385d6f6",
+          "bytes": 2421
+        },
+        "refuges.parquet": {
+          "sha256": "ff9165b986cba54c8ff6f89aa5160129d8cdd5fc2a21dc418906c38bc997a3cb",
+          "bytes": 6321
+        },
+        "run_state.json": {
+          "sha256": "198216c3d8b1ced2e0ebc3663ea5cce4a7816d9ad22e9af2cb8aa57d80d755d2",
+          "bytes": 4874
+        },
+        "stats.json": {
+          "sha256": "96cd34a27b10484ebe8a6610ef0f09fedcf3f2be3250c57fb9bdf6037ecb6526",
+          "bytes": 11828
+        },
+        "trips.parquet": {
+          "sha256": "bd91ddb7820c0cc6b0cefd07227c803dfcc28fde5aaefe8a05a268b6303aac5a",
+          "bytes": 342912
+        },
+        "validation.json": {
+          "sha256": "663104b3657c0f7a274d0028bb22ac6c9b10afceb608ff12f13f612749837922",
+          "bytes": 5073
+        },
+        "waypoints.parquet": {
+          "sha256": "798f5b2e7a8b600fbe2f388d40d5046e64387e27301d5d791f3bfc6aa693fedf",
+          "bytes": 4005320
+        }
+      },
+      "pair_reports": {
+        "min-buri-pair-report-547d0b10-7ded-47bf-a17b-23647f7e060b-d3dd91f1-cb9a-482e-88e0-371482a0cdd9": {
+          "min-buri-dry-vs-moderate.png": {
+            "sha256": "97de6bacbed7a5a97532bc413e3e3d3117dc49b6b911d712b56eb68ba41e9098",
+            "bytes": 91755
+          },
+          "min-buri-moderate-overview.png": {
+            "sha256": "d1cf541ae1d196d3550857d0f93765710abfd34c9d4170ed506d375edaf00887",
+            "bytes": 927531
+          },
+          "min-buri-moderate-present-profile.png": {
+            "sha256": "0f34a140dc6c6d00c8fc13bbe8f512524e6524e0b45beb22cb11b0ec994d9562",
+            "bytes": 54227
+          },
+          "min-buri-pair-evidence.md": {
+            "sha256": "ae971629765103659c0c550079b900fda7491b38bf238fd1b8cac1b43e15b342",
+            "bytes": 9635
+          }
+        }
+      }
+    }
+  ]
+}
