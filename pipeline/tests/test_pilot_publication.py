@@ -25,6 +25,37 @@ from bkkflow.util import read_json, write_json
 from test_pipeline import _roads
 
 
+def _write_synthetic_age_rasters(directory: Path, *, size: int = 8) -> Path:
+    """Write a stand-in WorldPop age-band raster set covering the pilot AOI.
+
+    Mirrors the real layout (one file per band, 3-arc EPSG:4326, nodata
+    -99999) at the real filenames, so the production loader is exercised
+    unchanged. Bands vary with position so per-cell shares genuinely differ;
+    a flat or multiplicative grid would keep the band ratio constant and make
+    every cell look identical.
+    """
+    from bkkflow.sources import population_age
+
+    directory.mkdir(parents=True, exist_ok=True)
+    transform = from_origin(100.4990, 13.7220, 0.0008333, 0.0008333)
+    rows, cols = np.mgrid[0:size, 0:size]
+    # Two bands carry real structure; the rest are empty but must exist.
+    arrays = {
+        "05": (40.0 + rows * 2.0).astype("float32"),
+        "30": (100.0 + cols * 5.0).astype("float32"),
+        "65": (10.0 + rows).astype("float32"),
+    }
+    for code in population_age.BAND_CODES:
+        data = arrays.get(code, np.zeros((size, size), dtype="float32"))
+        path = directory / f"tha_t_{code}_2026_CN_100m_R2025A_v1.tif"
+        with rasterio.open(
+            path, "w", driver="GTiff", height=size, width=size, count=1,
+            dtype="float32", crs="EPSG:4326", transform=transform, nodata=-99999.0,
+        ) as dst:
+            dst.write(data, 1)
+    return directory
+
+
 @pytest.fixture
 def pilot_inputs(tmp_path, monkeypatch):
     source_config = Path(__file__).resolve().parents[2] / "config"
@@ -32,6 +63,14 @@ def pilot_inputs(tmp_path, monkeypatch):
     (config / "pilots").mkdir(parents=True)
     shutil.copyfile(source_config / "population.json", config / "population.json")
     shutil.copyfile(source_config / "scenario.json", config / "scenario.json")
+    # The shipped config enables per-cell age structure and points at the real
+    # 2.5 GB acquisition under data/staged/, which is deliberately git-ignored.
+    # Tests must not depend on that download, so synthesise a stand-in band set
+    # and repoint the copied config at it.
+    age_dir = _write_synthetic_age_rasters(tmp_path / "agesex")
+    population_config = read_json(config / "population.json")
+    population_config["age_structure"]["raster_dir"] = str(age_dir)
+    write_json(config / "population.json", population_config)
     curated = tmp_path / "curated"
     scoped = curated / "pilots" / "khlong-san-district"
     for directory in ("population", "osm"):
@@ -311,9 +350,15 @@ def test_pilot_persists_full_and_sample_without_reweighting(pilot_inputs):
     contract = read_json(run_dir / "denominators.json")
     full = contract["quantities"]["full_population"]
     sample = contract["quantities"]["sample"]
-    assert full["rows"] == 4 and sample["rows"] == 1
+    # Row counts depend on how many age bands are populated, which is now a
+    # configured choice, so assert the contract's meaning rather than a count.
+    assert full["rows"] > sample["rows"] >= 1
     assert full["weight"] != sample["weight"]
     assert contract["scope"]["reweighting_to_full_population"] is False
+    # The full-population weight must still be the whole cell total, whatever
+    # the band count: splitting a cell by age must not create or lose people.
+    persons = pd.read_parquet(run_dir / "persons.parquet")
+    assert full["weight"] == pytest.approx(float(persons["weight"].sum()), rel=1e-9)
     manifest = read_json(run_dir / "manifest.json")
     assert any(output["role"] == "denominators" for output in manifest["outputs"])
 
@@ -499,22 +544,40 @@ def test_pilot_drift_at_either_publication_check_stays_failed(pilot_inputs, monk
 
 
 def test_published_population_qa_does_not_claim_a_licence_failure(pilot_inputs):
-    """A run must not state that a licence gate refused a source it never asked for.
+    """A run must name the age source it actually used, and never blame a gate.
 
-    The registry approves an age/sex source that this build simply does not
-    ingest for an AOI-scoped pull. Recording that as a licence failure writes a
-    false provenance claim into an immutable run record.
+    The registry approves the age/sex source and the build now ingests it per
+    cell. The run record must therefore name that source. It must never state
+    that a licence gate refused something, which would be false.
     """
     result = runner.execute_run(
         run_id="qa-honest", pilot_id="khlong-san-district", flood_enabled=True, max_agents=5
     )
     demographics = read_json(Path(result["run_dir"]) / "population_qa.json")["demographics"]
 
-    assert demographics["age_bands"] == {"unknown": 1.0}
-    assert demographics["age_structure_source"] == "not_configured"
+    assert demographics["age_structure_source"] == "worldpop-tha-age-sex-2026-r2025a"
     assert "licence" not in demographics["age_structure_source"]
-    # The approved-but-uningested source stays named, so the gap remains visible.
-    assert demographics["age_structure_status"] == "not_ingested"
+    assert demographics["age_structure_mode"] == "per_cell"
+    assert demographics["age_structure_spatial"] is True
+    # Age is now sourced, so no person may be left unknown.
+    assert "unknown" not in demographics["age_bands"]
+
+
+def test_missing_age_rasters_abort_the_run_rather_than_dropping_age(pilot_inputs):
+    """A half-downloaded source must fail loudly, not silently disable age."""
+    config_path = runner.CONFIG_DIR / "population.json"
+    original = read_json(config_path)
+    config = dict(original)
+    config["age_structure"] = dict(original.get("age_structure", {}))
+    config["age_structure"]["raster_dir"] = str(Path(original["age_structure"]["raster_dir"]) / "nope")
+    write_json(config_path, config)
+    try:
+        with pytest.raises(FileNotFoundError, match="band rasters are absent"):
+            runner.execute_run(
+                run_id="qa-missing-age", pilot_id="khlong-san-district", flood_enabled=True, max_agents=5
+            )
+    finally:
+        write_json(config_path, original)
 
 
 def test_configured_age_structure_flows_through_to_persons(pilot_inputs):
@@ -556,7 +619,7 @@ def test_per_cell_age_structure_uses_the_real_rasters(pilot_inputs, tmp_path, mo
     from rasterio.transform import from_origin
     from bkkflow.sources import population_age
 
-    raster_dir = tmp_path / "agesex"
+    raster_dir = tmp_path / "agesex-exact"
     raster_dir.mkdir()
     # Cover the pilot AOI (approx lon 100.4995-100.5025, lat 13.7195-13.7215)
     # at the WorldPop 3-arc resolution, so the real pilot cells land inside.
