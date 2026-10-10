@@ -6,8 +6,8 @@ does not establish empirical validity or operational readiness.
 
 ## Current source and release status
 
-Current `main` is merge commit `21c6841d238c62a6e451097fefeb683e9ae7afad`
-with source tree `23a072809fb6f319fbbf7f6c3461436a82deefab`.
+Current `main` is merge commit `f4662880523c71a8439750a7fca282c5d488d97e`
+with source tree `1fe700d33c2ed6c18aa1adc23caa09c9cf39d773`.
 Four human-merged PRs establish the present four-area implementation boundary:
 
 - [PR #49](https://github.com/wattwong103/flood-vul-evac/pull/49) landed the
@@ -220,7 +220,7 @@ release attempt.
 |---|---|---|
 | CLOSED MEDIUM BKK-021F named-pilot identity | Rejection matrix for configured AOI identity, direct traversal IDs and missing scoped inputs is covered by #53 | Merged tests-only coverage; bounded to the named cases, not exhaustive identity hardening. Three LOW follow-ups are parked in the PR description. |
 | CLOSED MEDIUM API fractional-seconds round-trip | A real publication now survives saved Parquet/manifest readback through both clearance routes with fractional event seconds, with the canonical non-null denominator contract | `api/tests/test_publication_roundtrip.py` (#55, pending merge). Recomputes the weighted-clearance definition independently rather than calling the pipeline helper; verified to fail on both whole-second truncation and absolute-event-time regressions. No production change: the pipeline and both routes were already correct. |
-| MEDIUM BKK-024 release evidence | No complete eight-run set exists. Staging precondition is now **satisfied**: all four AOIs staged `complete` on the re-frozen `geofabrik-thailand-osm-20261009` source. | North + implementer: both pre-release gates are now covered, so freeze one code/config/environment bundle, create eight new IDs, execute all pairs and pass all run and pair audits. |
+| MEDIUM BKK-024 release evidence | **Executed 10 October 2026**: eight runs on one boundary `f466288`/tree `1fe700d3`, 8/8 run audits pass, 4/4 pair audits PASS with identical cohorts | North: the release exists and passes. Two follow-ups before promotion — `population_version` does not distinguish the age-structured runs (needs re-staging and a re-run), and `manifest.population_model` omits the age structure. Pair figures generated but not published from a synced folder. |
 | HIGH city result superseded | Every city number, including the README city table and the 76.1429 km² unreconciled-area figure, was derived from the BBBike extract now known to be ~57–71% incomplete. No city run exists on the re-frozen source. | North + implementer: decide whether to re-run the city baseline on `geofabrik-thailand-osm-20261009`, and resolve the unattributed `bangkok-bma` AOI polygon first. Until then the city layer has **no current result** and its README numbers must not be cited. |
 | MEDIUM BKK-009 boundaries | 76.1429 km² of the BMA lies outside the 50 OSM district union; cause unverified | Data steward + North: acquire authoritative geometry with reuse terms and reconcile the difference. The [BMA 50-district catalog](https://data.go.th/en/dataset/50) currently says “License not specified,” so it is a lead, not an admitted input. |
 | MEDIUM BKK-009 population | Controls audited, not ingested or concept-matched | North selects resident/registered/de-facto target; implementer adds district crosswalk, date matching and reconciliation tests. |
@@ -289,6 +289,70 @@ smoothed over:
 - The verified fix path remains documented above, so the decision is reversible
   if the city layer is ever needed.
 
+## Eight-run release executed — 10 October 2026
+
+The eight-run release is complete. All eight runs were produced on one frozen
+boundary and every run and pair gate passes.
+
+| | |
+|---|---|
+| Commit | `f4662880523c71a8439750a7fca282c5d488d97e` |
+| Source tree | `1fe700d33c2ed6c18aa1adc23caa09c9cf39d773` |
+| Working tree at capture | clean |
+| Source digest verification | `matched_before_publication` on all 8 |
+| OSM source | `geofabrik-thailand-osm-20261009` |
+
+All eight manifests carry the **same** commit, tree, verification status and
+OSM source. There is exactly one boundary across the release.
+
+| AOI | Area | dry run | moderate run |
+|---|---|---|---|
+| Khlong San | 5.96 km² | `2c4dcb04-a332-4f86-971c-771ba48fad3f` | `ebc2e5fc-6040-42e1-bb21-7f7e7d376aa7` |
+| Sai Mai | 43.34 km² | `40fec9c2-f21a-43a7-9e5c-4f29cf3b40e2` | `547379f5-bc92-47be-9c46-487f7c9dabf2` |
+| Din Daeng | 8.46 km² | `924a7bfa-c80d-421d-b675-8432ec1c94d2` | `b9c3f055-1079-4313-a5a5-f019f2c5a65d` |
+| Min Buri | 59.99 km² | `547d0b10-7ded-47bf-a17b-23647f7e060b` | `d3dd91f1-cb9a-482e-88e0-371482a0cdd9` |
+
+### Gates
+
+- **Run audits: 8 / 8 pass** (`run.py validate`).
+- **Pair audits: 4 / 4 `PASS`** (`report.load_checked_pair`).
+- **Fixed cohort holds**: dry and moderate carry an identical cohort weight in
+  every pair — 1392.4893 (Sai Mai), 6201.5745 (Din Daeng), 809.9507 (Min Buri).
+
+Per-cell age structure is active in all eight (`age_structure_mode: per_cell`,
+`age_band_basis: population_weighted_over_cells`,
+`age_structure_source: worldpop-tha-age-sex-2026-r2025a`).
+
+### Two defects found while recording this
+
+**1. `population_version` does not distinguish age-structured runs.** The eight
+runs record `bkk-pop-v0.2-<aoi>-2020`, which is the value the *staged pilot
+bundle* supplies. For named pilots that value takes precedence over
+`config/population.json`, so bumping the config's `population_version` to
+`bkk-pop-v0.3-khlongsan-2020-agesex` had **no effect on these runs**. A run with
+per-cell age and a run without it therefore carry the same version string, which
+breaks the rule that a changed population must carry a changed version. Closing
+this properly requires re-staging the four pilots with a bumped version and
+re-running the release; changing the config alone cannot do it.
+
+**2. `manifest.population_model` omits the age structure.** The mode, source and
+basis are recorded in `population_qa.json`, but not in the manifest, which is the
+canonical run record. Anyone reading only the manifest cannot tell that these
+runs are age-structured.
+
+### Unpublished pair artefacts
+
+The four pair reports were **generated successfully** but not published.
+`report.publish_pair_report` writes into a scratch directory inside the run
+directory and then atomically renames it; the rename fails with `WinError 32`
+because the repository sits inside a Dropbox-synced folder and the sync client
+holds a handle on the new directory. The audit gate itself passes — only the
+atomic publish step is affected. The evidence markdown and three PNGs per pair
+are produced without error, as was verified by running each step directly.
+
+This is an environment constraint, not a pipeline defect. Publishing will work
+from a non-synced working copy.
+
 ## Age structure enabled per cell — North, 10 October 2026
 
 `config/population.json` now sets `age_structure.mode: "per_cell"` with
@@ -298,7 +362,7 @@ every person.
 
 | | |
 |---|---|
-| `population_version` | `bkk-pop-v0.3-khlongsan-2020-agesex` |
+| `population_version` in config | `bkk-pop-v0.3-khlongsan-2020-agesex` — **not** what the eight release runs record; see the defect above |
 | Source | `worldpop-tha-age-sex-2026-r2025a`, CC BY 4.0, DOI 10.5258/SOTON/WP00841 |
 | Acquisition | 22 rasters, 2.5 GB, under `data/staged/` (git-ignored) |
 | Reprojection | nearest-neighbour at cell centres; age grid 9953×17824 vs population 9952×17816 |
