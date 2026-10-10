@@ -1,7 +1,8 @@
 # Historical BKK-009 concern resolution and current handoff
 
 > **Historical planning snapshot.** Repository and release statements below
-> describe the 4 October 2026 freeze. For current source, the executed BKK-024
+> describe the 4–9 October 2026 concern-resolution sequence, beginning from the
+> 4 October freeze and ending with the 9 October update. For current source, the executed BKK-024
 > demonstration release and remaining gates, use
 > [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) and
 > [`RELEASE_EVIDENCE_2026-10-10.md`](RELEASE_EVIDENCE_2026-10-10.md).

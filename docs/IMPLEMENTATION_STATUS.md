@@ -1,23 +1,41 @@
 # BKK/FLOW project state
 
-Updated 10 October 2026. **DONE_WITH_CONCERNS; demonstration only.**
+Updated 11 October 2026. **DONE_WITH_CONCERNS; demonstration only.**
 This page is the shared implementation/evidence handoff. Internal validation
 does not establish empirical validity or operational readiness.
 
+> **Current snapshot.** On 11 October 2026, merged `main` was `bb16608` through
+> PR #72. PR #73 (the population-version prerequisite), PR #74 (truthful
+> run-detail stages) and PR #75 (source-realistic city API fixture) were
+> reviewed and ready but not merged. The authorised replacement four-pilot
+> release had not started because it must run from a clean, human-merged #73
+> boundary. The paper was frozen and map-inclusive build verification was
+> complete; exact identities are in [`HANDOFF_2026-10-11.md`](HANDOFF_2026-10-11.md).
+> Later sections retain explicitly dated 4–10 October evidence and should not
+> be read as a newer source or test snapshot.
+
 ## Current source and release status
 
-Current `main` is merge commit `b1c36077c25726d8b77e5f804f750fa76a44a724`
-through merged PR #70. The accepted demonstration runs were produced earlier at
+At the 10 October source-only handoff, `main` was merge commit
+`b1c36077c25726d8b77e5f804f750fa76a44a724` through merged PR #70. Merged
+`main` subsequently advanced to `bb16608ab704912ee4801b4fd8bedfed29b6f638`
+through PR #72. The accepted demonstration runs were produced earlier at
 `f4662880523c71a8439750a7fca282c5d488d97e`, source tree
 `1fe700d33c2ed6c18aa1adc23caa09c9cf39d773`. Current source and release source
 are deliberately recorded as different boundaries.
 
-PR #65 merged a generated checksum ledger before this source-only handoff. This
-branch removes that ledger from the tracked tree while retaining it in Git
+PR #65 merged a generated checksum ledger before the source-only handoff. The
+subsequent reconciliation removed that ledger from the tracked tree while retaining it in Git
 history and inside the independently verified external evidence package. PR #67
 merged truthful partial-age-coverage reporting for future outputs, and PR #70
 made the city API contracts self-contained without rerunning the city. None of
 these changes rewrites or reattributes the immutable release files.
+
+Verification evidence is not additive. For example, the exact #73 integration
+head `9c6d84f` passed 290 pipeline tests; #74 passed 19 frontend tests plus build
+and lint; #75 passed 94 API tests. These are separate commands on separate
+reviewed heads, not a single 403-test repository run and not empirical model
+validation.
 
 The implementation sequence includes:
 

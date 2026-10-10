@@ -12,6 +12,14 @@ Bangkok, built on the PFLOW people–activities–trips–trajectories contract.
 > See [current project status and owners](docs/IMPLEMENTATION_STATUS.md) for
 > merged work, verified results, pending fixes and evidence gates.
 
+> **Dated source/evidence snapshot — 11 October 2026.** Merged `main` was
+> `bb16608` through PR #72. PRs #73–#75 were reviewed and ready, but were not
+> merged at that snapshot. PR #73 is the required population-identity
+> prerequisite for the authorised four-pilot restage and eight-run rerun; no
+> replacement run had started. The `f466288` release and its local ZIP remain
+> immutable historical demonstration evidence. Test totals in the project
+> record are command- and head-scoped and must not be added together.
+
 ## What is here
 
 | Component | Path | What it does |
