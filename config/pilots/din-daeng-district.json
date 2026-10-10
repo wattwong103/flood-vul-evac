@@ -10,7 +10,7 @@
     "area_km2": 8.4589
   },
   "versions": {
-    "population": "bkk-pop-v0.2-din-daeng-district-2020",
+    "population": "bkk-pop-v0.3-din-daeng-district-2020-agesex",
     "network": "osm-din-daeng-district",
     "buildings": "osm-buildings-din-daeng-district"
   },

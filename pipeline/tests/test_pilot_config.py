@@ -31,6 +31,9 @@ def test_named_pilots_have_isolated_inputs_and_versions():
         assert bundle.input_root == curated / "pilots" / bundle.aoi_id
         assert bundle.pilot["input_scope"] == bundle.aoi_id
         assert bundle.aoi_id in bundle.population["population_version"]
+        assert bundle.population["population_version"] == (
+            f"bkk-pop-v0.3-{bundle.aoi_id}-2020-agesex"
+        )
         assert bundle.aoi_id in bundle.versions["network"]
         assert bundle.aoi_id in bundle.versions["buildings"]
         assert set(bundle.pilot["source_sha256"]) == {"osm", "population", "geometry"}

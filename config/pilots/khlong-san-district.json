@@ -10,7 +10,7 @@
     "area_km2": 5.9607
   },
   "versions": {
-    "population": "bkk-pop-v0.2-khlong-san-district-2020",
+    "population": "bkk-pop-v0.3-khlong-san-district-2020-agesex",
     "network": "osm-khlong-san-district",
     "buildings": "osm-buildings-khlong-san-district"
   },

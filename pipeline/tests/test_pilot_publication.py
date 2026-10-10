@@ -99,7 +99,7 @@ def pilot_inputs(tmp_path, monkeypatch):
         "lon": [100.500, 100.501], "lat": [13.720, 13.721],
     }, geometry=[box(100.4999, 13.7199, 100.5001, 13.7201),
                  box(100.5009, 13.7209, 100.5011, 13.7211)], crs=4326)
-    cells["population_version"] = "bkk-pop-v0.2-khlong-san-district-2020"
+    cells["population_version"] = pilot["versions"]["population"]
     cells.to_parquet(scoped / "population/population_cells.parquet")
     _roads().to_parquet(scoped / "osm/roads.parquet")
     buildings = gpd.GeoDataFrame({
@@ -125,7 +125,7 @@ def pilot_inputs(tmp_path, monkeypatch):
         **fetch,
         "aoi_id": "khlong-san-district",
         "source_id": "worldpop-global-2000-2020-tha-100m",
-        "population_version": "bkk-pop-v0.2-khlong-san-district-2020",
+        "population_version": pilot["versions"]["population"],
         "resource_url": "https://data.worldpop.org/example.tif",
     })
     write_json(scoped / "aoi.provenance.json", {
@@ -203,7 +203,7 @@ def test_pilot_publishes_verified_source_identity(pilot_inputs, flood_enabled):
     }
     assert manifest["geography"]["aoi_id"] == "khlong-san-district"
     assert manifest["population_model"]["population_version"] == (
-        "bkk-pop-v0.2-khlong-san-district-2020"
+        "bkk-pop-v0.3-khlong-san-district-2020-agesex"
     )
     assert manifest["population_model"]["seed"] == 29092026
     activity_parameters = manifest["pflow_contract"]["activity_generator"]["parameters"]
