@@ -365,6 +365,11 @@ def execute_run(
     persons_path = _write_parquet(context, "persons.parquet", persons)
     register_output(context, "persons", persons_path, rows=len(persons))
 
+    # Computed once and reused: the manifest is the canonical run record, so the
+    # age structure must appear there as well as in population_qa.json.
+    age_report = population_module.age_band_report(
+        population_config, age_config, age_mode, age_bands, age_by_cell, cells
+    )
     population_qa = population_module.PopulationQA(
         population_version=population_version,
         status="demonstration",
@@ -376,9 +381,7 @@ def execute_run(
             "status": "unavailable",
             "reason": "no external administrative control total was ingested in this build",
         },
-        demographics=population_module.age_band_report(
-            population_config, age_config, age_mode, age_bands, age_by_cell, cells
-        ),
+        demographics=age_report,
         building_allocation={
             "status": "none",
             "reason": "OSM building use does not prove residential occupancy; allocation would be an invention",
@@ -516,6 +519,7 @@ def execute_run(
         indices=indices,
         flood_enabled=flood_enabled,
         sample_cap=limit,
+        age_report=age_report,
         total_residents=total_residents,
         routed_trips=routed,
         cohort_reference=cohort_reference,
@@ -544,6 +548,7 @@ def _finish_run(
     indices: dict[int, mobility_module.NetworkIndex],
     flood_enabled: bool,
     sample_cap: int,
+    age_report: dict[str, Any],
     total_residents: float,
     routed_trips: int,
     cohort_reference: dict[str, Any] | None,
@@ -829,6 +834,18 @@ def _finish_run(
                 context.sources["population"],
                 context.sources["osm"],
             ],
+            # The manifest is the canonical record. Without this, a reader of
+            # manifest.json alone cannot tell that these runs are age
+            # structured, because population_version is supplied by the staged
+            # pilot bundle and does not change when demographics do.
+            "age_structure": {
+                "mode": age_report["age_structure_mode"],
+                "source_id": age_report["age_structure_source"],
+                "status": age_report["age_structure_status"],
+                "basis": age_report["age_band_basis"],
+                "spatial": age_report["age_structure_spatial"],
+                "band_shares": age_report["age_bands"],
+            },
             "time_profile": {
                 "status": "illustrative",
                 "activity_model_version": "pflow-bkk-activity-scenario-v0.1",
