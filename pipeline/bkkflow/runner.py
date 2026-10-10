@@ -326,8 +326,11 @@ def execute_run(
     age_by_cell = None
     if age_mode == "per_cell":
         from bkkflow.sources import population_age
+        from bkkflow.util import REPO_ROOT
 
-        age_by_cell = population_age.age_weights_by_cell(cells, age_config["raster_dir"])
+        configured = Path(age_config["raster_dir"]).expanduser()
+        age_dir = configured if configured.is_absolute() else REPO_ROOT / configured
+        age_by_cell = population_age.age_weights_by_cell(cells, age_dir)
         if not age_by_cell:
             raise ValueError(
                 "per_cell age structure produced no weights; check raster coverage "
