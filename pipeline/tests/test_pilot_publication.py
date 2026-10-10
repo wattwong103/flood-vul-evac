@@ -751,11 +751,60 @@ def test_manifest_alone_identifies_an_age_structured_run(pilot_inputs):
     age = manifest["population_model"]["age_structure"]
     assert age["mode"] == "per_cell"
     assert age["spatial"] is True
-    assert age["basis"] == "population_weighted_over_cells"
+    assert age["basis"] == "population_weighted_over_covered_cells"
     assert age["source_id"] == "worldpop-tha-age-sex-2026-r2025a"
     assert "unknown" not in age["band_shares"]
+    assert age["coverage"]["unknown_population_share"] == pytest.approx(0.0)
 
     # It must agree with the QA record rather than restate it independently.
     qa = read_json(Path(result["run_dir"]) / "population_qa.json")["demographics"]
     assert age["mode"] == qa["age_structure_mode"]
     assert age["band_shares"] == qa["age_bands"]
+    assert age["coverage"] == qa["age_coverage"]
+
+    # The schema remains able to read the previous optional shape emitted after
+    # #61: old basis label, no coverage block.
+    age["basis"] = "population_weighted_over_cells"
+    age.pop("coverage")
+    assert runner.manifest_module.validate_manifest(manifest) == []
+
+
+def test_partial_age_coverage_is_reported_truthfully(pilot_inputs, monkeypatch):
+    from bkkflow.sources import population_age
+
+    def one_covered_cell(cells, _age_dir):
+        return {str(cells.iloc[0]["cell_id"]): {"65_plus": 1.0}}
+
+    monkeypatch.setattr(population_age, "age_weights_by_cell", one_covered_cell)
+    result = runner.execute_run(
+        run_id="qa-partial-age", pilot_id="khlong-san-district",
+        flood_enabled=True, max_agents=5,
+    )
+    run_dir = Path(result["run_dir"])
+    persons = pd.read_parquet(run_dir / "persons.parquet")
+    qa = read_json(run_dir / "population_qa.json")
+    manifest = read_json(run_dir / "manifest.json")
+
+    assert persons["weight"].sum() == pytest.approx(300.0)
+    assert persons.loc[persons["age_band"] == "unknown", "weight"].sum() == pytest.approx(200.0)
+    demographics = qa["demographics"]
+    assert demographics["age_band_basis"] == "population_weighted_over_covered_cells"
+    assert demographics["age_coverage"] == pytest.approx(
+        {
+            "occupied_cells_total": 2,
+            "occupied_cells_covered": 1,
+            "occupied_cells_unknown": 1,
+            "population_weight_total": 300.0,
+            "population_weight_covered": 100.0,
+            "population_weight_unknown": 200.0,
+            "covered_population_share": 1.0 / 3.0,
+            "unknown_population_share": 2.0 / 3.0,
+        }
+    )
+    assert any("1 of 2 occupied cells" in warning for warning in qa["warnings"])
+    assert any("66.67%" in warning for warning in qa["warnings"])
+    assert not any("every person" in warning for warning in qa["warnings"])
+    assert manifest["population_model"]["age_structure"]["coverage"] == (
+        demographics["age_coverage"]
+    )
+    assert runner.manifest_module.validate_manifest(manifest) == []

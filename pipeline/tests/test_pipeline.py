@@ -189,6 +189,72 @@ def test_demographics_without_age_source_is_unknown() -> None:
     assert set(demographics["sex_code"]) == {"M", "F"}
 
 
+def test_partial_per_cell_age_report_publishes_covered_denominators() -> None:
+    cells = _cells()
+    report = population.age_band_report(
+        {"sex_split": {"male": 0.49, "female": 0.51}},
+        {"source_id": "age-source", "status": "ingested_per_cell"},
+        "per_cell",
+        None,
+        {"c1": {"working": 0.25, "65_plus": 0.75}},
+        cells,
+    )
+
+    assert report["age_bands"] == {"65_plus": 0.75, "working": 0.25}
+    assert report["age_band_basis"] == "population_weighted_over_covered_cells"
+    assert report["age_coverage"] == pytest.approx(
+        {
+            "occupied_cells_total": 3,
+            "occupied_cells_covered": 1,
+            "occupied_cells_unknown": 2,
+            "population_weight_total": 600.0,
+            "population_weight_covered": 100.0,
+            "population_weight_unknown": 500.0,
+            "covered_population_share": 1.0 / 6.0,
+            "unknown_population_share": 5.0 / 6.0,
+        }
+    )
+
+    warning = population.age_coverage_warning(report)
+    assert warning is not None
+    assert "2 of 3 occupied cells" in warning
+    assert "500" in warning and "600" in warning
+    assert "83.33%" in warning
+    assert "conditional on covered cells" in warning
+    assert "every person" not in warning
+
+
+def test_complete_per_cell_and_national_age_reports_need_no_coverage_warning() -> None:
+    cells = _cells()
+    all_cells = {cell_id: {"known": 1.0} for cell_id in cells["cell_id"]}
+    per_cell = population.age_band_report(
+        {}, {"source_id": "age-source"}, "per_cell", None, all_cells, cells
+    )
+    national = population.age_band_report(
+        {}, {"source_id": "age-source"}, "national", {"known": 1.0}, None, cells
+    )
+
+    for report in (per_cell, national):
+        coverage = report["age_coverage"]
+        assert coverage["occupied_cells_covered"] == 3
+        assert coverage["population_weight_unknown"] == pytest.approx(0.0)
+        assert coverage["covered_population_share"] == pytest.approx(1.0)
+        assert population.age_coverage_warning(report) is None
+
+
+def test_no_age_structure_reports_complete_unknown_coverage() -> None:
+    report = population.age_band_report({}, {}, "none", None, None, _cells())
+
+    assert report["age_bands"] == {"unknown": 1.0}
+    assert report["age_band_basis"] == "none"
+    assert report["age_coverage"]["occupied_cells_covered"] == 0
+    assert report["age_coverage"]["population_weight_unknown"] == pytest.approx(600.0)
+    assert population.age_coverage_warning(report) == (
+        "age_band is 'unknown' for every person; this build ingests no "
+        "age-structure marginal."
+    )
+
+
 def test_demographics_with_age_bands_are_sourced_and_conserve_weight() -> None:
     """A configured age structure replaces 'unknown' and conserves the total."""
     cells = _cells()

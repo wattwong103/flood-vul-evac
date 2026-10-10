@@ -17,6 +17,7 @@ Design rules taken directly from the plan:
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -312,23 +313,47 @@ def age_band_report(
 ) -> dict[str, Any]:
     """Describe the age structure actually applied, for the run manifest.
 
-    ``per_cell`` has no single national marginal, so the reported figure is the
-    population-weighted aggregate over the cells that were actually used. That
-    is a summary of real spatial variation, not an invented flat structure, and
-    it must not be mistaken for a national one.
+    ``per_cell`` has no single national marginal, so known-band shares are the
+    population-weighted aggregate over covered cells. Coverage denominators
+    keep that conditional summary from being mistaken for complete coverage or
+    a national marginal.
     """
-    if mode == "per_cell" and age_by_cell:
-        # `cells` carries pop_count; pop_scaled is only materialised on the
-        # frame handed to assign_demographics, so read whichever is present.
-        weight_column = "pop_scaled" if "pop_scaled" in cells.columns else "pop_count"
+    # `cells` carries pop_count; pop_scaled is only materialised on the frame
+    # handed to assign_demographics, so read whichever is present.
+    weight_column = "pop_scaled" if "pop_scaled" in cells.columns else "pop_count"
+    occupied = [
+        (str(row.cell_id), float(getattr(row, weight_column, 0.0) or 0.0))
+        for row in cells.itertuples()
+        if float(getattr(row, weight_column, 0.0) or 0.0) > 0
+    ]
+
+    def has_known_band(mapping: dict[str, float] | None) -> bool:
+        return bool(mapping) and any(
+            label != "unknown" and float(value) > 0
+            for label, value in mapping.items()
+        )
+
+    def applied_mapping(cell_id: str) -> dict[str, float] | None:
+        if mode == "per_cell":
+            if age_by_cell is not None and cell_id in age_by_cell:
+                return age_by_cell[cell_id]
+            return age_bands
+        if mode == "national":
+            return age_bands
+        return None
+
+    if mode == "per_cell":
         totals: dict[str, float] = {}
-        for row in cells.itertuples():
-            weight = float(getattr(row, weight_column, 0.0) or 0.0)
-            if weight <= 0:
+        for cell_id, weight in occupied:
+            mapping = applied_mapping(cell_id)
+            if not has_known_band(mapping):
                 continue
-            for label, share in age_by_cell.get(str(row.cell_id), {}).items():
+            labels, shares = _normalised_bands(mapping or {})
+            for label, share in zip(labels, shares):
+                if label == "unknown":
+                    continue
                 totals[label] = totals.get(label, 0.0) + weight * float(share)
-        grand = sum(totals.values())
+        grand = math.fsum(totals.values())
         reported = (
             {label: round(value / grand, 6) for label, value in sorted(totals.items())}
             if grand > 0
@@ -339,13 +364,38 @@ def age_band_report(
     else:
         reported = {"unknown": 1.0}
 
+    total_weight = math.fsum(weight for _, weight in occupied)
+    if mode == "per_cell":
+        covered = [
+            (cell_id, weight)
+            for cell_id, weight in occupied
+            if has_known_band(applied_mapping(cell_id))
+        ]
+    elif mode == "national" and has_known_band(age_bands):
+        covered = occupied
+    else:
+        covered = []
+    covered_weight = math.fsum(weight for _, weight in covered)
+    unknown_weight = max(total_weight - covered_weight, 0.0)
+    coverage = {
+        "occupied_cells_total": len(occupied),
+        "occupied_cells_covered": len(covered),
+        "occupied_cells_unknown": len(occupied) - len(covered),
+        "population_weight_total": total_weight,
+        "population_weight_covered": covered_weight,
+        "population_weight_unknown": unknown_weight,
+        "covered_population_share": covered_weight / total_weight if total_weight > 0 else 0.0,
+        "unknown_population_share": unknown_weight / total_weight if total_weight > 0 else 0.0,
+    }
+
     return {
         "age_bands": reported,
         "age_band_basis": (
-            "population_weighted_over_cells"
+            "population_weighted_over_covered_cells"
             if mode == "per_cell"
             else ("national_marginal" if mode == "national" else "none")
         ),
+        "age_coverage": coverage,
         "age_structure_mode": mode,
         "sex_split": population_config.get("sex_split") or {"male": 0.5, "female": 0.5},
         # Record what actually happened. "not_configured" means this build
@@ -358,6 +408,34 @@ def age_band_report(
         "age_structure_status": age_config.get("status", "unknown"),
         "age_structure_spatial": mode == "per_cell",
     }
+
+
+def age_coverage_warning(age_report: dict[str, Any]) -> str | None:
+    """Return a truthful warning for an absent or partially covered age input."""
+    coverage = age_report["age_coverage"]
+    total_weight = float(coverage["population_weight_total"])
+    unknown_weight = float(coverage["population_weight_unknown"])
+    if total_weight <= 0 or unknown_weight <= 1e-12:
+        return None
+    if age_report["age_structure_mode"] == "none":
+        return (
+            "age_band is 'unknown' for every person; this build ingests no "
+            "age-structure marginal."
+        )
+
+    unknown_cells = int(coverage["occupied_cells_unknown"])
+    total_cells = int(coverage["occupied_cells_total"])
+    unknown_share = float(coverage["unknown_population_share"])
+    if float(coverage["population_weight_covered"]) <= 1e-12:
+        return (
+            "age_band is 'unknown' for every person; the configured age structure "
+            f"covers 0 of {total_cells} occupied cells."
+        )
+    return (
+        f"age_band remains 'unknown' for {unknown_cells} of {total_cells} occupied "
+        f"cells ({unknown_weight:.6f} of {total_weight:.6f} population weight; "
+        f"{unknown_share:.2%}); known age-band shares are conditional on covered cells."
+    )
 
 
 def make_weighted_persons(
