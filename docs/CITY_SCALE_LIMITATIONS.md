@@ -84,7 +84,7 @@ it as a city flood map would convert a limitation into a false headline.
 | AWS terrarium tiles (SRTM/NED/ETOPO compilation) | Reachable, decoded, **insufficient vertical accuracy** |
 | Copernicus DEM GLO-30 | Official access route now documented, but it is a DSM with <4 m absolute vertical accuracy at 90%; insufficient for Bangkok depth |
 | Copernicus DEM GLO-90 | Coarser than GLO-30 and therefore not a depth solution |
-| RTARF Central Basin LiDAR | Official open index claims 1 m surveys and <15 cm vertical accuracy; index download is blocked here and the underlying elevation tiles are not linked |
+| RTARF-published index of RTSD Central Basin LiDAR surveys | Official open index claims 1 m surveys and <15 cm vertical accuracy; the index is not the underlying elevation tiles |
 | GISTDA open data | Host does not resolve from this environment |
 | BMA open data (`data.bangkok.go.th`) | TLS connection closed |
 | `data.go.th` national portal | HTTP 403 |
@@ -142,7 +142,7 @@ Everything that does not depend on a defensible depth surface:
 
 ## Options for a city hazard layer
 
-1. **Resolve the RTARF LiDAR data path.** Prove Bangkok coverage from the open
+1. **Resolve the RTARF-published RTSD LiDAR data path.** Prove Bangkok coverage from the open
    survey index, obtain the underlying ground-classified elevation tiles with
    explicit reuse permission, identify the vertical datum and validate local
    checkpoints. Copernicus GLO-30 and uncorrected TanDEM-X are surface models,

@@ -22,7 +22,7 @@ Bangkok, built on the PFLOW people–activities–trips–trajectories contract.
 | API | `api/` | FastAPI service over the immutable run artefacts |
 | Site | `site/` | React + MapLibre frontend, reads only from the API |
 | Contracts | `schemas/`, `docs/RUN_ARTIFACT_CONTRACT.md` | Run manifest schema and the run/API/website contract |
-| Registry | `data/source-registry.json` | Licence-aware source gate: 19 resources, 3 allowed status values |
+| Registry | `data/source-registry.json` | Licence-aware source gate: 22 resources, 3 allowed status values |
 | Config | `config/` | Resolved pilot area, population and scenario configuration |
 
 ## The pilot
@@ -214,9 +214,10 @@ This distinction is the point of the project, so it is stated everywhere.
   0-2 m band, so any DEM with larger error cannot support a depth model. This
   blocks city-scale depth and evacuation. Copernicus GLO-30 is also excluded:
   its official specification describes a DSM with <4 m absolute vertical
-  accuracy, still larger than the signal of interest. An RTARF open LiDAR
-  coverage index is now registered, but the underlying elevation tiles and
-  their Bangkok coverage have not been obtained.
+  accuracy, still larger than the signal of interest. A Royal Thai Armed Forces
+  Headquarters (RTARF) catalog index describes 1 m surveys by the Royal Thai
+  Survey Department (RTSD) with <15 cm vertical accuracy, but the elevation
+  tiles and their Bangkok coverage have not been obtained.
 - **No reusable event rainfall or water-level forcing.** JRC annual observed
   water extent is available, but it has no within-year timing and no depth.
 - **No calibrated mobility.** OTP aggregate controls are available and expose
