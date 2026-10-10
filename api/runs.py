@@ -40,6 +40,37 @@ def _first_str(source: dict[str, Any], keys: Iterable[str]) -> str | None:
 _RUN_ID_CHARS = set(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
 )
+_RUN_STATE_CHARS = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+_NOT_PUBLISHED_REASONS = {
+    None: "source-tracked run has no published state",
+    "running": "source-tracked run is still running",
+    "validating_outputs": "source-tracked run is still validating outputs",
+    "failed_source_changed": (
+        "source-tracked run failed because source changed during execution"
+    ),
+    "failed_validation": "source-tracked run failed output validation",
+}
+
+
+def _public_run_state(run_state: dict[str, Any] | None) -> str | None:
+    """Return a bounded machine state suitable for the public diagnostics."""
+    value = (run_state or {}).get("state")
+    if not isinstance(value, str) or not value or len(value) > 64:
+        return None
+    if set(value) - _RUN_STATE_CHARS:
+        return None
+    return value
+
+
+@dataclass(frozen=True)
+class RunSkip:
+    """Why discovery omitted a run, without exposing local failure payloads."""
+
+    run_id: str
+    category: str
+    state: str | None
+    reason: str
+    artefact: str | None
 
 
 @dataclass
@@ -172,13 +203,33 @@ def _load_run(path: Path, run_id: str | None = None) -> RunRef:
         raise RunNotFoundError(
             resolved_id,
             f"run manifest unavailable for '{resolved_id}': {manifest_error}",
+            category="manifest_unreadable",
+            reason="manifest.json is unreadable or invalid",
+            artefact="manifest.json",
         )
 
     run_state, state_error = _read_json(path / "run_state.json")
     # New source-tracked runs must pass the final drift gate before being served.
     # Legacy manifests keep their existing compatibility behavior.
     if "code_identity" in manifest and (run_state or {}).get("state") != "published":
-        raise RunNotFoundError(resolved_id, "source-tracked run has not been published")
+        declared_state = (run_state or {}).get("state")
+        public_state = _public_run_state(run_state)
+        if declared_state is None:
+            reason = _NOT_PUBLISHED_REASONS[None]
+        elif public_state is None:
+            reason = "source-tracked run is not published"
+        else:
+            reason = _NOT_PUBLISHED_REASONS.get(
+                public_state, "source-tracked run is not published"
+            )
+        raise RunNotFoundError(
+            resolved_id,
+            reason,
+            category="not_published",
+            state=public_state,
+            reason=reason,
+            artefact="run_state.json",
+        )
     warnings: list[ApiWarning] = []
     if run_state is None:
         run_state = {}
@@ -207,12 +258,12 @@ def _load_run(path: Path, run_id: str | None = None) -> RunRef:
     )
 
 
-def discover_runs(runs_dir: Path | None = None) -> tuple[list[RunRef], list[str]]:
+def discover_runs(runs_dir: Path | None = None) -> tuple[list[RunRef], list[RunSkip]]:
     """List resolvable runs newest first.
 
-    Returns ``(runs, skipped_run_ids)``. ``skipped_run_ids`` names the
-    directories that looked like runs but could not be read; the id is taken
-    from the directory name so an operator can find and fix it on disk.
+    Returns ``(runs, skipped_runs)``. Each skipped record identifies a directory
+    that looked like a run but was unreadable or not yet published, plus a safe
+    diagnostic that never includes the run's raw failure payload.
     """
     settings = get_settings()
     directory = runs_dir or settings.runs_dir
@@ -227,7 +278,7 @@ def discover_runs(runs_dir: Path | None = None) -> tuple[list[RunRef], list[str]
         return [], []
 
     runs: list[RunRef] = []
-    skipped: list[str] = []
+    skipped: list[RunSkip] = []
     for candidate in candidates:
         if not (candidate / "manifest.json").exists():
             # Not a run directory yet. Common while a run is being staged.
@@ -237,11 +288,27 @@ def discover_runs(runs_dir: Path | None = None) -> tuple[list[RunRef], list[str]
             ref = _load_run(candidate)
         except RunNotFoundError as exc:
             LOGGER.warning("skipping run %s: %s", candidate.name, exc.message)
-            skipped.append(candidate.name)
+            skipped.append(
+                RunSkip(
+                    run_id=candidate.name,
+                    category=exc.category,
+                    state=exc.state,
+                    reason=exc.reason,
+                    artefact=exc.artefact,
+                )
+            )
             continue
         except Exception as exc:  # defensive: one bad directory, never a 500
             LOGGER.warning("skipping run %s: unexpected error %r", candidate.name, exc)
-            skipped.append(candidate.name)
+            skipped.append(
+                RunSkip(
+                    run_id=candidate.name,
+                    category="unexpected_error",
+                    state=None,
+                    reason="run could not be inspected safely",
+                    artefact=None,
+                )
+            )
             continue
         runs.append(ref)
 
