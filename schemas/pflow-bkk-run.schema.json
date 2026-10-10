@@ -86,6 +86,24 @@
       "properties": {
         "population_version": { "type": "string", "minLength": 1 },
         "method": { "enum": ["weighted-persons", "integerised-persons", "synthetic-households"] },
+        "age_structure": {
+          "type": "object",
+          "description": "Age structure actually applied, so the manifest alone identifies an age-structured run",
+          "additionalProperties": false,
+          "required": ["mode", "source_id", "basis", "spatial", "band_shares"],
+          "properties": {
+            "mode": { "enum": ["none", "national", "per_cell"] },
+            "source_id": { "type": "string", "minLength": 1 },
+            "status": { "type": "string" },
+            "basis": { "enum": ["none", "national_marginal", "population_weighted_over_cells"] },
+            "spatial": { "type": "boolean" },
+            "band_shares": {
+              "type": "object",
+              "description": "Label to share. For mode per_cell this is the population-weighted aggregate over the cells used, not a national marginal.",
+              "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
         "agent_representation": {
           "type": "object",
           "additionalProperties": false,

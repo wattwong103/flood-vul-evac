@@ -732,3 +732,30 @@ def test_missing_band_rasters_fail_loudly_rather_than_silently(tmp_path):
     cells = pd.DataFrame({"cell_id": ["a"], "lon": [0.5], "lat": [0.5]})
     with pytest.raises(FileNotFoundError, match="band rasters are absent"):
         population_age.age_weights_by_cell(cells, tmp_path / "empty")
+
+
+def test_manifest_alone_identifies_an_age_structured_run(pilot_inputs):
+    """The manifest is the canonical record, so it must carry the age structure.
+
+    population_version is supplied by the staged pilot bundle and does not
+    change when demographics do, so without population_model.age_structure a
+    reader of manifest.json alone cannot tell an age-structured run from an
+    unaged one.
+    """
+    result = runner.execute_run(
+        run_id="qa-manifest-age", pilot_id="khlong-san-district", flood_enabled=True, max_agents=5
+    )
+    manifest = read_json(Path(result["run_dir"]) / "manifest.json")
+    assert runner.manifest_module.validate_manifest(manifest) == []
+
+    age = manifest["population_model"]["age_structure"]
+    assert age["mode"] == "per_cell"
+    assert age["spatial"] is True
+    assert age["basis"] == "population_weighted_over_cells"
+    assert age["source_id"] == "worldpop-tha-age-sex-2026-r2025a"
+    assert "unknown" not in age["band_shares"]
+
+    # It must agree with the QA record rather than restate it independently.
+    qa = read_json(Path(result["run_dir"]) / "population_qa.json")["demographics"]
+    assert age["mode"] == qa["age_structure_mode"]
+    assert age["band_shares"] == qa["age_bands"]
