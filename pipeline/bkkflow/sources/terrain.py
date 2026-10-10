@@ -290,7 +290,11 @@ def clip_mask_for_aoi(
     shape_geometry, mosaic_bounds: tuple[float, float, float, float], shape: tuple[int, int]
 ) -> np.ndarray:
     """Boolean mask of mosaic cells inside an AOI polygon."""
+    # `import rasterio.features as rfeatures` binds only `rfeatures`, so the
+    # submodule name `rasterio` is still unbound here. Import it explicitly or
+    # the transform lookup below raises NameError on every DEM fetch.
     import rasterio.features as rfeatures
+    import rasterio.transform
 
     rows, cols = shape
     west, south, east, north = mosaic_bounds
