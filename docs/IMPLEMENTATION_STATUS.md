@@ -175,37 +175,36 @@ machine. All six failures are in `api/tests/test_city_endpoints.py` and are
 unrelated to the fractional-seconds work. They reproduce with that test file run
 alone, with no other change present.
 
-They have **two different causes**, not one.
+They have **one cause: the selected run is stale.**
 
-**Five failures — missing artefacts.** `_city_run_id()` in
-`api/tests/test_city_endpoints.py` selects the **newest** run containing an
-`observed_water.json` **and** a `manifest.json`. On this machine that resolves to
-`784ffce7-7ee0-4af8-8a49-2e9844dd487a`, which carries
-`connectivity_screening.json` and the drainage index but has **no**
-`observed_water_cells.parquet` and **no** `destinations.parquet`. The cells route
-returns no features and no `is_observation`/`year` keys; the destinations route
-reports `available: false`.
+`_city_run_id()` in `api/tests/test_city_endpoints.py` selects the newest run
+holding `observed_water.json` + `manifest.json`, which resolves to
+`784ffce7-7ee0-4af8-8a49-2e9844dd487a`. That run predates later pipeline work:
 
-**One failure — a wording divergence.** `test_observed_water_states_annual_
-observation_limits` needs only `observed_water.json`, which **is** present. It
-fails because the test requires the literal phrases `"annual water classes"` and
-`"no observations is not dry land"` in `interpretation_notes`, and the served
-notes instead read "An annual Landsat composite under-detects short-lived
-inundation…". None of the four candidate runs in `runs/` containing both files
-carries either phrase.
+| Evidence | Detail |
+|---|---|
+| Its `observed_water.json` was retrieved | `2026-09-30T13:20:15Z` |
+| Current note wording introduced by | `1455bf0`, **2026-10-01** |
+| `observed_water_cells.parquet` in the run | **absent** |
+| `observed_water_cells.parquet` in `data/curated/city/` | present, 140 KB |
 
-Consequences that matter for evidence:
+`pipeline/bkkflow/sources/gsw.py:295-302` already emits both phrases the
+wording test requires — `"Annual water classes are not event-flood extent…"`
+and `"…no observations is not dry land."` **The code is correct; the run
+predates it.** The test must not be relaxed to match stale output.
 
-- Requiring the full artefact set in `_city_run_id()` would fix the five and
-  **would not** fix the wording failure. The two need separate handling.
-- **No run in `runs/` contains `observed_water_cells.parquet` or
-  `destinations.parquet` at all.** The 4 October green suite therefore cannot be
-  explained by run selection, and the earlier green record must be attributed to
-  a `runs/` state that no longer exists rather than to a different chosen run.
-- Any promotion of evidence must state which run these tests resolved against.
+The five artefact failures share that root cause, and falling back to the shared
+cache would be wrong by design: `api/app.py:1619` states *"this run has no
+immutable observed-water cell snapshot; regenerate the run"*, and
+`api/tests/test_api.py:175-187` deliberately plants a cache file belonging to a
+*different* run and asserts the selected run's own snapshot wins.
 
-Both causes are pre-existing and are deliberately **not** fixed here: selecting
-the canonical run, aligning the note wording with the test, or deleting the
-generated tree are decisions for North.
+**Fix: regenerate the city run.** One action resolves all six failures *and*
+replaces the BBBike-derived city numbers with ones from the re-frozen Geofabrik
+source, so it must happen before any evidence is promoted.
+
+Recording this correctly matters. An earlier revision of this note attributed
+the six failures to two independent causes and proposed changing run selection.
+That was wrong, and that change would have broken the per-run snapshot contract.
 
 DONE_WITH_CONCERNS
