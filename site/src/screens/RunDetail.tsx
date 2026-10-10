@@ -31,6 +31,8 @@ import {
   ValidationStatusNote,
 } from "@/components/primitives";
 import { useApi } from "@/hooks/useApi";
+import type { AsyncPhase } from "@/hooks/useApi";
+import { ApiError } from "@/lib/client";
 import { API_BASE_URL, useRuns } from "@/lib/run-context";
 import type { StageRecord } from "@/lib/api";
 import {
@@ -42,7 +44,7 @@ import {
 } from "@/lib/format";
 
 /** The PFLOW stage sequence, as the plan defines it. */
-const RAIL = [
+const PILOT_RAIL = [
   "people",
   "activities",
   "trips",
@@ -73,6 +75,88 @@ function stageName(value: string | null | undefined): string {
   return formatText(value).toLowerCase();
 }
 
+function cityRail(stages: StageRecord[]): string[] {
+  return [...new Set(
+    stages.flatMap((stage) => {
+      const value = stage.stage?.trim();
+      return value ? [stageName(value)] : [];
+    }),
+  )];
+}
+
+export function StageRail({
+  scale,
+  stages,
+}: {
+  scale: string | null | undefined;
+  stages: StageRecord[];
+}) {
+  const names = scale === "city" ? cityRail(stages) : PILOT_RAIL;
+  return (
+    <>
+      <ol className="stage-rail">
+        {names.map((name) => {
+          const match = stages.find(
+            (stage) => stageName(stage.stage).includes(name) ||
+              name.includes(stageName(stage.stage)),
+          );
+          const state = normaliseStatus(match?.status ?? null) || "not reported";
+          return (
+            <li key={name} className={`stage state-${state.replace(/\s+/g, "-")}`}>
+              <span className="stage-glyph" aria-hidden="true">
+                {statusGlyph(state)}
+              </span>
+              <div>
+                <b>{name}</b>
+                <small>{state}</small>
+              </div>
+              <span className="stage-rows">
+                {match && match.rows !== undefined && match.rows !== null
+                  ? `${formatCount(match.rows)} rows`
+                  : "row count not reported"}
+              </span>
+              <span className="stage-time">
+                {match ? formatDuration(match.seconds ?? null) : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      <p className="panel-note">
+        <CircleAlert size={14} aria-hidden="true" />
+        {scale === "city"
+          ? "City stages are shown in their recorded order; no unreported stage is inferred."
+          : "A stage the run never reported is shown as “not reported”, which is not the same as completed."}
+      </p>
+    </>
+  );
+}
+
+const MISSING_DETAIL_ERROR = new ApiError(
+  "http",
+  0,
+  "Run detail is unavailable and the request returned no diagnostic details.",
+);
+
+export function RunDetailFailure({
+  phase,
+  error,
+  onRetry,
+}: {
+  phase: AsyncPhase;
+  error: ApiError | null;
+  onRetry: () => void;
+}) {
+  if (phase !== "error") return null;
+  return (
+    <ErrorState
+      error={error ?? MISSING_DETAIL_ERROR}
+      onRetry={onRetry}
+      context="Run detail."
+    />
+  );
+}
+
 export function RunDetail() {
   const { activeRunId, detail, stats, hasNoRun, reloadAll } = useRuns();
   const encoded = activeRunId ? encodeURIComponent(activeRunId) : null;
@@ -85,6 +169,7 @@ export function RunDetail() {
   const manifest = detail.data?.manifest ?? null;
   const status =
     detail.data?.validation_status ?? stats.data?.validation_status ?? null;
+  const scale = stats.data?.scale;
 
   const stages = pickStages(detail.data?.stages, stats.data?.stages);
 
@@ -114,11 +199,13 @@ export function RunDetail() {
         <NoRunState what="run detail" onReload={reloadAll} />
       ) : null}
 
-      {detail.phase === "error" && detail.error ? (
-        <ErrorState error={detail.error} onRetry={detail.reload} context="Run detail." />
-      ) : null}
+      <RunDetailFailure
+        phase={detail.phase}
+        error={detail.error}
+        onRetry={detail.reload}
+      />
 
-      {!hasNoRun ? (
+      {!hasNoRun && detail.phase !== "error" ? (
         <>
           <Panel
             title="PFLOW stage rail"
@@ -133,41 +220,7 @@ export function RunDetail() {
               </p>
             ) : null}
             {stages.length > 0 ? (
-              <>
-                <ol className="stage-rail">
-                  {RAIL.map((name) => {
-                    const match = stages.find(
-                      (stage) => stageName(stage.stage).includes(name) ||
-                        name.includes(stageName(stage.stage)),
-                    );
-                    const state = normaliseStatus(match?.status ?? null) || "not reported";
-                    return (
-                      <li key={name} className={`stage state-${state.replace(/\s+/g, "-")}`}>
-                        <span className="stage-glyph" aria-hidden="true">
-                          {statusGlyph(state)}
-                        </span>
-                        <div>
-                          <b>{name}</b>
-                          <small>{state}</small>
-                        </div>
-                        <span className="stage-rows">
-                          {match && match.rows !== undefined && match.rows !== null
-                            ? `${formatCount(match.rows)} rows`
-                            : "row count not reported"}
-                        </span>
-                        <span className="stage-time">
-                          {match ? formatDuration(match.seconds ?? null) : ""}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ol>
-                <p className="panel-note">
-                  <CircleAlert size={14} aria-hidden="true" />
-                  A stage the run never reported is shown as &quot;not reported&quot;, which
-                  is not the same as completed.
-                </p>
-              </>
+              <StageRail scale={scale} stages={stages} />
             ) : null}
 
             {stages.length > 0 ? (

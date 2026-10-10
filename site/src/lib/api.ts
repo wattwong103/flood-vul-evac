@@ -246,6 +246,7 @@ export type StatsSourceRef = {
 
 export type RunStats = {
   run_id?: string | null;
+  scale?: string | null;
   validation_status?: string | null;
   created_at?: string | null;
   geography?: Geography | null;
