@@ -142,8 +142,8 @@ And the capability is **already implemented**:
 and applies band weights at `pipeline/bkkflow/population.py:247-253`. The
 parameter exists; nothing passes it.
 
-**So the plumbing is done and the input is approved. The gap is one wiring
-step away.**
+**The plumbing is done and the input is approved.** But whether the gap closes
+depends on geography, not plumbing — see below.
 
 ### Feasibility verified 10 October 2026 — with two corrections
 
@@ -152,24 +152,81 @@ Structures, 2026, R2025A v1, Constrained**, EPSG:4326, float32, nodata −99999,
 CC BY 4.0, DOI `10.5258/SOTON/WP00841`.
 
 Download pattern is `tha_{sex}_{band}_2026_CN_100m_R2025A_v1.tif` where
-`sex` ∈ {m, f, t} and `band` ∈ {00, 01, 05, 10 … 90} (19 bands).
+`sex` ∈ {m, f, t} and `band` ∈ {00, 01, 05, 10 … 90} (**20** bands).
 
-**Correction 1 — it is one wiring step plus a 2.4 GB acquisition, not just
+**Correction 1 — it is one wiring step plus a 2.5 GB acquisition, not just
 wiring.** The marginals are not published as a table; they must be derived from
 the rasters:
 
 | Need | Files | Size |
 |---|---:|---:|
-| Age-band marginals | 19 × `tha_t_*` | ≈ 2.2 GB |
+| Age-band marginals | 20 × `tha_t_*` | ≈ 2.3 GB |
 | Sex split | `tha_T_M_*`, `tha_T_F_*` | ≈ 232 MB |
-| **Total** | **21** | **≈ 2.4 GB** |
+| **Total** | **22** | **≈ 2.5 GB** |
 
-A probe download of one band (`tha_t_30`, age 30–34, both sexes) confirms the
-content is sane: **5,053,734.5** people nationally, ≈ 7 % of Thailand, which is
-a plausible share for a five-year band.
+An earlier revision said 19 bands and 21 files. Both were wrong; the count is
+verified from the acquired files.
 
-**Correction 2 — the age/sex grid does not match the population grid.**
-Same CRS, resolution, dtype and nodata, but **different dimensions**:
+### Marginals now acquired and computed
+
+All 22 rasters were downloaded and summed. Artefact with per-file SHA-256,
+national totals and shares: `data/staged/population/agesex/national_marginals.json`.
+
+| Quantity | Value |
+|---|---:|
+| Male | 34,806,145 |
+| Female | 36,786,775 |
+| M + F | 71,592,920 |
+| Σ 20 age bands | 71,592,911 |
+| **Residual** | **−9 people (−1.3 × 10⁻⁷)** |
+
+The two independent routes — 20 age bands versus two sex totals — agree to
+within **9 people out of 71.6 million**. That is a strong internal check on both
+the acquisition and the computation.
+
+Derived national structure:
+
+| Group | Share |
+|---|---:|
+| Under 15 | **14.25 %** |
+| Working age 20–64 | 63.50 % |
+| 65 and over | 16.35 % |
+| Male / female | 48.62 % / 51.38 % |
+
+### The recommendation changes — do not apply these to the pilot AOIs
+
+**Sex needs no change.** The measured national split (48.62 / 51.38) sits within
+**0.28 percentage points** of the existing declared prior (48.9 / 51.1). The
+prior was already close; leave it.
+
+**Age must not be applied at national level.** These are *national* marginals.
+The four pilot AOIs are inner-Bangkok districts — Khlong San 5.96 km², Din Daeng
+8.46 km², Sai Mai 43.34 km², Min Buri 59.99 km². Assigning a **14.25 %** national
+under-15 share to every cell of an inner-Bangkok district would materially
+overstate children and distort trip generation, because school-age and
+pre-school children do not drive and travel on a different pattern.
+
+So the artefact is recorded as `status: NOT_APPLIED` with the reason, and the
+visible `age_band: unknown` gap **stays open**. That is the honest outcome: the
+plumbing exists, the source is approved and acquired, but the only marginal
+currently available is the wrong geography.
+
+Two ways to actually close it:
+
+1. **Reproject onto the population grid and use per-cell shares.** The two grids
+   are one column and eight rows apart (below), so an explicit nearest-neighbour
+   resample is cheap. This yields genuine spatial variation and is defensible,
+   but it requires changing `assign_demographics` from a national dict to
+   per-cell bands.
+2. **Find an AOI-appropriate age source** — BMA or NSO district-level age
+   structure, or WorldPop subnational age/sex products.
+
+Either way the source must be recorded and its checksums kept, as they now are.
+
+### Grid mismatch
+
+Same CRS (EPSG:4326), resolution (0.0008333), dtype (float32) and nodata
+(−99999), but **different dimensions**:
 
 | Raster | Size | Bounds |
 |---|---|---|
@@ -180,10 +237,8 @@ One column and eight rows apart. Consequence:
 
 - **National marginals are safe.** `assign_demographics` consumes
   `age_bands: dict[str, float]` — a national marginal — so the mismatch is
-  irrelevant for the wiring described here.
+  irrelevant to what was computed above.
 - **Per-cell age structure is not available without an explicit reprojection.**
-  Assigning age per cell would require resampling onto the population grid, and
-  that is a real methodological step that must be declared, not a detail.
 
 This is exactly the class of silent misalignment that would corrupt results
 without raising an error. It is recorded here rather than left to be discovered
