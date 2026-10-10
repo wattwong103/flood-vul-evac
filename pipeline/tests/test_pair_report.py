@@ -373,3 +373,74 @@ def test_main_requires_exactly_two_runs_and_uses_atomic_publisher(
     monkeypatch.setattr(sys, "argv", ["report.py", "only-one"])
     with pytest.raises(SystemExit):
         report.main()
+
+
+def test_publish_atomic_retries_a_transient_handle(tmp_path, monkeypatch):
+    """A sync client holding the new directory must not lose the report.
+
+    Measured on a Dropbox-synced tree: the rename is refused immediately and
+    succeeds once the handle releases. Retrying preserves atomicity -- the
+    rename itself is never replaced by a copy.
+    """
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    (scratch / "figure.png").write_bytes(b"x" * 32)
+    target = tmp_path / "published"
+
+    calls = {"n": 0}
+    real_replace = Path.replace
+
+    def flaky(self, other):
+        if self == scratch:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise PermissionError(32, "used by another process")
+        return real_replace(self, other)
+
+    monkeypatch.setattr(Path, "replace", flaky)
+    monkeypatch.setattr(report.time, "sleep", lambda _seconds: None)
+
+    report._publish_atomic(scratch, target)
+
+    assert calls["n"] == 3, "must retry until the handle releases"
+    assert target.is_dir() and (target / "figure.png").is_file()
+
+
+def test_publish_atomic_gives_up_with_a_useful_message(tmp_path, monkeypatch):
+    """A handle that never releases must name the real cause, not just fail."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    target = tmp_path / "published"
+
+    def always_locked(self, other):
+        raise PermissionError(32, "used by another process")
+
+    monkeypatch.setattr(Path, "replace", always_locked)
+    monkeypatch.setattr(report.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="could not be published after 3 attempts"):
+        report._publish_atomic(scratch, target, attempts=3)
+    assert not target.exists()
+
+
+def test_cleanup_failure_does_not_mask_the_real_error(tmp_path, monkeypatch):
+    """A failing cleanup must not replace the original exception.
+
+    This previously hid the true cause: TemporaryDirectory.__exit__ raised
+    PermissionError during removal and swallowed whatever the block had raised,
+    which is why the real failure went undiagnosed for so long.
+    """
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    (scratch / "figure.png").write_bytes(b"x")
+
+    monkeypatch.setattr(Path, "replace", lambda self, other: (_ for _ in ()).throw(
+        PermissionError(32, "used by another process")))
+    monkeypatch.setattr(report.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        report.shutil, "rmtree", lambda *a, **k: (_ for _ in ()).throw(
+            PermissionError(5, "cleanup also failed"))
+    )
+
+    with pytest.raises(RuntimeError, match="could not be published"):
+        report._publish_atomic(scratch, tmp_path / "published", attempts=2)
