@@ -14,7 +14,6 @@ explicitly rather than being silently lost.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import dataclass
@@ -27,8 +26,8 @@ from ..http import HttpClient
 from ..util import CURATED_DIR, REPO_ROOT, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
 from .registry import load_registry
 
-SOURCE_ID = "geofabrik-thailand-osm-20260929"
-DEFAULT_PBF = "data/staged/osm/thailand-260929.osm.pbf"
+SOURCE_ID = "geofabrik-thailand-osm-20261009"
+DEFAULT_PBF = "data/staged/osm/thailand-261009.osm.pbf"
 DEFAULT_COVERAGE = "data/staged/osm/thailand.poly"
 COVERAGE_URL = "https://download.geofabrik.de/asia/thailand.poly"
 
