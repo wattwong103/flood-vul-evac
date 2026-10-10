@@ -98,20 +98,93 @@ def _manifest(run_id: str, created_at: str = "2026-01-01T00:00:00+00:00") -> dic
     }
 
 
-@pytest.mark.parametrize("state", [None, "validating_outputs", "failed_source_changed", "published"])
-def test_source_tracked_runs_are_visible_only_after_publication(tmp_path, monkeypatch, state):
+@pytest.mark.parametrize(
+    ("state", "reason"),
+    [
+        (None, "source-tracked run has no published state"),
+        ("validating_outputs", "source-tracked run is still validating outputs"),
+        (
+            "failed_source_changed",
+            "source-tracked run failed because source changed during execution",
+        ),
+        ("failed_validation", "source-tracked run failed output validation"),
+        ("published", None),
+    ],
+)
+def test_source_tracked_runs_are_visible_only_after_publication(
+    tmp_path, monkeypatch, state, reason
+):
     run = tmp_path / "tracked-run"
     run.mkdir()
     manifest = _manifest(run.name)
     manifest["code_identity"] = {"verification": "matched_before_publication"}
     (run / "manifest.json").write_text(json.dumps(manifest))
     if state:
-        (run / "run_state.json").write_text(json.dumps({"state": state}))
+        (run / "run_state.json").write_text(
+            json.dumps({"state": state, "error": "local-only failure detail"})
+        )
     monkeypatch.setenv("BKKFLOW_RUNS_DIR", str(tmp_path))
     client = TestClient(create_app())
-    assert client.get("/v1/runs/tracked-run").status_code == (200 if state == "published" else 404)
-    listed = client.get("/v1/runs").json()["runs"]
-    assert len(listed) == (1 if state == "published" else 0)
+    listing = client.get("/v1/runs").json()
+
+    if state == "published":
+        assert client.get("/v1/runs/tracked-run").status_code == 200
+        assert len(listing["runs"]) == 1
+        assert listing["skipped"] == []
+        assert listing["skipped_details"] == []
+        return
+
+    for suffix in ("", "/stats", "/mesh"):
+        assert client.get(f"/v1/runs/tracked-run{suffix}").status_code == 404
+    assert listing["runs"] == []
+    assert listing["skipped"] == ["tracked-run"]
+    assert listing["skipped_details"] == [
+        {
+            "run_id": "tracked-run",
+            "category": "not_published",
+            "state": state,
+            "reason": reason,
+            "artefact": "run_state.json",
+        }
+    ]
+    assert listing["warnings"] == [
+        {
+            "code": "skipped_run",
+            "message": f"run 'tracked-run' was skipped: {reason}",
+            "artefact": "run_state.json",
+        }
+    ]
+    assert "local-only failure detail" not in json.dumps(listing)
+
+
+def test_malformed_prepublication_state_is_not_exposed(tmp_path, monkeypatch) -> None:
+    run = tmp_path / "tracked-run"
+    run.mkdir()
+    manifest = _manifest(run.name)
+    manifest["code_identity"] = {"verification": "matched_before_publication"}
+    (run / "manifest.json").write_text(json.dumps(manifest))
+    (run / "run_state.json").write_text(
+        json.dumps(
+            {
+                "state": "failed_validation\nlocal-only detail",
+                "error": "another local-only failure detail",
+            }
+        )
+    )
+    monkeypatch.setenv("BKKFLOW_RUNS_DIR", str(tmp_path))
+
+    listing = TestClient(create_app()).get("/v1/runs").json()
+
+    assert listing["skipped_details"] == [
+        {
+            "run_id": "tracked-run",
+            "category": "not_published",
+            "state": None,
+            "reason": "source-tracked run is not published",
+            "artefact": "run_state.json",
+        }
+    ]
+    assert "local-only detail" not in json.dumps(listing)
 
 
 def _run_state(stage: str = "completed") -> dict:
@@ -316,7 +389,22 @@ def test_corrupt_manifest_is_skipped_not_fatal(client: TestClient, runs_dir: Pat
     body = response.json()
     assert [run["run_id"] for run in body["runs"]] == ["good"]
     assert "broken" in body["skipped"]
-    assert any(warning["code"] == "skipped_run" for warning in body["warnings"])
+    assert body["skipped_details"] == [
+        {
+            "run_id": "broken",
+            "category": "manifest_unreadable",
+            "state": None,
+            "reason": "manifest.json is unreadable or invalid",
+            "artefact": "manifest.json",
+        }
+    ]
+    assert body["warnings"] == [
+        {
+            "code": "skipped_run",
+            "message": "run 'broken' was skipped: manifest.json is unreadable or invalid",
+            "artefact": "manifest.json",
+        }
+    ]
 
 
 def test_corrupt_manifest_run_id_is_404_not_500(
