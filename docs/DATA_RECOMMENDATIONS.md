@@ -28,8 +28,8 @@ canal-distance surface to a Bangkok depth model.
    WorldPop totals, official registered totals and reconciled totals side by
    side. Never call any of these a daytime population.
 2. **Resolve LiDAR access before writing a city depth solver.** The official
-   RTARF-published catalogue describes 1 m RTSD Central Basin surveys with better than 15 cm
-   vertical accuracy, but the public resource found here is a coverage index.
+   RTARF-published catalog records describe 1 m RTSD Central Basin surveys with better than 15 cm
+   vertical accuracy, but the public resources found here are survey indexes.
    Treat the underlying tiles as unavailable until download, licence and
    Bangkok coverage are proven.
 3. **Choose one historical event with complete inputs.** Require rainfall,
@@ -65,7 +65,18 @@ canal-distance surface to a Bangkok depth model.
 
 ## Primary source record
 
-- RTARF-published RTSD LiDAR coverage index: <https://data.go.th/en/dataset/lidar-1>
+- RTARF/RTSD LiDAR catalog records, checked 11 October 2026:
+  - <https://data.go.th/en/dataset/lidar-1> — data key
+    `f210cab6-0b0e-4618-b9c7-60796092d1bb`, record metadata maintained
+    22 May 2026, with API/KMZ/ZIP and shapefile-component listings.
+  - <https://data.go.th/en/dataset/lidar> — data key
+    `001d6e5c-e5a9-4729-a369-6af75b1d945d`, geospatial record metadata
+    maintained 6 June 2024, with an SHP resource listing.
+  - The records share a title and publisher but have different identifiers,
+    dates, categories and resource presentations. They are not proven aliases.
+    Neither catalog record by itself proves Bangkok tile coverage, access to
+    ground-classified elevations, vertical datum, or permission to redistribute
+    the underlying elevation data.
 - Copernicus DEM specification and access: <https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM>
 - DOPA/NSO district population controls: <https://data.go.th/en/dataset/0405_01_0005>
 - Google Open Buildings 2.5D: <https://sites.research.google/gr/open-buildings/temporal/>

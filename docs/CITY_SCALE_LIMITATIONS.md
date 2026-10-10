@@ -5,6 +5,12 @@
 **Scope:** the expansion from the Khlong San pilot (5.96 km²) to the whole
 Bangkok Metropolitan Administration (1,643.5 km²)
 
+> **Historical technical record.** Inventory and observed-water counts below
+> describe the BBBike-era investigation through 4 October 2026. They remain
+> evidence for that immutable work, not current counts for the admitted
+> Geofabrik source. The staged Geofabrik inventory and the absence of a current
+> city run are recorded in [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
+
 ## Summary
 
 The city baseline contains mapped network, buildings and modelled population.
@@ -84,7 +90,7 @@ it as a city flood map would convert a limitation into a false headline.
 | AWS terrarium tiles (SRTM/NED/ETOPO compilation) | Reachable, decoded, **insufficient vertical accuracy** |
 | Copernicus DEM GLO-30 | Official access route now documented, but it is a DSM with <4 m absolute vertical accuracy at 90%; insufficient for Bangkok depth |
 | Copernicus DEM GLO-90 | Coarser than GLO-30 and therefore not a depth solution |
-| RTARF-published index of RTSD Central Basin LiDAR surveys | Official open index claims 1 m surveys and <15 cm vertical accuracy; the index is not the underlying elevation tiles |
+| Two RTARF-published catalog records for RTSD Central Basin LiDAR surveys | Both describe 1 m surveys and <15 cm vertical accuracy, but they are distinct portal records and neither establishes access to ground-classified elevation tiles |
 | GISTDA open data | Host does not resolve from this environment |
 | BMA open data (`data.bangkok.go.th`) | TLS connection closed |
 | `data.go.th` national portal | HTTP 403 |
