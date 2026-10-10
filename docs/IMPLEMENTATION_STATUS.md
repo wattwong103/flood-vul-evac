@@ -6,9 +6,20 @@ does not establish empirical validity or operational readiness.
 
 ## Current source and release status
 
-Current `main` is merge commit `f4662880523c71a8439750a7fca282c5d488d97e`
-with source tree `1fe700d33c2ed6c18aa1adc23caa09c9cf39d773`.
-Four human-merged PRs establish the present four-area implementation boundary:
+Current `main` is merge commit `b1c36077c25726d8b77e5f804f750fa76a44a724`
+through merged PR #70. The accepted demonstration runs were produced earlier at
+`f4662880523c71a8439750a7fca282c5d488d97e`, source tree
+`1fe700d33c2ed6c18aa1adc23caa09c9cf39d773`. Current source and release source
+are deliberately recorded as different boundaries.
+
+PR #65 merged a generated checksum ledger before this source-only handoff. This
+branch removes that ledger from the tracked tree while retaining it in Git
+history and inside the independently verified external evidence package. PR #67
+merged truthful partial-age-coverage reporting for future outputs, and PR #70
+made the city API contracts self-contained without rerunning the city. None of
+these changes rewrites or reattributes the immutable release files.
+
+The implementation sequence includes:
 
 - [PR #49](https://github.com/wattwong103/flood-vul-evac/pull/49) landed the
   reviewed 43-commit four-area, denominator, replay-audit and report stack.
@@ -21,9 +32,19 @@ Four human-merged PRs establish the present four-area implementation boundary:
 - [PR #53](https://github.com/wattwong103/flood-vul-evac/pull/53) closed the
   BKK-021F named-pilot identity/traversal regression matrix as tests-only
   coverage, with no production, configuration or method change.
+- [PR #55](https://github.com/wattwong103/flood-vul-evac/pull/55) closed the
+  saved-publication to both-API fractional-clearance regression gate.
+- [PRs #56–#59](https://github.com/wattwong103/flood-vul-evac/pulls?q=is%3Apr+is%3Amerged)
+  re-froze the admitted OSM snapshot, enabled per-cell age/sex inputs and
+  restored the complete test gate before the release was executed.
+- [PR #60](https://github.com/wattwong103/flood-vul-evac/pull/60) recorded the
+  eight-run release and its limitations.
+- [PRs #61–#64](https://github.com/wattwong103/flood-vul-evac/pulls?q=is%3Apr+is%3Amerged)
+  improve future manifest identity, pair-report publication, the unexercised
+  terrain path and repository lint. They do not reattribute the earlier runs.
 
-This source is implemented and reviewed; it is not an accepted comparative
-release. The [four-area contract](MULTI_AREA_PLAN.md) remains authoritative.
+The [four-area contract](MULTI_AREA_PLAN.md) remains authoritative. The first
+two release attempts remain immutable negative evidence:
 The first release attempt stopped on saved-WKT precision. Its two Khlong San
 bundles are immutable negative evidence. The second attempt stopped on the
 Din Daeng denominator replay after completing five of eight planned bundles.
@@ -31,15 +52,14 @@ Those five bundles and their eight-ID plan are also immutable negative evidence;
 they cannot be pooled with a later release even though the preserved Din Daeng
 bundle passes read-only replay under the corrected #51 source.
 
-No complete, common-boundary eight-run set has been executed or accepted.
-Both named pre-release regression gates are now merged or proposed as
-tests-only change: the named-pilot identity/traversal matrix through #53, and
-the pipeline-to-saved-artifact-to-both-API fractional-seconds round-trip
-regression on branch `task/api-fractional-roundtrip`. Once that second gate
-merges, the precondition is to freeze one merged
-source/configuration/environment boundary, issue eight new run IDs and audit
-all eight runs plus all four pairs. Until that happens, no four-area numerical
-result is approved for the paper.
+A complete common-boundary set was executed on 10 October: eight new run IDs,
+8/8 run audits and 4/4 pair audits pass, and all four pair reports are
+published. The set is acceptable as internally checked **demonstration
+evidence** with the limitations below. It is not calibrated, empirically
+validated, causal or operational evidence. Paper and app uses must attribute
+it to `f466288`, retain the exact sample denominators and avoid mixing failed
+attempts, current-source claims or superseded city values. See
+[the release evidence record](RELEASE_EVIDENCE_2026-10-10.md).
 
 ## OSM source re-freeze, 10 October 2026 — city numbers superseded
 
@@ -48,9 +68,9 @@ Approved by North on 10 October 2026 after the staging blocker fired.
 The four-area contract admitted `geofabrik-thailand-osm-20260929`. On
 10 October its dated publisher URL `thailand-260929.osm.pbf` returned **404**,
 so the admitted source was no longer publicly retrievable and staging all four
-AOIs failed at the licence gate. Independently, the local city cache had in
-fact been built from the **BBBike** Bangkok extract, which the registry already
-described as an incomplete city rectangle.
+AOIs failed at the licence gate. Independently, the local city cache had been
+built from the **BBBike** Bangkok extract, a different clipped city rectangle
+from the admitted national source.
 
 The source is now re-frozen on **`geofabrik-thailand-osm-20261009`**:
 
@@ -66,12 +86,13 @@ The withdrawn `20260929` entry is kept with `status: verify` — not deleted —
 because frozen configurations and published manifests reference it by id. It
 can no longer enter a run.
 
-### The BBBike extract was materially incomplete
+### The staged city inventory changed materially
 
-Rebuilding the city cache from the admitted source changes the network and
-building inventory by a large margin:
+Rebuilding the city cache from the admitted source produced a substantially
+larger network and building inventory. This is a source-to-source staging
+comparison, not a measurement of ground-truth completeness:
 
-| Layer | BBBike cache (was) | Geofabrik 261009 (now) | Change |
+| Layer | BBBike cache (was) | Geofabrik 261009 (now) | Staged inventory delta |
 |---|---:|---:|---:|
 | Road ways | 235,678 | 403,830 | **+71%** |
 | Buildings | 272,116 | 427,580 | **+57%** |
@@ -80,9 +101,10 @@ building inventory by a large margin:
 
 **Consequence: the historical city run `be6a4e08-e2d7-4dd9-bf8b-4f2a02a12a81`
 and every number derived from it — including the README's city table and the
-76.1429 km² unreconciled-area figure — were computed on a source now known to
-be materially incomplete. Those figures remain true statements about that
-immutable run; they must no longer be presented as current city results.**
+76.1429 km² unreconciled-area figure — were computed on the earlier, smaller
+BBBike-derived inventory rather than the admitted source. Those figures remain
+true statements about that immutable run; they must no longer be presented as
+current city results.**
 
 A new city run on the re-frozen source has **not** been executed. Until it is,
 the city layer has no current result. The README city table still shows the
@@ -112,10 +134,10 @@ BMA AOI polygon used to clip the city extract has no recorded origin and was
 **not** re-derived from the admitted source. The pilot path does not depend on
 it. Re-deriving it would move the city geometry again and is a North decision.
 
-Full Python/API suite with #55 merged in: **346 passed, 6 failed** — the same six
-pre-existing `test_city_endpoints.py` failures recorded below, unchanged by the
-re-freeze. Measured on the #56 branch alone the count is 344, because #55's two
-new round-trip tests are not present there.
+Merged verification evidence through PR #64 records **363 passed, 6 failed**
+for the Python/API suite. The same six pre-existing
+`test_city_endpoints.py` failures recorded below remain the known stale-city-run
+condition; repository-wide Python lint is clean.
 
 ## Historical city-scale implementation and verified run
 
@@ -219,9 +241,10 @@ release attempt.
 | Severity / task | What remains | Next owner and acceptance gate |
 |---|---|---|
 | CLOSED MEDIUM BKK-021F named-pilot identity | Rejection matrix for configured AOI identity, direct traversal IDs and missing scoped inputs is covered by #53 | Merged tests-only coverage; bounded to the named cases, not exhaustive identity hardening. Three LOW follow-ups are parked in the PR description. |
-| CLOSED MEDIUM API fractional-seconds round-trip | A real publication now survives saved Parquet/manifest readback through both clearance routes with fractional event seconds, with the canonical non-null denominator contract | `api/tests/test_publication_roundtrip.py` (#55, pending merge). Recomputes the weighted-clearance definition independently rather than calling the pipeline helper; verified to fail on both whole-second truncation and absolute-event-time regressions. No production change: the pipeline and both routes were already correct. |
-| MEDIUM BKK-024 release evidence | **Executed 10 October 2026**: eight runs on one boundary `f466288`/tree `1fe700d3`, 8/8 run audits pass, 4/4 pair audits PASS with identical cohorts | North: the release exists and passes. Two follow-ups before promotion — `population_version` does not distinguish the age-structured runs (needs re-staging and a re-run), and `manifest.population_model` omits the age structure. Pair figures generated but not published from a synced folder. |
-| HIGH city result superseded | Every city number, including the README city table and the 76.1429 km² unreconciled-area figure, was derived from the BBBike extract now known to be ~57–71% incomplete. No city run exists on the re-frozen source. | North + implementer: decide whether to re-run the city baseline on `geofabrik-thailand-osm-20261009`, and resolve the unattributed `bangkok-bma` AOI polygon first. Until then the city layer has **no current result** and its README numbers must not be cited. |
+| CLOSED MEDIUM API fractional-seconds round-trip | A real publication now survives saved Parquet/manifest readback through both clearance routes with fractional event seconds, with the canonical non-null denominator contract | Merged in #55. `api/tests/test_publication_roundtrip.py` recomputes the weighted-clearance definition independently rather than calling the pipeline helper; it fails on whole-second truncation and absolute-event-time regressions. No production change was needed. |
+| MEDIUM BKK-024 release evidence | **Executed 10 October 2026**: eight runs on one boundary `f466288`/tree `1fe700d3`, 8/8 run audits and 4/4 pair audits pass; all four pair reports are published | The release is demonstration evidence. `population_version` is stale and requires re-staging plus a new release to correct. Release manifests predate #61's age block; current source is fixed for future runs without reattributing these files. |
+| CLOSED MEDIUM age-coverage reporting | Three AOIs contain a small nonzero unknown-age population weight. The old warning incorrectly implied that every person was unknown, while known-band shares were normalized only over covered cells. | Merged in #67: new outputs report covered/unknown cell and weight denominators, use a covered-cell basis label and issue complete/partial/none warnings without changing assignment, assistance or immutable release files. |
+| HIGH city result superseded | Every city number, including the README city table and the 76.1429 km² unreconciled-area figure, was derived from the earlier BBBike cache. Geofabrik staging produced 71% more road ways and 57% more buildings, but that delta is not a completeness estimate. No city run exists on the re-frozen source. | North + implementer: decide whether to re-run the city baseline on `geofabrik-thailand-osm-20261009`, and resolve the unattributed `bangkok-bma` AOI polygon first. Until then the city layer has **no current result** and its README numbers must not be cited. |
 | MEDIUM BKK-009 boundaries | 76.1429 km² of the BMA lies outside the 50 OSM district union; cause unverified | Data steward + North: acquire authoritative geometry with reuse terms and reconcile the difference. The [BMA 50-district catalog](https://data.go.th/en/dataset/50) currently says “License not specified,” so it is a lead, not an admitted input. |
 | MEDIUM BKK-009 population | Controls audited, not ingested or concept-matched | North selects resident/registered/de-facto target; implementer adds district crosswalk, date matching and reconciliation tests. |
 | HIGH scientific gate: terrain/event | Actual bare-earth tiles, datum, forcing and held-out validation absent | Data steward: pursue [RTSD LiDAR catalog](https://data.go.th/en/dataset/lidar-1) and [GISTDA event extent](https://opendata.gistda.or.th/th/dataset/disasters-03). A coverage index or extent product is not depth. |
@@ -234,11 +257,12 @@ release attempt.
 
 ## Handoff and use
 
-North owns review and merge. The paper session owns manuscript and figure edits;
-it has the historical immutable city run, its exact numbers, source tree and
-caveats. Implementation changes do not automatically replace paper results.
-No four-area number is handed to the paper until the new eight-run release gate
-passes. Historical evidence and fresh verification are separately identified in
+North owns review and merge. The paper session owns manuscript and figure edits.
+The four-area release passed its internal run and pair gates and may be used
+only as demonstration evidence with its `f466288` boundary, exact sample
+denominators and stated limitations. Implementation changes do not
+automatically replace paper results, and superseded city numbers remain out of
+scope. Historical evidence and fresh verification are separately identified in
 every PR handoff.
 
 Run `python -m pytest pipeline/tests api/tests -q`, then `pnpm test`, `pnpm build`
@@ -247,8 +271,8 @@ any new evidence. Internal success alone never promotes a run beyond demonstrati
 
 ### Known pre-existing test failures, 10 October 2026
 
-The combined suite currently reports **346 passed, 6 failed, 0 errors** on this
-machine. All six failures are in `api/tests/test_city_endpoints.py` and are
+Merged verification evidence through PR #64 reports **363 passed, 6 failed, 0
+errors**. All six failures are in `api/tests/test_city_endpoints.py` and are
 unrelated to the fractional-seconds work. They reproduce with that test file run
 alone, with no other change present.
 
@@ -284,8 +308,9 @@ smoothed over:
   documented stale-run condition, not a regression from any change here. Any
   green-suite claim must exclude them explicitly.
 - The city numbers derived from run `be6a4e08` stay in the README and stay
-  **superseded**: they were computed from the BBBike extract, now known to be
-  materially incomplete. The city layer therefore has **no current result**.
+  **superseded**: they were computed from the earlier BBBike cache rather than
+  the admitted Geofabrik source. The city layer therefore has **no current
+  result**; the observed inventory delta is not a completeness estimate.
 - The verified fix path remains documented above, so the decision is reversible
   if the city layer is ever needed.
 
@@ -317,11 +342,14 @@ OSM source. There is exactly one boundary across the release.
 - **Run audits: 8 / 8 pass** (`run.py validate`).
 - **Pair audits: 4 / 4 `PASS`** (`report.load_checked_pair`).
 - **Fixed cohort holds**: dry and moderate carry an identical cohort weight in
-  every pair — 1392.4893 (Sai Mai), 6201.5745 (Din Daeng), 809.9507 (Min Buri).
+  every pair — 5310.9433 (Khlong San), 1392.4893 (Sai Mai), 6201.5745
+  (Din Daeng), 809.9507 (Min Buri).
 
-Per-cell age structure is active in all eight (`age_structure_mode: per_cell`,
-`age_band_basis: population_weighted_over_cells`,
-`age_structure_source: worldpop-tha-age-sex-2026-r2025a`).
+Per-cell age structure is configured and supplies known ages in all eight
+(`age_structure_mode: per_cell`, `age_structure_source:
+worldpop-tha-age-sex-2026-r2025a`). Coverage is not complete in three AOIs.
+The release reports the basis as `population_weighted_over_cells`, but its
+known-band shares are actually normalized over covered cells only.
 
 ### Two defects found while recording this
 
@@ -335,10 +363,10 @@ breaks the rule that a changed population must carry a changed version. Closing
 this properly requires re-staging the four pilots with a bumped version and
 re-running the release; changing the config alone cannot do it.
 
-**2. `manifest.population_model` omits the age structure.** The mode, source and
-basis are recorded in `population_qa.json`, but not in the manifest, which is the
-canonical run record. Anyone reading only the manifest cannot tell that these
-runs are age-structured.
+**2. Release `manifest.population_model` omits the age structure.** The mode,
+source and basis are recorded in `population_qa.json`, but not in the canonical
+release manifests. PR #61 adds this identity to manifests of future runs; it
+does not rewrite or reattribute the eight immutable release manifests.
 
 ### Pair artefacts now published
 
@@ -379,8 +407,8 @@ Each contains three PNG figures and one evidence markdown file.
 
 `config/population.json` now sets `age_structure.mode: "per_cell"` with
 `raster_dir: data/staged/population/agesex`. Age is sampled from the 20 WorldPop
-age-band rasters at each population cell centre instead of being `unknown` for
-every person.
+age-band rasters at each population cell centre, supplying a known band for
+most people rather than assigning a national marginal.
 
 | | |
 |---|---|
@@ -394,13 +422,26 @@ Why per cell rather than the national marginal: the national 65+ share is
 `65+` drives `assistance_need`, a national marginal would misstate who needs
 assisted evacuation in three of the four areas, worst in Min Buri by 6.87 pp.
 
-Reported `age_bands` for a `per_cell` run is the **population-weighted aggregate
-over the cells actually used**, labelled `age_band_basis:
-population_weighted_over_cells`. It must not be read as a national marginal.
+Reported release `age_bands` for a `per_cell` run is a
+**population-weighted aggregate over covered cells**. The release label
+`age_band_basis: population_weighted_over_cells` is therefore misleading; the
+next reporting fix will use a covered-cell label and publish coverage
+denominators for new runs. It must not be read as a national marginal or as
+complete AOI coverage.
 
-A missing or partial raster set **aborts the run** with `FileNotFoundError`. It
-does not fall back to `unknown` or to a national figure: silently degrading the
-demographics would be the worst available outcome.
+Measured unknown-age gaps in the immutable release are:
+
+| AOI | Unknown rows / total | Unknown population weight / total | Unknown weight share |
+|---|---:|---:|---:|
+| Khlong San | 82 / 25,562 | 4,250.8360 / 115,958.6556 | 3.67% |
+| Sai Mai | 46 / 207,326 | 798.8647 / 281,949.0760 | 0.28% |
+| Din Daeng | 0 / 40,760 | 0 / 207,118.4482 | 0.00% |
+| Min Buri | 686 / 275,206 | 4,859.2443 / 273,891.4475 | 1.77% |
+
+A missing raster file in the required set **aborts the run** with
+`FileNotFoundError`; it does not fall back to a national figure. Nodata at an
+individual sampled cell remains explicitly `unknown`, which is the partial
+coverage now being reported more accurately.
 
 Temporal caveat, carried in the config warnings: the age/sex rasters are 2026
 estimates applied to a 2020 resident baseline. The structure is plausible but
