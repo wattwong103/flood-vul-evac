@@ -9,10 +9,16 @@ import numpy as np
 import pandas as pd
 import pytest
 import rasterio
+from fastapi.testclient import TestClient
 from rasterio.transform import from_origin
 from shapely.geometry import LineString, box
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# The repo root hosts the `api` package and there is no root conftest.py or pytest config,
+# so add it explicitly. Without this, collection fails for every test in this file under a
+# bare `pytest` invocation (or any cwd other than the repo root).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from api.app import create_app
 from bkkflow import runner
 from bkkflow.sources import pilot_stage
 from bkkflow.util import read_json, write_json
@@ -175,6 +181,81 @@ def test_pilot_publishes_verified_source_identity(pilot_inputs, flood_enabled):
     assert read_json(run / "run_state.json")["active_scenario"] == active_scenario
     assert all(len(source["content_sha256"]) == 64 for source in manifest["source_versions"])
     assert runner.manifest_module.validate_manifest(manifest) == []
+
+
+def test_pilot_saved_fractional_clearance_round_trips_through_both_api_routes(
+    pilot_inputs, monkeypatch
+):
+    expected = {
+        "p5": 60.25 / 60.0,
+        "median": 180.75 / 60.0,
+        "p95": 240.125 / 60.0,
+    }
+
+    def fractional_evacuation(cohort, *, destinations, route_lookup, scenario, seed):
+        ordered = cohort.sort_values("person_id", kind="stable").reset_index(drop=True)
+        assert ordered["weight"].tolist() == pytest.approx([51.1, 97.8, 102.2, 48.9])
+        clearance_s = [60.25, 120.5, 180.75, 240.125]
+        destination_id = str(destinations.iloc[0]["dest_id"])
+        states = pd.DataFrame(
+            {
+                "person_id": ordered["person_id"],
+                "outcome_id": ordered["person_id"].astype(str) + ":arrived:0",
+                "source_person_id": ordered["person_id"],
+                "source_weight": ordered["weight"],
+                "state": "arrived",
+                "reason": "admitted",
+                "event_time_s": [scenario.warning_time_s + value for value in clearance_s],
+                "weight": ordered["weight"],
+                "dest_id": destination_id,
+                "clearance_s": clearance_s,
+                "distance_m": 100.0,
+            }
+        )
+        total_weight = float(states["weight"].sum())
+        return states, {
+            "cohort_weighted": total_weight,
+            "state_distribution": {"arrived": total_weight},
+            "arrived_weighted": total_weight,
+            "unserved_weighted": 0.0,
+            "clearance_time_minutes": expected,
+            "top_bottleneck_edges": [],
+            "destinations": [],
+        }
+
+    monkeypatch.setattr(
+        runner.evacuation_module, "simulate_evacuation", fractional_evacuation
+    )
+    result = runner.execute_run(
+        run_id="fractional-api",
+        pilot_id="khlong-san-district",
+        flood_enabled=False,
+        max_agents=10,
+    )
+    run_dir = Path(result["run_dir"])
+    persisted = pd.read_parquet(run_dir / "evacuation_states.parquet")
+    manifest = read_json(run_dir / "manifest.json")
+    warning_time_s = manifest["evacuation_scenario"]["departure_model"]["warning_time_s"]
+    assert (persisted["event_time_s"] - warning_time_s).tolist() == pytest.approx(
+        [60.25, 120.5, 180.75, 240.125]
+    )
+    saved_denominators = read_json(run_dir / "denominators.json")
+    saved_stats = read_json(run_dir / "stats.json")
+    assert saved_denominators["contract_version"] == "sample-denominators-v1"
+    assert saved_stats["denominators"] == saved_denominators
+    assert saved_stats["evacuation"]["clearance_time_minutes"] == expected
+
+    monkeypatch.setenv("BKKFLOW_RUNS_DIR", str(pilot_inputs))
+    client = TestClient(create_app())
+    stats = client.get("/v1/runs/fractional-api/stats")
+    evacuation = client.get("/v1/runs/fractional-api/evacuation")
+    assert stats.status_code == evacuation.status_code == 200
+    stats_body = stats.json()
+    evacuation_body = evacuation.json()
+    assert stats_body["evacuation"]["clearance_time_minutes"] == expected
+    assert evacuation_body["clearance_time_minutes"] == expected
+    assert stats_body["denominators"] == saved_denominators
+    assert evacuation_body["denominators"] == saved_denominators
 
 
 @pytest.mark.parametrize("flood_enabled", [None, 0, 1, "moderate"])
