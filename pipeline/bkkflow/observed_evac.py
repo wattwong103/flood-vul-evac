@@ -48,7 +48,7 @@ import pandas as pd
 
 from .city_network import CityRoutingIndex
 from .city_method import PUBLIC_GRID_M, SNAP_TOLERANCE_M, ROUTING_CUTOFF_MINUTES, cell_footprints
-from .util import CURATED_DIR, ensure_dir, utc_now_iso, write_json
+from .util import utc_now_iso, write_json
 
 DESIGNATED_DESTINATIONS = 150
 CLEARANCE_THRESHOLDS_MIN = (15.0, 30.0, 60.0, 120.0)

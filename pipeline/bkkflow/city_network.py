@@ -27,7 +27,6 @@ from typing import Any
 
 import geopandas as gpd
 import numpy as np
-import pandas as pd
 import shapely
 from shapely.ops import linemerge, unary_union
 
@@ -38,7 +37,7 @@ VEHICLE_SPEED_KMH = {
     "living_street": 15, "service": 15, "road": 20,
 }
 WALK_SPEED_MPS = 4.5 / 3.6
-from .city_method import SNAP_TOLERANCE_M
+from .city_method import SNAP_TOLERANCE_M  # noqa: E402
 
 PEDESTRIAN_ALLOWED = {
     "motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link",

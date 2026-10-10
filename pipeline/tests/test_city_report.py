@@ -58,7 +58,6 @@ def test_rendered_water_panel_handles_no_observation_share(tmp_path, monkeypatch
 
 def test_building_evidence_panel_includes_unknown_height():
     import city_report
-    import pandas as pd
     import matplotlib.pyplot as plt
     import geopandas as gpd
     from shapely.geometry import box

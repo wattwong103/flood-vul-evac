@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 
 from . import aoi as aoi_module
@@ -41,7 +40,7 @@ from .city_method import PUBLIC_GRID_M
 from .sources.registry import load_registry
 from .sources.population_source import CITY_DATASET, CITY_SOURCE_ID, count_raster_url
 from .sources import city_osm, destinations as destinations_source, gsw, mitrearth
-from .util import CURATED_DIR, RUNS_DIR, ensure_dir, read_json, sha256_file, utc_now_iso, write_json
+from .util import CURATED_DIR, RUNS_DIR, read_json, sha256_file, utc_now_iso, write_json
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 WORLDPOP_RASTER = Path(__file__).resolve().parents[2] / "data/staged/population" / Path(CITY_DATASET["data_file"]).name

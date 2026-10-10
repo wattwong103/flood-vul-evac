@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
-import pandas as pd
 from shapely.ops import unary_union
 
 from ..util import CURATED_DIR, ensure_dir, sha256_file, utc_now_iso, write_json

@@ -10,15 +10,12 @@ Two rules from the plan are enforced here:
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import rasterio
 from rasterio.mask import mask as rio_mask
-from rasterio.windows import from_bounds
 from shapely.geometry import box, mapping
 
 from ..http import HttpClient
@@ -140,7 +137,6 @@ def clip_to_aoi(
         geometry = max(geometry.geoms, key=lambda part: part.area)
 
     with rasterio.open(source) as dataset:
-        window = from_bounds(*geometry.bounds, transform=dataset.transform)
         data, transform = rio_mask(dataset, [mapping(geometry)], crop=True, filled=True, nodata=0)
         profile = dataset.profile.copy()
         profile.update(

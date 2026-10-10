@@ -84,7 +84,6 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     raster_path, meta = population_source.download_count_raster(client, dataset)
     print(f"[population] {raster_path.name} ({meta['byte_count']:,} bytes)")
 
-    import geopandas as gpd
 
     aoi_frame = aoi_module.load_aoi(aoi_id)
     clip_path = CURATED_DIR / "population" / f"{raster_path.stem}_aoi.tif"
@@ -128,7 +127,6 @@ def cmd_stage_pilot(args: argparse.Namespace) -> int:
 
 def cmd_ingest_city(args: argparse.Namespace) -> int:
     """Stage the whole-city OSM extract and the city population grid."""
-    import geopandas as gpd
 
     from bkkflow import aoi as aoi_module
     from bkkflow import population as population_module

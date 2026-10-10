@@ -106,7 +106,6 @@ def figure_city_baseline(run_id: str, report_dir: Path) -> Path:
         values = [entry["water_km2"] for entry in years]
         bars = axis.bar(labels, values, color="#0369a1")
         axis.bar_label(bars, fmt="%.0f", fontsize=8)
-        baseline = min(years, key=lambda e: e["water_km2"])["year"]
         axis.set_title("Observed water extent by year (Landsat)", fontsize=10)
         axis.set_ylabel("water extent (km2)")
         axis.text(
@@ -269,7 +268,6 @@ def _plot_observed_water(axis, aoi, stats) -> None:
     """Draw the wettest observed year as a water mask over the AOI."""
     import rasterio
     from rasterio.mask import mask as rio_mask
-    from rasterio.windows import from_bounds
 
     from bkkflow.sources import gsw
 

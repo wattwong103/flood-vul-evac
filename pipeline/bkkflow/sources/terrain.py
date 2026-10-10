@@ -24,13 +24,12 @@ sensitivity rather than a single number.
 
 from __future__ import annotations
 
-import io
 import math
 import struct
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 
