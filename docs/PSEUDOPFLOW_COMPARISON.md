@@ -217,17 +217,52 @@ visible `age_band: unknown` gap **stays open**. That is the honest outcome: the
 plumbing exists, the source is approved and acquired, but the only marginal
 currently available is the wrong geography.
 
-Two ways to actually close it:
+### Per-cell sampling was tried, and it changes the recommendation
 
-1. **Reproject onto the population grid and use per-cell shares.** The two grids
-   are one column and eight rows apart (below), so an explicit nearest-neighbour
-   resample is cheap. This yields genuine spatial variation and is defensible,
-   but it requires changing `assign_demographics` from a national dict to
-   per-cell bands.
-2. **Find an AOI-appropriate age source** — BMA or NSO district-level age
-   structure, or WorldPop subnational age/sex products.
+The national marginal was rejected above on the grounds that it would erase
+spatial variation. That claim was then **tested rather than asserted** by
+sampling the acquired rasters at every pilot population cell with a
+nearest-neighbour lookup — which is the declared reprojection the grid mismatch
+calls for.
 
-Either way the source must be recorded and its checksums kept, as they now are.
+Artefact: `data/curated/population/age_sex_aoi_comparison.json`.
+
+| Geography | under-15 | working 20–64 | 65+ |
+|---|---:|---:|---:|
+| **National Thailand** | **14.25 %** | 63.50 % | 16.35 % |
+| Khlong San (678 cells) | 9.53 % | 65.63 % | 19.29 % |
+| Din Daeng (1,019 cells) | 9.42 % | 70.53 % | 14.45 % |
+| Sai Mai (5,205 cells) | 12.05 % | 69.70 % | 12.34 % |
+| Min Buri (7,206 cells) | 13.12 % | 70.31 % | 9.48 % |
+
+Divergence from applying the national marginal:
+
+| AOI | under-15 error | 65+ error |
+|---|---:|---:|
+| Khlong San | −4.71 pp | +2.94 pp |
+| Din Daeng | −4.83 pp | −1.90 pp |
+| Sai Mai | −2.19 pp | −4.01 pp |
+| Min Buri | −1.12 pp | **−6.87 pp** |
+
+The national marginal is not a small approximation error. Across the four AOIs
+the **65+ share ranges from 9.48 % to 19.29 %** — a factor of two — and the
+national figure (16.35 %) is wrong by up to **6.87 pp in Min Buri**.
+
+That matters more than the headline suggests. In this project `65+` drives
+`assistance_need`, which drives who is assumed to need assisted evacuation.
+Applying a national marginal would **overstate the assisted-evacuation
+population in three of four AOIs**, worst in Min Buri by nearly 7 pp.
+
+**Therefore: gap 1 is closable, and per-cell age shares are the right route.**
+The obstacle is not data availability or licensing — the rasters are acquired,
+checksummed and approved. It is that `assign_demographics` currently consumes a
+single national `dict`, so using this requires changing it to accept per-cell
+bands. That is a real code change, and it should ship as its own PR with the
+temporal caveat below.
+
+Temporal note: age/sex is **2026** while the population baseline is a **2020**
+modelled surface. The comparison is structural, not contemporaneous, and any use
+must declare that mismatch.
 
 ### Grid mismatch
 
@@ -269,7 +304,7 @@ Would **not** fix:
 
 | # | Gap vs Pseudo-PFLOW | Cost | Why it matters |
 |---|---|---|---|
-| 1 | **Age/sex wiring** | Low code, 2.4 GB data | Implemented; source already approved and verified reachable. Closes the largest single attribute gap. National marginals only — see the grid caveat above. |
+| 1 | **Age/sex wiring** | Medium | Data acquired and checksummed. Per-cell shares are computable and vary materially across AOIs (65+ from 9.48% to 19.29%). Needs \ssign_demographics\ to accept per-cell bands. Closes the largest single attribute gap. |
 | 2 | **Behaviour calibration** | High | Pseudo-PFLOW tunes 7 parameters to mode-share targets; BKK/FLOW declares priors. The paper already rejects a calibrated-mobility claim on the 1.97 vs 3.712 trips/person/day mismatch. Adopting a similar LHS framework against BMA Household Travel Survey targets is the honest path. |
 | 3 | **Output cadence** | Medium | 500 m / 10 min mesh vs 1 km public grid. Not a correctness gap, but it limits comparability. |
 | 4 | **Directionality** | Low | City routing is undirected; vehicle one-way restrictions unenforced. Already tracked as BKK-017. |
