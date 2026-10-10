@@ -10,12 +10,12 @@ drainage index is not a flood depth.
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import sys
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -23,39 +23,227 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from api.app import app  # noqa: E402
+from api.app import create_app  # noqa: E402
 
 
-def _city_run_id() -> str | None:
-    matches = glob.glob(str(REPO_ROOT / "runs" / "*" / "observed_water.json"))
-    matches = [p for p in matches if (Path(p).parent / "manifest.json").is_file()]
-    if not matches:
-        return None
-    return os.path.basename(os.path.dirname(max(matches, key=os.path.getmtime)))
+RUN_ID = "synthetic-city-contract"
 
 
-RUN_ID = _city_run_id()
-needs_run = pytest.mark.skipif(RUN_ID is None, reason="no city run with an observed layer")
+def _write_json(run_dir: Path, name: str, payload: dict) -> None:
+    (run_dir / name).write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
 
-#: The two screening layers are separate artefacts, so a run that carries the
-#: observation is not automatically one that was screened.
-needs_screening = pytest.mark.skipif(
-    RUN_ID is None
-    or not (
-        (REPO_ROOT / "runs" / str(RUN_ID) / "connectivity_screening.json").is_file()
-        and (REPO_ROOT / "runs" / str(RUN_ID) / "drainage_index.json").is_file()
-        and (REPO_ROOT / "runs" / str(RUN_ID) / "drainage_index.parquet").is_file()
-    ),
-    reason="no city run carrying the connectivity and drainage screening artefacts",
-)
+
+def _write_city_run(root: Path) -> Path:
+    """Write the smallest complete city snapshot needed by this contract suite."""
+    run_dir = root / RUN_ID
+    run_dir.mkdir(parents=True)
+    _write_json(
+        run_dir,
+        "manifest.json",
+        {
+            "run_id": RUN_ID,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "validation_status": "demonstration",
+            "geography": {
+                "aoi_id": "bangkok-bma",
+                "storage_crs": "OGC:CRS84",
+                "analysis_crs": "EPSG:32647",
+            },
+            "source_versions": [],
+            "warnings": [],
+        },
+    )
+    _write_json(
+        run_dir,
+        "stats.json",
+        {
+            "run_id": RUN_ID,
+            "flood": {
+                "depth_status": "unavailable",
+                "depth_reason": "No hydraulic depth surface is available.",
+                "max_depth_m": None,
+                "edges_closed": None,
+                "observed_extent": {"is_observation": True},
+            },
+            "network": {"edges": 60, "nodes": 61, "length_km": 6.0},
+            "warnings": [],
+        },
+    )
+    _write_json(
+        run_dir,
+        "observed_water.json",
+        {
+            "status": "ok",
+            "source_id": "jrc-global-surface-water-v1.4",
+            "licence": "Copernicus free and open use",
+            "product": "annual water classification",
+            "measures": "annual observed water extent, NOT depth",
+            "baseline_year": 2010,
+            "years": [{"year": 2010}, {"year": 2012}],
+            "unavailable_years": [],
+            "interpretation_notes": [
+                "Annual water classes are not event-flood extent or flood peaks.",
+                "No observations is not dry land.",
+            ],
+        },
+    )
+
+    severity = (
+        "Not an evacuation simulation: the annual observation has no depth, "
+        "duration, flow direction or timing."
+    )
+    screened_years = {}
+    for year, closed_share in ((2010, 0.1), (2012, 0.2)):
+        screened_years[str(year)] = {
+            "year": year,
+            "source_role": "screening_index",
+            "hazard_role": "observed",
+            "is_evacuation_simulation": False,
+            "severity_note": severity,
+            "closed_edge_share": closed_share,
+            "reachable_share_of_exposed": 0.75,
+            "designated_destinations": 2,
+        }
+    _write_json(
+        run_dir,
+        "connectivity_screening.json",
+        {
+            "source_role": "screening_index",
+            "hazard_role": "observed",
+            "measures": "network connectivity under observed annual water",
+            "years": screened_years,
+        },
+    )
+
+    risk_bands = [
+        "very_high",
+        "very_high",
+        "high",
+        "high",
+        "moderate",
+        "moderate",
+        "low",
+        "low",
+    ]
+    drainage = pd.DataFrame(
+        {
+            "cell_id": [f"drainage-{index}" for index in range(8)],
+            "gx": list(range(8)),
+            "gy": [0] * 8,
+            "x": [662176.0 + index * 10 for index in range(8)],
+            "y": [1520582.0 + index * 10 for index in range(8)],
+            "lon": [100.5 + index * 0.001 for index in range(8)],
+            "lat": [13.75 + index * 0.001 for index in range(8)],
+            "drainage_m": [100.0] * 8,
+            "drainage_km_per_km2": [0.1] * 8,
+            "distance_to_drainage_m": [50.0] * 8,
+            "in_overflow_path": [False] * 8,
+            "basin_id": ["basin-1"] * 8,
+            "basin_drainage_density": [0.2] * 8,
+            "susceptible_village": [False] * 8,
+            "index_components": ["synthetic-contract-fixture"] * 8,
+            "risk_index": [0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25],
+            "risk_band": risk_bands,
+            "index_inputs_complete": [True] * 8,
+            "source_role": ["screening_index"] * 8,
+        }
+    )
+    drainage.to_parquet(run_dir / "drainage_index.parquet", index=False)
+    band_counts = {band: risk_bands.count(band) for band in sorted(set(risk_bands))}
+    _write_json(
+        run_dir,
+        "drainage_index.json",
+        {
+            "index_version": "synthetic-contract-v1",
+            "status": "ok",
+            "source_role": "screening_index",
+            "measures": "relative drainage-discharge screening index",
+            "is_flood_depth": False,
+            "component_weights": {"distance_to_drainage": 1.0},
+            "bands": sorted(band_counts),
+            "summary": {"bands": band_counts},
+            "limitations": [
+                "This is not a hydraulic model and not a flood depth.",
+                "It omits rainfall, river stage, tides, and pump and gate operation.",
+            ],
+        },
+    )
+
+    pd.DataFrame(
+        {
+            "cell_id": ["water-2010", "water-2012"],
+            "year": [2010, 2012],
+            "water_share": [0.2, 0.4],
+            "water_km2": [0.2, 0.4],
+            "lon": [100.5, 100.51],
+            "lat": [13.75, 13.76],
+        }
+    ).to_parquet(run_dir / "observed_water_cells.parquet", index=False)
+    pd.DataFrame(
+        {
+            "destination_id": ["school-1", "clinic-1"],
+            "destination_class": ["education", "health_care"],
+            "verified": [False, False],
+            "status": ["osm_tagged_candidate_unverified"] * 2,
+            "capacity": [None, None],
+            "operator": [None, None],
+        }
+    ).to_parquet(run_dir / "destinations.parquet", index=False)
+    pd.DataFrame(
+        {
+            "edge_id": [f"edge-{index:03d}" for index in range(60)],
+            "length_m": [100.0] * 60,
+            "highway": ["residential"] * 60,
+            "walk_allowed": [True] * 60,
+            "vehicle_allowed": [True] * 60,
+            "geometry_wkt": [
+                "LINESTRING (662176 1520582, 662276 1520682)"
+            ]
+            * 60,
+        }
+    ).to_parquet(run_dir / "network_edges.parquet", index=False)
+    pd.DataFrame(
+        {
+            "building_id": ["building-1"],
+            "height_m": [9.0],
+            "lon": [100.5],
+            "lat": [13.75],
+        }
+    ).to_parquet(run_dir / "buildings.parquet", index=False)
+    pd.DataFrame(
+        {
+            "cell_id": ["population-1"],
+            "pop": [1000.0],
+            "geometry_wkt": [
+                "POLYGON ((100.49 13.74, 100.51 13.74, 100.51 13.76, "
+                "100.49 13.76, 100.49 13.74))"
+            ],
+        }
+    ).to_parquet(run_dir / "population_grid_1km.parquet", index=False)
+    return run_dir
 
 
 @pytest.fixture(scope="module")
-def client() -> TestClient:
-    return TestClient(app)
+def city_run_dir(tmp_path_factory: pytest.TempPathFactory):
+    root = tmp_path_factory.mktemp("city-runs")
+    previous = os.environ.get("BKKFLOW_RUNS_DIR")
+    os.environ["BKKFLOW_RUNS_DIR"] = str(root)
+    try:
+        yield _write_city_run(root)
+    finally:
+        if previous is None:
+            os.environ.pop("BKKFLOW_RUNS_DIR", None)
+        else:
+            os.environ["BKKFLOW_RUNS_DIR"] = previous
 
 
-@needs_run
+@pytest.fixture(scope="module")
+def client(city_run_dir: Path) -> TestClient:
+    return TestClient(create_app())
+
+
 def test_population_grid_reports_a_resident_baseline(client: TestClient) -> None:
     response = client.get(f"/v1/runs/{RUN_ID}/population-grid")
     assert response.status_code == 200
@@ -67,7 +255,6 @@ def test_population_grid_reports_a_resident_baseline(client: TestClient) -> None
     assert body["matched_rows"] > 0
 
 
-@needs_run
 def test_observed_water_is_flagged_as_observation_and_not_depth(client: TestClient) -> None:
     body = client.get(f"/v1/runs/{RUN_ID}/observed-water").json()
     assert body["available"] is True
@@ -78,7 +265,6 @@ def test_observed_water_is_flagged_as_observation_and_not_depth(client: TestClie
     assert [entry["year"] for entry in body["years"]]
 
 
-@needs_run
 def test_observed_water_states_annual_observation_limits(client: TestClient) -> None:
     """Annual water classes cannot establish whether an event was absent."""
     body = client.get(f"/v1/runs/{RUN_ID}/observed-water").json()
@@ -87,7 +273,6 @@ def test_observed_water_states_annual_observation_limits(client: TestClient) -> 
     assert "no observations is not dry land" in notes
 
 
-@needs_run
 def test_observed_water_cells_are_geojson_with_extent_only_properties(client: TestClient) -> None:
     body = client.get(
         f"/v1/runs/{RUN_ID}/observed-water/cells", params={"year": 2012, "limit": 400}
@@ -105,7 +290,6 @@ def test_observed_water_cells_are_geojson_with_extent_only_properties(client: Te
     assert features[0]["geometry"]["type"] == "Point"
 
 
-@needs_run
 def test_observed_water_cells_do_not_substitute_an_absent_year(client: TestClient) -> None:
     body = client.get(
         f"/v1/runs/{RUN_ID}/observed-water/cells", params={"year": 1999, "limit": 50}
@@ -116,7 +300,6 @@ def test_observed_water_cells_do_not_substitute_an_absent_year(client: TestClien
     assert any(warning.get("code") == "year_not_available" for warning in body["warnings"])
 
 
-@needs_run
 def test_no_destination_is_ever_verified(client: TestClient) -> None:
     body = client.get(f"/v1/runs/{RUN_ID}/destinations", params={"limit": 5}).json()
     assert body["available"] is True
@@ -129,7 +312,6 @@ def test_no_destination_is_ever_verified(client: TestClient) -> None:
         assert row["operator"] is None
 
 
-@needs_run
 def test_destinations_can_be_filtered_by_class(client: TestClient) -> None:
     body = client.get(
         f"/v1/runs/{RUN_ID}/destinations",
@@ -141,7 +323,6 @@ def test_destinations_can_be_filtered_by_class(client: TestClient) -> None:
         assert row["destination_class"] == "health_care"
 
 
-@needs_run
 def test_network_returns_a_deterministic_sample_not_the_whole_city(client: TestClient) -> None:
     first = client.get(f"/v1/runs/{RUN_ID}/network", params={"limit": 40}).json()
     second = client.get(f"/v1/runs/{RUN_ID}/network", params={"limit": 40}).json()
@@ -153,7 +334,6 @@ def test_network_returns_a_deterministic_sample_not_the_whole_city(client: TestC
     assert any(warning.get("code") == "sampled" for warning in first["warnings"])
 
 
-@needs_run
 def test_city_run_reports_null_depth_rather_than_zero(client: TestClient) -> None:
     """A zero would read as 'no flooding', which is a different claim."""
     stats = client.get(f"/v1/runs/{RUN_ID}/stats").json()
@@ -194,7 +374,6 @@ def _iter_coords(geometry: dict, depth: int = 0):
             yield from _iter_coords(sub, depth + 1)
 
 
-@needs_run
 @pytest.mark.parametrize(
     "path",
     [
@@ -227,7 +406,6 @@ def test_served_geojson_is_wgs84_not_projected(client: TestClient, path: str) ->
 # -------------------------------------------------------------------------- #
 
 
-@needs_screening
 def test_connectivity_states_that_it_is_not_an_evacuation_simulation(
     client: TestClient,
 ) -> None:
@@ -253,7 +431,6 @@ def test_connectivity_states_that_it_is_not_an_evacuation_simulation(
     assert "scenario choice" in body["destination_note"]
 
 
-@needs_screening
 def test_connectivity_carries_the_flag_on_every_screened_year(client: TestClient) -> None:
     body = client.get(f"/v1/runs/{RUN_ID}/connectivity").json()
     years = body["years"]
@@ -271,7 +448,6 @@ def test_connectivity_carries_the_flag_on_every_screened_year(client: TestClient
         assert entry["designated_destinations"] > 0
 
 
-@needs_screening
 def test_connectivity_can_be_read_for_a_single_year(client: TestClient) -> None:
     body = client.get(f"/v1/runs/{RUN_ID}/connectivity", params={"year": 2012}).json()
     assert body["year"] == 2012
@@ -279,7 +455,6 @@ def test_connectivity_can_be_read_for_a_single_year(client: TestClient) -> None:
     assert body["years"][0]["is_evacuation_simulation"] is False
 
 
-@needs_screening
 def test_connectivity_does_not_substitute_a_year_that_was_never_screened(
     client: TestClient,
 ) -> None:
@@ -294,7 +469,6 @@ def test_connectivity_does_not_substitute_a_year_that_was_never_screened(
 # -------------------------------------------------------------------------- #
 
 
-@needs_screening
 def test_drainage_reports_a_screening_index_and_not_a_flood_depth(
     client: TestClient,
 ) -> None:
@@ -321,7 +495,6 @@ def test_drainage_reports_a_screening_index_and_not_a_flood_depth(
     assert body["summary"]["bands"]
 
 
-@needs_screening
 def test_drainage_cells_flag_every_feature_as_an_index_and_not_a_depth(
     client: TestClient,
 ) -> None:
@@ -346,7 +519,6 @@ def test_drainage_cells_flag_every_feature_as_an_index_and_not_a_depth(
     assert risks == sorted(risks, reverse=True)
 
 
-@needs_screening
 def test_drainage_cells_can_be_narrowed_by_band_and_risk(client: TestClient) -> None:
     summary = client.get(f"/v1/runs/{RUN_ID}/drainage").json()["summary"]["bands"]
     body = client.get(
@@ -366,7 +538,6 @@ def test_drainage_cells_can_be_narrowed_by_band_and_risk(client: TestClient) -> 
     assert any(warning.get("code") == "band_not_available" for warning in missing["warnings"])
 
 
-@needs_screening
 def test_drainage_cells_report_truncation_rather_than_silently_shortening(
     client: TestClient,
 ) -> None:

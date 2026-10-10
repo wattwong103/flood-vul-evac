@@ -6,8 +6,8 @@ does not establish empirical validity or operational readiness.
 
 ## Current source and release status
 
-Current `main` is merge commit `8c72aa26bb1ad8a2b3f8a01469b153cd8b66c951`
-through merged PR #67. The accepted demonstration runs were produced earlier at
+Current `main` is merge commit `b1c36077c25726d8b77e5f804f750fa76a44a724`
+through merged PR #70. The accepted demonstration runs were produced earlier at
 `f4662880523c71a8439750a7fca282c5d488d97e`, source tree
 `1fe700d33c2ed6c18aa1adc23caa09c9cf39d773`. Current source and release source
 are deliberately recorded as different boundaries.
@@ -15,8 +15,9 @@ are deliberately recorded as different boundaries.
 PR #65 merged a generated checksum ledger before this source-only handoff. This
 branch removes that ledger from the tracked tree while retaining it in Git
 history and inside the independently verified external evidence package. PR #67
-merged truthful partial-age-coverage reporting for future outputs; neither PR
-rewrites or reattributes the immutable release files.
+merged truthful partial-age-coverage reporting for future outputs, and PR #70
+made the city API contracts self-contained without rerunning the city. None of
+these changes rewrites or reattributes the immutable release files.
 
 The implementation sequence includes:
 
