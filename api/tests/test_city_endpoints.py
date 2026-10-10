@@ -46,6 +46,15 @@ def _write_city_run(root: Path) -> Path:
             "run_id": RUN_ID,
             "created_at": "2026-01-01T00:00:00+00:00",
             "validation_status": "demonstration",
+            "code_identity": {
+                "git_commit": "1" * 40,
+                "git_tree": "2" * 40,
+                "git_status": "clean",
+                "source_sha256": "3" * 64,
+                "source_files": 1,
+                "scope": ["pipeline", "api", "config", "schemas"],
+                "verification": "matched_before_publication",
+            },
             "geography": {
                 "aoi_id": "bangkok-bma",
                 "storage_crs": "OGC:CRS84",
@@ -60,6 +69,9 @@ def _write_city_run(root: Path) -> Path:
         "stats.json",
         {
             "run_id": RUN_ID,
+            "scale": "city",
+            "validation_status": "demonstration",
+            "created_at": "2026-01-01T00:00:00+00:00",
             "flood": {
                 "depth_status": "unavailable",
                 "depth_reason": "No hydraulic depth surface is available.",
@@ -69,6 +81,26 @@ def _write_city_run(root: Path) -> Path:
             },
             "network": {"edges": 60, "nodes": 61, "length_km": 6.0},
             "warnings": [],
+        },
+    )
+    stages = [
+        {"stage": "sources", "status": "completed", "seconds": 1.0, "rows": 4},
+        {"stage": "network", "status": "completed", "seconds": 2.0, "rows": 60},
+        {"stage": "map_index", "status": "completed", "seconds": 1.0, "rows": 60},
+    ]
+    _write_json(
+        run_dir,
+        "run_state.json",
+        {
+            "run_id": RUN_ID,
+            "state": "published",
+            "scale": "city",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:04+00:00",
+            "stage_count": len(stages),
+            "stages": stages,
+            "warnings": [],
+            "error": None,
         },
     )
     _write_json(
@@ -118,14 +150,8 @@ def _write_city_run(root: Path) -> Path:
     )
 
     risk_bands = [
-        "very_high",
-        "very_high",
-        "high",
-        "high",
-        "moderate",
-        "moderate",
-        "low",
-        "low",
+        "moderate", "very_high", "low", "high",
+        "low", "very_high", "moderate", "high",
     ]
     drainage = pd.DataFrame(
         {
@@ -144,7 +170,7 @@ def _write_city_run(root: Path) -> Path:
             "basin_drainage_density": [0.2] * 8,
             "susceptible_village": [False] * 8,
             "index_components": ["synthetic-contract-fixture"] * 8,
-            "risk_index": [0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25],
+            "risk_index": [0.55, 0.95, 0.25, 0.75, 0.35, 0.85, 0.45, 0.65],
             "risk_band": risk_bands,
             "index_inputs_complete": [True] * 8,
             "source_role": ["screening_index"] * 8,
@@ -199,9 +225,10 @@ def _write_city_run(root: Path) -> Path:
             "walk_allowed": [True] * 60,
             "vehicle_allowed": [True] * 60,
             "geometry_wkt": [
-                "LINESTRING (662176 1520582, 662276 1520682)"
-            ]
-            * 60,
+                f"LINESTRING ({662176 + index * 10} 1520582, "
+                f"{662276 + index * 10} 1520582)"
+                for index in range(60)
+            ],
         }
     ).to_parquet(run_dir / "network_edges.parquet", index=False)
     pd.DataFrame(
@@ -323,12 +350,32 @@ def test_destinations_can_be_filtered_by_class(client: TestClient) -> None:
         assert row["destination_class"] == "health_care"
 
 
-def test_network_returns_a_deterministic_sample_not_the_whole_city(client: TestClient) -> None:
-    first = client.get(f"/v1/runs/{RUN_ID}/network", params={"limit": 40}).json()
-    second = client.get(f"/v1/runs/{RUN_ID}/network", params={"limit": 40}).json()
+def test_city_fixture_is_source_tracked_and_published(client: TestClient) -> None:
+    detail = client.get(f"/v1/runs/{RUN_ID}").json()
+    stats = client.get(f"/v1/runs/{RUN_ID}/stats").json()
+
+    assert detail["manifest"]["code_identity"]["verification"] == (
+        "matched_before_publication"
+    )
+    assert detail["run_state"]["state"] == "published"
+    assert detail["run_state"]["scale"] == "city"
+    assert stats["scale"] == "city"
+
+
+def test_network_returns_a_deterministic_sample_not_the_whole_city(
+    client: TestClient, city_run_dir: Path
+) -> None:
+    stored = pd.read_parquet(city_run_dir / "network_edges.parquet")
+    assert stored["geometry_wkt"].nunique() == len(stored)
+
+    first = client.get(f"/v1/runs/{RUN_ID}/network", params={"limit": 10}).json()
+    second = client.get(f"/v1/runs/{RUN_ID}/network", params={"limit": 10}).json()
     assert first["sample_is_spatial_subset"] is True
     assert [f["properties"]["edge_id"] for f in first["features"]] == [
         f["properties"]["edge_id"] for f in second["features"]
+    ]
+    assert [f["properties"]["edge_id"] for f in first["features"]] == [
+        f"edge-{index:03d}" for index in range(0, 60, 6)
     ]
     assert first["summary"]["edges"] > first["returned"]
     assert any(warning.get("code") == "sampled" for warning in first["warnings"])
@@ -496,8 +543,11 @@ def test_drainage_reports_a_screening_index_and_not_a_flood_depth(
 
 
 def test_drainage_cells_flag_every_feature_as_an_index_and_not_a_depth(
-    client: TestClient,
+    client: TestClient, city_run_dir: Path
 ) -> None:
+    stored = pd.read_parquet(city_run_dir / "drainage_index.parquet")
+    assert not stored["risk_index"].is_monotonic_decreasing
+
     body = client.get(
         f"/v1/runs/{RUN_ID}/drainage/cells", params={"limit": 50}
     ).json()
