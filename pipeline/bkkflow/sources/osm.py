@@ -17,7 +17,7 @@ from shapely.geometry import LineString, MultiLineString, Point, Polygon, shape
 from shapely.ops import unary_union
 
 from ..http import HttpClient
-from ..util import CURATED_DIR, REPO_ROOT, ensure_dir, utc_now_iso, write_json
+from ..util import CURATED_DIR, REPO_ROOT, ensure_dir, utc_now_iso
 
 SOURCE_ID = "osm-thailand-geofabrik"
 

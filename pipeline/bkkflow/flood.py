@@ -28,7 +28,6 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import shapely
-from shapely.strtree import STRtree
 
 # Threshold sets are data, versioned with the run. A change must change the id.
 THRESHOLD_SETS: dict[str, dict[int, dict[str, float]]] = {

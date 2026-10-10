@@ -107,7 +107,7 @@ class SourceRegistry:
         for source_id in source_ids:
             try:
                 source = self.get(source_id)
-            except KeyError as error:
+            except KeyError:
                 problems.append(f"{source_id}: not in registry")
                 continue
             if not source.is_approved:

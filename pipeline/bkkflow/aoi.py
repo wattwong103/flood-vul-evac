@@ -8,16 +8,14 @@ passes the project's data gate, and is stored with the query that produced it.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
 from shapely.geometry import shape
 
 from .http import HttpClient
-from .util import CURATED_DIR, ensure_dir, sha256_bytes, utc_now_iso, write_json
+from .util import CURATED_DIR, ensure_dir, write_json
 
 NOMINATIM_LOOKUP = "https://nominatim.openstreetmap.org/lookup"
 NOMINATIM_SEARCH = "https://nominatim.openstreetmap.org/search"

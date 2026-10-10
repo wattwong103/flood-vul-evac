@@ -26,7 +26,6 @@ southward from 80N, the second eastward from 180W.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -38,7 +37,7 @@ from rasterio.mask import mask as rio_mask
 
 from ..http import HttpClient
 from ..provenance import verify_source
-from ..util import STAGED_DIR, ensure_dir, sha256_file, read_json, utc_now_iso, write_json
+from ..util import STAGED_DIR, ensure_dir, sha256_file, utc_now_iso, write_json
 
 SOURCE_ID = "jrc-global-surface-water-v1.4"
 BASE = (

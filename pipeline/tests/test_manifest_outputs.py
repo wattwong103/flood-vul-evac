@@ -28,7 +28,6 @@ def test_output_integrity_requires_hash_of_final_bytes(tmp_path):
     path = tmp_path / "trips.parquet"
     path.write_bytes(b"unrouted trips")
     outputs = [manifest.output_entry("trips", path, row_count=1)]
-    stale_hash = outputs[0]["content_sha256"]
 
     path.write_bytes(b"routed final trips")
     with pytest.raises(ValueError, match="Output hash mismatch: trips.parquet"):
