@@ -96,8 +96,8 @@ findings in one pass:
    not an accidental duplicate ledger pass.
 6. Enumerate regular files under the release root using the same containment
    rules. Fail on missing declarations, undeclared extras and any excluded
-   scratch name. The ledger file itself is included only when the schema says
-   it is part of the canonical package.
+   scratch name. The sibling ledger is outside this inventory and is hashed
+   only into the verification summary.
 7. For each run, load `manifest.json`, call
    `pipeline.bkkflow.manifest.validate_manifest`, then
    `manifest.verify_output_integrity`. Require published run state, declared
