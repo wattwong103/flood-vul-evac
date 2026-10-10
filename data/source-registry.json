@@ -335,9 +335,31 @@
       "licence": "ODbL 1.0",
       "licence_url": "https://www.openstreetmap.org/copyright",
       "attribution": "OpenStreetMap contributors, Geofabrik",
+      "status": "verify",
+      "reviewed_at": "2026-10-10",
+      "notes": "WITHDRAWN 2026-10-10: the dated publisher URL now returns 404, so this source is no longer publicly accessible and cannot satisfy the registry policy. It is retained as a historical record because frozen pilot configurations and published run manifests reference it by id. Superseded by geofabrik-thailand-osm-20261009. Dated country extract replaced the incomplete BBBike city rectangle. Require the publisher extraction polygon to cover the AOI before staging. Geometric source coverage is not OSM mapping completeness."
+    },
+    {
+      "source_id": "geofabrik-thailand-osm-20261009",
+      "agency": "OpenStreetMap contributors / Geofabrik",
+      "dataset": "Thailand OSM extract dated 2026-10-09",
+      "model_role": "Full-BMA roads, buildings, water and unverified destination candidates",
+      "resource_url": "https://download.geofabrik.de/asia/thailand-261009.osm.pbf",
+      "format": "OSM PBF",
+      "spatial_resolution": "Mapped features",
+      "temporal_resolution": "Snapshot",
+      "authentication": "None",
+      "licence": "ODbL 1.0",
+      "licence_url": "https://www.openstreetmap.org/copyright",
+      "attribution": "OpenStreetMap contributors, Geofabrik",
       "status": "approved",
-      "reviewed_at": "2026-10-01",
-      "notes": "Dated country extract replaces the incomplete BBBike city rectangle. Require archived publisher extraction polygon to cover the BMA before staging. Geometric source coverage is not OSM mapping completeness."
+      "reviewed_at": "2026-10-10",
+      "content_sha256": "013730abb5ccf132631ff964947671efd09e642880518ec5d15d9366ec877d00",
+      "content_bytes": 328454828,
+      "retrieved_at": "2026-10-10",
+      "coverage_url": "https://download.geofabrik.de/asia/thailand.poly",
+      "coverage_sha256": "a0ac1e0a8f1de80356a7c92684cd6d8f068eb4ef4ae84ad3288134e63b1e72c7",
+      "notes": "Re-freeze approved by North on 2026-10-10 after the 2026-09-29 dated URL returned 404. Replaces geofabrik-thailand-osm-20260929 for all four frozen pilot AOIs; the coverage polygon returned 2026-10-08 contains Khlong San, Sai Mai, Din Daeng and Min Buri. All four AOI boundary areas and geometry hashes are byte-identical to the 2026-09-29 extract, so only the network source hash moves. Use the dated URL, never the rotating -latest alias, so the recorded checksum stays verifiable."
     }
   ]
 }

@@ -19,7 +19,7 @@ from bkkflow.sources import city_osm, pilot_stage
 from bkkflow.util import sha256_file, write_json
 
 
-OSM_URL = "https://download.geofabrik.de/asia/thailand-260929.osm.pbf"
+OSM_URL = "https://download.geofabrik.de/asia/thailand-261009.osm.pbf"
 POP_URL = "https://data.worldpop.org/GIS/Population/Global_2000_2020/2020/THA/tha_ppp_2020.tif"
 
 
@@ -81,7 +81,7 @@ def stage_inputs(tmp_path, monkeypatch):
                                "sha256": sha256_file(path), "path": str(path)}
     coverage_record = city_osm.source_coverage(coverage, aoi)
     write_json(city_dir / "provenance.json", {
-        "source_id": "geofabrik-thailand-osm-20260929", "pbf_path": str(pbf),
+        "source_id": "geofabrik-thailand-osm-20261009", "pbf_path": str(pbf),
         "content_sha256": sha256_file(pbf), "retrieved_at": "2026-09-29T00:00:00+00:00",
         "resource_url": OSM_URL, "coverage": coverage_record, "layers": layer_records,
     })
@@ -93,7 +93,7 @@ def stage_inputs(tmp_path, monkeypatch):
                 "admin_level": "6", "osm_relation_id": 999, "area_km2": area_km2},
         "versions": {"population": "population-test-district", "network": "network-test-district",
                      "buildings": "buildings-test-district"},
-        "sources": {"osm": "geofabrik-thailand-osm-20260929",
+        "sources": {"osm": "geofabrik-thailand-osm-20261009",
                     "population": "worldpop-global-2000-2020-tha-100m"},
         "source_sha256": {"osm": sha256_file(pbf), "population": sha256_file(population),
                           "geometry": geometry_hash},

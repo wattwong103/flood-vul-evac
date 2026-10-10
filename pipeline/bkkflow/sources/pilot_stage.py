@@ -27,7 +27,7 @@ from .registry import load_registry
 
 CONFIG_DIR = REPO_ROOT / "config"
 CITY_DIR = CURATED_DIR / "city"
-PBF_PATH = STAGED_DIR / "osm" / "thailand-260929.osm.pbf"
+PBF_PATH = STAGED_DIR / "osm" / "thailand-261009.osm.pbf"
 COVERAGE_PATH = STAGED_DIR / "osm" / "thailand.poly"
 POPULATION_PATH = STAGED_DIR / "population" / "tha_ppp_2020.tif"
 

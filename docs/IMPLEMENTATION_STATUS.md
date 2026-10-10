@@ -35,6 +35,81 @@ regression. Then freeze one merged source/configuration/environment boundary,
 issue eight new run IDs and audit all eight runs plus all four pairs. Until that
 happens, no four-area numerical result is approved for the paper.
 
+## OSM source re-freeze, 10 October 2026 — city numbers superseded
+
+Approved by North on 10 October 2026 after the staging blocker fired.
+
+The four-area contract admitted `geofabrik-thailand-osm-20260929`. On
+10 October its dated publisher URL `thailand-260929.osm.pbf` returned **404**,
+so the admitted source was no longer publicly retrievable and staging all four
+AOIs failed at the licence gate. Independently, the local city cache had in
+fact been built from the **BBBike** Bangkok extract, which the registry already
+described as an incomplete city rectangle.
+
+The source is now re-frozen on **`geofabrik-thailand-osm-20261009`**:
+
+| Item | Value |
+|---|---|
+| Dated URL | `https://download.geofabrik.de/asia/thailand-261009.osm.pbf` (never the rotating `-latest` alias) |
+| Size | 328,454,828 bytes |
+| SHA-256 | `013730abb5ccf132631ff964947671efd09e642880518ec5d15d9366ec877d00` |
+| Coverage polygon | `thailand.poly`, SHA-256 `a0ac1e0a8f1de80356a7c92684cd6d8f068eb4ef4ae84ad3288134e63b1e72c7` |
+| Licence | ODbL 1.0, unchanged |
+
+The withdrawn `20260929` entry is kept with `status: verify` — not deleted —
+because frozen configurations and published manifests reference it by id. It
+can no longer enter a run.
+
+### The BBBike extract was materially incomplete
+
+Rebuilding the city cache from the admitted source changes the network and
+building inventory by a large margin:
+
+| Layer | BBBike cache (was) | Geofabrik 261009 (now) | Change |
+|---|---:|---:|---:|
+| Road ways | 235,678 | 403,830 | **+71%** |
+| Buildings | 272,116 | 427,580 | **+57%** |
+| Water features | 4,681 | 7,144 | +53% |
+| Modelled residents | 10,891,061 | 10,891,061 | unchanged |
+
+**Consequence: the historical city run `be6a4e08-e2d7-4dd9-bf8b-4f2a02a12a81`
+and every number derived from it — including the README's city table and the
+76.1429 km² unreconciled-area figure — were computed on a source now known to
+be materially incomplete. Those figures remain true statements about that
+immutable run; they must no longer be presented as current city results.**
+
+A new city run on the re-frozen source has **not** been executed. Until it is,
+the city layer has no current result. The README city table still shows the
+superseded BBBike-derived numbers and must not be cited.
+
+### Pilot layer is unaffected and fully staged
+
+All four frozen AOIs were re-derived from the admitted extract. Boundary areas
+and geometry hashes are **byte-identical** to the 2026-09-29 extract, so the
+frozen four-area contract survives the re-freeze intact — only the network
+source hash moves.
+
+| AOI | Relation | Area km² | Coverage | Stage |
+|---|---|---:|---|---|
+| Khlong San | R3147280 | 5.9607 | contained | `complete` |
+| Sai Mai | R2938035 | 43.3383 | contained | `complete` |
+| Din Daeng | R2938031 | 8.4589 | contained | `complete` |
+| Min Buri | R3146413 | 59.9852 | contained | `complete` |
+
+All four carry `source_sha256.osm = 013730ab…` and report
+`EPSG:32647`. The pilot path is provenance-clean: each boundary is re-read from
+the PBF by relation id and hash-verified.
+
+**Separate gap, city layer only:** `data/curated/aoi/bangkok-bma.provenance.json`
+records `source_id: null`, `resource_url: null` and `osm_relation_id: null`. The
+BMA AOI polygon used to clip the city extract has no recorded origin and was
+**not** re-derived from the admitted source. The pilot path does not depend on
+it. Re-deriving it would move the city geometry again and is a North decision.
+
+Full Python/API suite on this branch: **344 passed, 6 failed** — the same six
+pre-existing `test_city_endpoints.py` failures recorded below, unchanged by the
+re-freeze.
+
 ## Historical city-scale implementation and verified run
 
 [PRs #1–#14](https://github.com/wattwong103/flood-vul-evac/pulls?q=is%3Apr+is%3Amerged)
@@ -138,7 +213,8 @@ release attempt.
 |---|---|---|
 | MEDIUM BKK-021F named-pilot identity | Coverage does not yet exercise the full rejection matrix for configured AOI identity, direct traversal IDs and missing scoped inputs without fallback | Implementer: add a focused tests-first PR; reviewer confirms every mismatched or missing named-pilot identity fails closed. |
 | MEDIUM API fractional-seconds round-trip | Existing API fixtures do not prove that an actual pipeline publication survives saved Parquet/manifest readback through both API routes with fractional event seconds | Implementer: publish a test run, read the saved artifacts through both routes and assert warning-relative weighted quantiles and the canonical non-null contract. |
-| MEDIUM BKK-024 release evidence | No complete eight-run set exists on the current merged boundary | North + implementer: after the two regression gates merge, create eight new IDs, execute all pairs under one frozen code/configuration/environment bundle and pass all run and pair audits. |
+| MEDIUM BKK-024 release evidence | No complete eight-run set exists. Staging precondition is now **satisfied**: all four AOIs staged `complete` on the re-frozen `geofabrik-thailand-osm-20261009` source. | North + implementer: after the two regression gates merge, create eight new IDs, execute all pairs under one frozen code/configuration/environment bundle and pass all run and pair audits. |
+| HIGH city result superseded | Every city number, including the README city table and the 76.1429 km² unreconciled-area figure, was derived from the BBBike extract now known to be ~57–71% incomplete. No city run exists on the re-frozen source. | North + implementer: decide whether to re-run the city baseline on `geofabrik-thailand-osm-20261009`, and resolve the unattributed `bangkok-bma` AOI polygon first. Until then the city layer has **no current result** and its README numbers must not be cited. |
 | MEDIUM BKK-009 boundaries | 76.1429 km² of the BMA lies outside the 50 OSM district union; cause unverified | Data steward + North: acquire authoritative geometry with reuse terms and reconcile the difference. The [BMA 50-district catalog](https://data.go.th/en/dataset/50) currently says “License not specified,” so it is a lead, not an admitted input. |
 | MEDIUM BKK-009 population | Controls audited, not ingested or concept-matched | North selects resident/registered/de-facto target; implementer adds district crosswalk, date matching and reconciliation tests. |
 | HIGH scientific gate: terrain/event | Actual bare-earth tiles, datum, forcing and held-out validation absent | Data steward: pursue [RTSD LiDAR catalog](https://data.go.th/en/dataset/lidar-1) and [GISTDA event extent](https://opendata.gistda.or.th/th/dataset/disasters-03). A coverage index or extent product is not depth. |
