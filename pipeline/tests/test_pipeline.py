@@ -1066,3 +1066,73 @@ def test_real_run_manifest_conforms_to_schema() -> None:
 
     payload = json.loads(manifests[-1].read_text(encoding="utf-8"))
     assert manifest.validate_manifest(payload) == []
+
+
+def test_per_cell_age_bands_override_the_national_marginal() -> None:
+    """Per-cell weights take precedence and conserve each cell's own total."""
+    cells = _cells()
+    cells["pop_scaled"] = cells["pop_count"]
+    per_cell = {
+        str(cells["cell_id"].iloc[0]): {"65_plus": 0.8, "working": 0.2},
+        str(cells["cell_id"].iloc[1]): {"65_plus": 0.1, "working": 0.9},
+    }
+    demographics = population.assign_demographics(
+        cells,
+        sex_shares={"male": 0.5, "female": 0.5},
+        age_bands={"working": 0.5, "65_plus": 0.5},
+        age_bands_by_cell=per_cell,
+    )
+    first = demographics[demographics["cell_id"] == cells["cell_id"].iloc[0]]
+    second = demographics[demographics["cell_id"] == cells["cell_id"].iloc[1]]
+    assert "unknown" not in set(demographics["age_band"])
+    # Each cell keeps its own share rather than the national 50/50.
+    first_shares = (first.groupby("age_band")["weight"].sum() / first["weight"].sum()).to_dict()
+    second_shares = (second.groupby("age_band")["weight"].sum() / second["weight"].sum()).to_dict()
+    assert first_shares == pytest.approx({"working": 0.2, "65_plus": 0.8}, rel=1e-9)
+    assert second_shares == pytest.approx({"working": 0.9, "65_plus": 0.1}, rel=1e-9)
+
+
+def test_cells_without_per_cell_bands_fall_back_to_the_national_marginal() -> None:
+    """Partial coverage degrades to the national marginal, never to unknown."""
+    cells = _cells()
+    cells["pop_scaled"] = cells["pop_count"]
+    per_cell = {str(cells["cell_id"].iloc[0]): {"a": 1.0}}
+    demographics = population.assign_demographics(
+        cells,
+        sex_shares={"male": 0.5, "female": 0.5},
+        age_bands={"a": 0.25, "b": 0.75},
+        age_bands_by_cell=per_cell,
+    )
+    fallback_cell = demographics[demographics["cell_id"] == cells["cell_id"].iloc[1]]
+    assert "unknown" not in set(demographics["age_band"])
+    assert set(fallback_cell["age_band"]) == {"a", "b"}
+
+
+def test_per_cell_total_weight_is_conserved_across_every_cell() -> None:
+    cells = _cells()
+    cells["pop_scaled"] = cells["pop_count"]
+    expected = float(cells["pop_scaled"].sum())
+    demographics = population.assign_demographics(
+        cells,
+        sex_shares={"male": 0.49, "female": 0.51},
+        age_bands={"a": 1.0 / 3, "b": 1.0 / 3, "c": 1.0 / 3},
+        age_bands_by_cell={
+            str(cells["cell_id"].iloc[i]): {"a": 0.5, "b": 0.25, "c": 0.25}
+            for i in range(len(cells))
+        },
+    )
+    assert demographics["weight"].sum() == pytest.approx(expected, rel=1e-9)
+
+
+def test_all_zero_per_cell_weights_degrade_to_unknown_not_nan() -> None:
+    """A cell with no age signal must report unknown, never a NaN share."""
+    cells = _cells()
+    cells["pop_scaled"] = cells["pop_count"]
+    demographics = population.assign_demographics(
+        cells,
+        sex_shares={"male": 0.5, "female": 0.5},
+        age_bands=None,
+        age_bands_by_cell={str(cells["cell_id"].iloc[0]): {"a": 0.0}},
+    )
+    assert "unknown" in set(demographics["age_band"])
+    assert demographics["weight"].sum() == pytest.approx(float(cells["pop_scaled"].sum()), rel=1e-9)

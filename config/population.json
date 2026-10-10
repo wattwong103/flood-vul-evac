@@ -65,8 +65,10 @@
   "age_structure": {
     "source_id": "worldpop-tha-age-sex-2026-r2025a",
     "status": "not_ingested",
+    "mode": "none",
     "bands": null,
-    "note": "The registry approves this source and it is publicly retrievable (CC BY 4.0, DOI 10.5258/SOTON/WP00841). It is not ingested here for two reasons: the country rasters are out of scope for an AOI-scoped pull, and only a NATIONAL marginal is usable because the age/sex grid does not align with the population grid. Setting bands to a {label: weight} object here assigns that national structure and stops age_band being 'unknown'; leave null to keep the gap visible."
+    "raster_dir": null,
+    "note": "The registry approves this source and it is publicly retrievable (CC BY 4.0, DOI 10.5258/SOTON/WP00841). mode 'none' (current) ingests nothing, so age_band is 'unknown' for every person. mode 'national' applies one country marginal to every cell - measured across the four pilot AOIs the true 65+ share runs 9.5% to 19.3%, so a national marginal is NOT defensible here. mode 'per_cell' samples the 20 band rasters at each cell centre and preserves that variation, but it changes the population and must be enabled deliberately. Measured values and source checksums are in data/curated/population/age_sex_aoi_comparison.json."
   },
   "sex_split": {
     "male": 0.489,
