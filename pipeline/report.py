@@ -13,8 +13,10 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -844,6 +846,33 @@ def write_summary(run_id: str, report_dir: Path, figures: list[Path], baseline_i
     return path
 
 
+def _publish_atomic(
+    scratch: Path, target: Path, *, attempts: int = 8, delay_s: float = 3.0
+) -> None:
+    """Rename ``scratch`` onto ``target``, waiting out a transient file handle.
+
+    The rename itself stays atomic -- this never copies, moves file by file, or
+    exposes a half-written report. It only re-attempts while something still
+    holds the freshly written directory. Measured on a Dropbox-synced tree: the
+    rename is refused immediately and succeeds after roughly 15 seconds, once the
+    sync client lets go. Both ERROR_ACCESS_DENIED and ERROR_SHARING_VIOLATION
+    surface as ``PermissionError`` on Windows.
+    """
+    last: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            scratch.replace(target)
+            return
+        except PermissionError as exc:
+            last = exc
+            if attempt + 1 < attempts:
+                time.sleep(delay_s)
+    raise RuntimeError(
+        f"pair report could not be published after {attempts} attempts; "
+        f"a file handle on {scratch.name} never released: {last}"
+    )
+
+
 def publish_pair_report(first_run_id: str, second_run_id: str) -> dict[str, Any]:
     """Atomically publish figures and evidence only after the pair passes every gate."""
     pair = load_checked_pair(first_run_id, second_run_id)
@@ -851,14 +880,13 @@ def publish_pair_report(first_run_id: str, second_run_id: str) -> dict[str, Any]
         f"{_safe_token(pair.aoi_label)}-pair-report-"
         f"{_safe_token(pair.dry.run_id)}-{_safe_token(pair.moderate.run_id)}"
     )
-    target = pair.moderate.bundle.run_dir / target_name
+    run_dir = pair.moderate.bundle.run_dir
+    target = run_dir / target_name
     if target.exists():
         raise ValueError(f"pair report already exists: {target.name}")
 
-    with tempfile.TemporaryDirectory(
-        prefix=".pair-report-", dir=pair.moderate.bundle.run_dir
-    ) as temporary:
-        scratch = Path(temporary)
+    scratch = Path(tempfile.mkdtemp(prefix=".pair-report-", dir=run_dir))
+    try:
         figures = [
             *figure_scenario_overview(pair.moderate, scratch),
             *figure_present_profile(pair.moderate, scratch),
@@ -874,7 +902,12 @@ def publish_pair_report(first_run_id: str, second_run_id: str) -> dict[str, Any]
         ):
             raise ValueError("pair report artifact check failed")
         _validate_evidence_language(evidence.read_text(encoding="utf-8"))
-        scratch.replace(target)
+        _publish_atomic(scratch, target)
+    finally:
+        # Never raise from cleanup: a failed removal here would mask the real
+        # error and replace it with an unrelated PermissionError. After a
+        # successful rename the scratch path is already gone, so this is a no-op.
+        shutil.rmtree(scratch, ignore_errors=True)
 
     return {
         "report_dir": str(target),
