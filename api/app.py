@@ -41,6 +41,7 @@ from api.models import (
     RunDetailResponse,
     RunListResponse,
     RunSummary,
+    SkippedRunDetail,
     StateShare,
     ValidationResponse,
 )
@@ -448,13 +449,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         warnings = [
             make_warning(
                 "skipped_run",
-                f"run '{run_id}' was skipped because its manifest could not be read",
-                "manifest.json",
+                f"run '{item.run_id}' was skipped: {item.reason}",
+                item.artefact,
             )
-            for run_id in skipped
+            for item in skipped
+        ]
+        skipped_details = [
+            SkippedRunDetail(
+                run_id=item.run_id,
+                category=item.category,
+                state=item.state,
+                reason=item.reason,
+                artefact=item.artefact,
+            )
+            for item in skipped
         ]
         return RunListResponse(
-            count=len(summaries), runs=summaries, skipped=skipped, warnings=warnings
+            count=len(summaries),
+            runs=summaries,
+            skipped=[item.run_id for item in skipped],
+            skipped_details=skipped_details,
+            warnings=warnings,
         )
 
     @app.get("/v1/runs/{run_id}", response_model=RunDetailResponse, tags=["runs"])

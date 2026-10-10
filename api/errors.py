@@ -22,9 +22,22 @@ class RunNotFoundError(Exception):
     404 keeps a half-written run from being mistaken for a result of zero.
     """
 
-    def __init__(self, run_id: str, message: str | None = None) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        message: str | None = None,
+        *,
+        category: str = "not_found",
+        state: str | None = None,
+        reason: str | None = None,
+        artefact: str | None = None,
+    ) -> None:
         self.run_id = run_id
         self.message = message or f"run not found: {run_id}"
+        self.category = category
+        self.state = state
+        self.reason = reason or self.message
+        self.artefact = artefact
         super().__init__(self.message)
 
 

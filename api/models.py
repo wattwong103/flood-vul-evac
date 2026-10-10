@@ -12,7 +12,7 @@ Two rules shape this module:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -59,13 +59,24 @@ class RunSummary(BaseModel):
     warnings_count: int = 0
 
 
+class SkippedRunDetail(BaseModel):
+    """Safe operator diagnostics for a run omitted from the public listing."""
+
+    run_id: str
+    category: Literal["manifest_unreadable", "not_published", "unexpected_error"]
+    state: str | None = None
+    reason: str
+    artefact: str | None = None
+
+
 class RunListResponse(BaseModel):
     count: int
     runs: list[RunSummary]
     skipped: list[str] = Field(
         default_factory=list,
-        description="Run ids skipped because their manifest could not be read.",
+        description="Run ids omitted because they are unreadable or not published.",
     )
+    skipped_details: list[SkippedRunDetail] = Field(default_factory=list)
     warnings: list[ApiWarning] = Field(default_factory=list)
 
 
