@@ -10,7 +10,7 @@
     "area_km2": 43.3383
   },
   "versions": {
-    "population": "bkk-pop-v0.2-sai-mai-district-2020",
+    "population": "bkk-pop-v0.3-sai-mai-district-2020-agesex",
     "network": "osm-sai-mai-district",
     "buildings": "osm-buildings-sai-mai-district"
   },

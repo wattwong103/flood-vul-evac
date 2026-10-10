@@ -10,7 +10,7 @@
     "area_km2": 59.9852
   },
   "versions": {
-    "population": "bkk-pop-v0.2-min-buri-district-2020",
+    "population": "bkk-pop-v0.3-min-buri-district-2020-agesex",
     "network": "osm-min-buri-district",
     "buildings": "osm-buildings-min-buri-district"
   },

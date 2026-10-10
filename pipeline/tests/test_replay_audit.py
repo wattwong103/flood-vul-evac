@@ -148,24 +148,34 @@ def test_reconstruct_cohort_metrics_matches_saved_bundle(published_run: Path) ->
 
 def _split_terminal_bundle(bundle: replay_audit.AuditBundle) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     sample, present, cohort = replay_audit._derive_populations(bundle)
-    # Split each source row's own weight across two terminal outcomes. The
-    # fractions are fixed, but the weights are read from the run: hardcoding
-    # absolute weights would silently break the moment the population changes
-    # (as it did when per-cell age structure was enabled).
+    # Build a synthetic floating-point probe independent of the production
+    # population version, stable person IDs, and sampled row order. These exact
+    # source weights and split fractions make the direct and grouped fsum
+    # totals differ by one ULP while conserving each source person's weight.
+    source_weights = (97.8, 102.2, 48.9)
     fractions = (
         8.882412251852449 / 97.8,
         52.13314519160798 / 102.2,
         24.649969248210954 / 48.9,
     )
     rows = bundle.tables["evacuation_states"].to_dict("records")
+    assert len(rows) == len(source_weights)
+    weight_by_person = {
+        str(row["source_person_id"]): weight
+        for row, weight in zip(rows, source_weights, strict=True)
+    }
+    for frame in (bundle.tables["persons"], bundle.tables["cohort"], sample, present, cohort):
+        mapped = frame["person_id"].astype(str).map(weight_by_person)
+        frame.loc[mapped.notna(), "weight"] = mapped[mapped.notna()]
+
     records = []
-    for row, fraction in zip(rows, fractions, strict=True):
-        total = float(row["weight"])
-        records.append({**row, "weight": total * fraction})
+    for row, total, fraction in zip(rows, source_weights, fractions, strict=True):
+        records.append({**row, "source_weight": total, "weight": total * fraction})
         records.append({
             **row,
             "state": "shelter_full",
             "reason": "capacity_exhausted",
+            "source_weight": total,
             "weight": total * (1.0 - fraction),
             "outcome_id": f"{row['source_person_id']}:shelter_full:1",
         })
@@ -173,6 +183,21 @@ def _split_terminal_bundle(bundle: replay_audit.AuditBundle) -> tuple[pd.DataFra
     bundle.tables["evacuation_states"] = states
 
     cohort_weight = math.fsum(float(value) for value in cohort["weight"])
+    quantities = bundle.denominators["quantities"]
+    for name, frame in (
+        ("full_population", bundle.tables["persons"]),
+        ("sample", sample),
+        ("present", present),
+        ("cohort", cohort),
+    ):
+        quantities[name]["weight"] = math.fsum(float(value) for value in frame["weight"])
+    exposed = present["exposed"].astype(bool)
+    quantities["exposed_present"]["weight"] = math.fsum(
+        float(value) for value in present.loc[exposed, "weight"]
+    )
+    bundle.denominators["shares"]["exposed_of_present"] = (
+        quantities["exposed_present"]["weight"] / quantities["present"]["weight"]
+    )
     terminal = bundle.denominators["quantities"]["terminal_states"]
     shares = bundle.denominators["shares"]["terminal_of_cohort"]
     for state in replay_audit.TERMINAL_STATES:
@@ -201,6 +226,7 @@ def _split_terminal_bundle(bundle: replay_audit.AuditBundle) -> tuple[pd.DataFra
     assert direct_weight == cohort_weight
     assert direct_weight.hex() != grouped_weight.hex()
     bundle.denominators["conservation"].update(
+        cohort_weight=cohort_weight,
         terminal_weight=direct_weight,
         residual_abs=abs(cohort_weight - direct_weight),
     )
