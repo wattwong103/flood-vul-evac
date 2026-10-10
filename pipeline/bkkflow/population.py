@@ -229,7 +229,10 @@ def _normalised_bands(mapping: dict[str, float]) -> tuple[list[str], np.ndarray]
 
     Callers supply shares, but any scale is accepted so a caller never has to
     pre-divide. Non-positive weights drop out; an empty or all-zero mapping
-    collapses to the explicit ``unknown`` band rather than producing NaNs.
+    collapses to the explicit ``unknown`` band rather than producing NaNs. A
+    positive ``unknown`` share cannot be mixed with named bands because the
+    coverage contract represents missing evidence separately from known-band
+    proportions.
     """
     labels: list[str] = []
     weights: list[float] = []
@@ -238,6 +241,12 @@ def _normalised_bands(mapping: dict[str, float]) -> tuple[list[str], np.ndarray]
         if weight > 0:
             labels.append(label)
             weights.append(weight)
+    if "unknown" in labels and len(labels) > 1:
+        raise ValueError(
+            "age mapping must not mix positive 'unknown' with positive named "
+            "bands; use only 'unknown' for absent evidence or omit 'unknown' "
+            "and normalise the known bands"
+        )
     if not labels:
         return ["unknown"], np.array([1.0])
     array = np.array(weights, dtype="float64")
@@ -269,18 +278,27 @@ def assign_demographics(
     else:
         male, female = 0.5, 0.5
 
-    fallback = _normalised_bands(age_bands) if age_bands else (["unknown"], np.array([1.0]))
-    per_cell = {
-        str(cell_id): _normalised_bands(mapping)
-        for cell_id, mapping in (age_bands_by_cell or {}).items()
-    }
+    has_population = bool((cells["pop_scaled"] > 0).any())
+    fallback = (
+        _normalised_bands(age_bands)
+        if age_bands and has_population
+        else (["unknown"], np.array([1.0]))
+    )
+    per_cell = {str(cell_id): mapping for cell_id, mapping in (age_bands_by_cell or {}).items()}
+    normalised_per_cell: dict[str, tuple[list[str], np.ndarray]] = {}
 
     records = []
     for row in cells.itertuples():
         cell_total = float(row.pop_scaled)
         if cell_total <= 0:
             continue
-        band_labels, band_weights = per_cell.get(str(row.cell_id), fallback)
+        cell_id = str(row.cell_id)
+        if cell_id in per_cell:
+            if cell_id not in normalised_per_cell:
+                normalised_per_cell[cell_id] = _normalised_bands(per_cell[cell_id])
+            band_labels, band_weights = normalised_per_cell[cell_id]
+        else:
+            band_labels, band_weights = fallback
         remaining = cell_total
         for index, (label, share) in enumerate(zip(band_labels, band_weights)):
             for sex_code, sex_share in (("F", female), ("M", male)):
@@ -360,7 +378,8 @@ def age_band_report(
             else {"unknown": 1.0}
         )
     elif mode == "national" and age_bands:
-        reported = {label: float(share) for label, share in age_bands.items()}
+        labels, shares = _normalised_bands(age_bands)
+        reported = {label: float(share) for label, share in zip(labels, shares)}
     else:
         reported = {"unknown": 1.0}
 
