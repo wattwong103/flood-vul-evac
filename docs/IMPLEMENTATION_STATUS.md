@@ -340,18 +340,40 @@ basis are recorded in `population_qa.json`, but not in the manifest, which is th
 canonical run record. Anyone reading only the manifest cannot tell that these
 runs are age-structured.
 
-### Unpublished pair artefacts
+### Pair artefacts now published
 
-The four pair reports were **generated successfully** but not published.
-`report.publish_pair_report` writes into a scratch directory inside the run
-directory and then atomically renames it; the rename fails with `WinError 32`
-because the repository sits inside a Dropbox-synced folder and the sync client
-holds a handle on the new directory. The audit gate itself passes — only the
-atomic publish step is affected. The evidence markdown and three PNGs per pair
-are produced without error, as was verified by running each step directly.
+The four pair reports were generated successfully from the outset but could not
+be published: `report.publish_pair_report` writes into a scratch directory
+inside the run directory and then atomically renames it, and the rename was
+refused because the repository sits inside a Dropbox-synced folder.
 
-This is an environment constraint, not a pipeline defect. Publishing will work
-from a non-synced working copy.
+The lock was measured rather than assumed. A scratch directory written with four
+files and then renamed was **refused immediately and succeeded after 15
+seconds**, once the sync client released its handle. Both
+`ERROR_ACCESS_DENIED` and `ERROR_SHARING_VIOLATION` surface as
+`PermissionError` on Windows.
+
+Two defects followed, both fixed on `fix/pair-report-atomic-publish`:
+
+1. **The atomic rename had no retry.** `_publish_atomic` now re-attempts while a
+   handle clears. The rename stays atomic — it is never replaced by a copy or a
+   file-by-file move — so the publication guarantee is unchanged; only the wait
+   is added.
+2. **Cleanup masked the real error.** `tempfile.TemporaryDirectory.__exit__`
+   raised during removal and swallowed whatever the block had raised, replacing
+   a real failure with an unrelated `PermissionError`. Cleanup is now explicit
+   and never raises. This is why the true cause went undiagnosed for so long.
+
+All four pair reports are published with `audit_status: PASS`:
+
+| AOI | pair report | artefacts |
+|---|---|---:|
+| Khlong San | `khlong-san-pair-report-2c4dcb04…-ebc2e5fc…` | 4 |
+| Sai Mai | `sai-mai-pair-report-40fec9c2…-547379f5…` | 4 |
+| Din Daeng | `din-daeng-pair-report-924a7bfa…-b9c3f055…` | 4 |
+| Min Buri | `min-buri-pair-report-547d0b10…-d3dd91f1…` | 4 |
+
+Each contains three PNG figures and one evidence markdown file.
 
 ## Age structure enabled per cell — North, 10 October 2026
 
