@@ -21,12 +21,12 @@
     "rationale": "The Bangkok Metropolitan Administration, the full administrative extent the project plan names as the post-pilot target. Admin level 4, not a hand-drawn box, so population, network and reporting geographies all refer to the same place."
   },
   "osm_extract": {
-    "source_id": "geofabrik-thailand-osm-20260929",
-    "resource_url": "https://download.geofabrik.de/asia/thailand-260929.osm.pbf",
-    "byte_count": 327965278,
-    "content_sha256": "to be recorded per run from the staged file",
+    "source_id": "geofabrik-thailand-osm-20261009",
+    "resource_url": "https://download.geofabrik.de/asia/thailand-261009.osm.pbf",
+    "byte_count": 328454828,
+    "content_sha256": "013730abb5ccf132631ff964947671efd09e642880518ec5d15d9366ec877d00",
     "coverage_url": "https://download.geofabrik.de/asia/thailand.poly",
-    "rationale": "A dated country extract covers the complete BMA source extent. The publisher polygon is checked against the AOI before reuse; source coverage does not prove mapping completeness."
+    "rationale": "A dated country extract covers the complete BMA source extent. Re-frozen from the withdrawn 2026-09-29 dated URL (now 404) by North on 2026-10-10; the dated path is used rather than the rotating -latest alias so the recorded checksum stays verifiable. The publisher polygon is checked against the AOI before reuse; source coverage does not prove mapping completeness."
   },
   "storage_crs": "OGC:CRS84",
   "analysis_crs": "EPSG:32647",

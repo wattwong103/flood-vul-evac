@@ -75,7 +75,7 @@ def pilot_inputs(tmp_path, monkeypatch):
              "content_sha256": "1" * 64, "query_sha256": "2" * 64}
     write_json(scoped / "osm/provenance.json", {
         "aoi_id": "khlong-san-district",
-        "source_id": "geofabrik-thailand-osm-20260929",
+        "source_id": "geofabrik-thailand-osm-20261009",
         "retrieved_at": fetch["retrieved_at"],
         "content_sha256": fetch["content_sha256"],
         "layers": {"roads": {}, "buildings": {}, "water": {}},
@@ -90,7 +90,7 @@ def pilot_inputs(tmp_path, monkeypatch):
     })
     write_json(scoped / "aoi.provenance.json", {
         **fetch, "aoi_id": "khlong-san-district", "osm_id": 3147280,
-        "source_id": "geofabrik-thailand-osm-20260929", "geometry_sha256": geometry_hash,
+        "source_id": "geofabrik-thailand-osm-20261009", "geometry_sha256": geometry_hash,
     })
     clip = scoped / "population/source_clip.tif"
     with rasterio.open(clip, "w", driver="GTiff", width=1, height=1, count=1,
@@ -119,12 +119,12 @@ def pilot_inputs(tmp_path, monkeypatch):
     }
     write_json(scoped / "stage_manifest.json", {
         "state": "complete", "aoi_id": "khlong-san-district",
-        "sources": {"osm": "geofabrik-thailand-osm-20260929",
+        "sources": {"osm": "geofabrik-thailand-osm-20261009",
                     "population": "worldpop-global-2000-2020-tha-100m"},
         "source_sha256": pilot["source_sha256"],
         "analysis_crs": "EPSG:32647",
         "inputs": {
-            "osm": {"source_id": "geofabrik-thailand-osm-20260929",
+            "osm": {"source_id": "geofabrik-thailand-osm-20261009",
                     "content_sha256": "1" * 64, "retrieved_at": fetch["retrieved_at"],
                     "resource_url": "https://example.test/osm",
                     "coverage_sha256": "4" * 64,
@@ -158,7 +158,7 @@ def test_pilot_publishes_verified_source_identity(pilot_inputs, flood_enabled):
     assert manifest["code_identity"]["verification"] == "matched_before_publication"
     assert len(manifest["code_identity"]["source_sha256"]) == 64
     assert {source["source_id"] for source in manifest["source_versions"]} == {
-        "geofabrik-thailand-osm-20260929",
+        "geofabrik-thailand-osm-20261009",
         "worldpop-global-2000-2020-tha-100m",
     }
     assert manifest["geography"]["aoi_id"] == "khlong-san-district"
