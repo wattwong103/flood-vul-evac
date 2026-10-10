@@ -6,11 +6,17 @@ does not establish empirical validity or operational readiness.
 
 ## Current source and release status
 
-Current `main` is merge commit `0cebe1d90e484fe338b7e1695012746f6459d1bb`
-through PR #64. The accepted demonstration runs were produced earlier at
+Current `main` is merge commit `8c72aa26bb1ad8a2b3f8a01469b153cd8b66c951`
+through merged PR #67. The accepted demonstration runs were produced earlier at
 `f4662880523c71a8439750a7fca282c5d488d97e`, source tree
 `1fe700d33c2ed6c18aa1adc23caa09c9cf39d773`. Current source and release source
 are deliberately recorded as different boundaries.
+
+PR #65 merged a generated checksum ledger before this source-only handoff. This
+branch removes that ledger from the tracked tree while retaining it in Git
+history and inside the independently verified external evidence package. PR #67
+merged truthful partial-age-coverage reporting for future outputs; neither PR
+rewrites or reattributes the immutable release files.
 
 The implementation sequence includes:
 
@@ -236,7 +242,7 @@ release attempt.
 | CLOSED MEDIUM BKK-021F named-pilot identity | Rejection matrix for configured AOI identity, direct traversal IDs and missing scoped inputs is covered by #53 | Merged tests-only coverage; bounded to the named cases, not exhaustive identity hardening. Three LOW follow-ups are parked in the PR description. |
 | CLOSED MEDIUM API fractional-seconds round-trip | A real publication now survives saved Parquet/manifest readback through both clearance routes with fractional event seconds, with the canonical non-null denominator contract | Merged in #55. `api/tests/test_publication_roundtrip.py` recomputes the weighted-clearance definition independently rather than calling the pipeline helper; it fails on whole-second truncation and absolute-event-time regressions. No production change was needed. |
 | MEDIUM BKK-024 release evidence | **Executed 10 October 2026**: eight runs on one boundary `f466288`/tree `1fe700d3`, 8/8 run audits and 4/4 pair audits pass; all four pair reports are published | The release is demonstration evidence. `population_version` is stale and requires re-staging plus a new release to correct. Release manifests predate #61's age block; current source is fixed for future runs without reattributing these files. |
-| MEDIUM age-coverage reporting | Three AOIs contain a small nonzero unknown-age population weight. The current warning incorrectly implies that every person is unknown, while reported known-band shares are normalized only over covered cells and use a misleading basis label. | Implementer: keep assignment, assistance and immutable release files unchanged; for new runs report covered/unknown cell and weight denominators, use a covered-cell basis label, and issue truthful complete/partial/none warnings. |
+| CLOSED MEDIUM age-coverage reporting | Three AOIs contain a small nonzero unknown-age population weight. The old warning incorrectly implied that every person was unknown, while known-band shares were normalized only over covered cells. | Merged in #67: new outputs report covered/unknown cell and weight denominators, use a covered-cell basis label and issue complete/partial/none warnings without changing assignment, assistance or immutable release files. |
 | HIGH city result superseded | Every city number, including the README city table and the 76.1429 km² unreconciled-area figure, was derived from the earlier BBBike cache. Geofabrik staging produced 71% more road ways and 57% more buildings, but that delta is not a completeness estimate. No city run exists on the re-frozen source. | North + implementer: decide whether to re-run the city baseline on `geofabrik-thailand-osm-20261009`, and resolve the unattributed `bangkok-bma` AOI polygon first. Until then the city layer has **no current result** and its README numbers must not be cited. |
 | MEDIUM BKK-009 boundaries | 76.1429 km² of the BMA lies outside the 50 OSM district union; cause unverified | Data steward + North: acquire authoritative geometry with reuse terms and reconcile the difference. The [BMA 50-district catalog](https://data.go.th/en/dataset/50) currently says “License not specified,” so it is a lead, not an admitted input. |
 | MEDIUM BKK-009 population | Controls audited, not ingested or concept-matched | North selects resident/registered/de-facto target; implementer adds district crosswalk, date matching and reconciliation tests. |

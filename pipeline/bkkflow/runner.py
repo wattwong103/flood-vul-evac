@@ -347,11 +347,11 @@ def execute_run(
         age_bands=age_bands,
         age_bands_by_cell=age_by_cell,
     )
-    if "unknown" in set(demographics["age_band"]):
-        context.warn(
-            "age_band is 'unknown' for every person; this build ingests no "
-            "age-structure marginal."
-        )
+    age_report = population_module.age_band_report(
+        population_config, age_config, age_mode, age_bands, age_by_cell, cells
+    )
+    if age_warning := population_module.age_coverage_warning(age_report):
+        context.warn(age_warning)
 
     persons = population_module.make_weighted_persons(
         cells,
@@ -365,11 +365,8 @@ def execute_run(
     persons_path = _write_parquet(context, "persons.parquet", persons)
     register_output(context, "persons", persons_path, rows=len(persons))
 
-    # Computed once and reused: the manifest is the canonical run record, so the
-    # age structure must appear there as well as in population_qa.json.
-    age_report = population_module.age_band_report(
-        population_config, age_config, age_mode, age_bands, age_by_cell, cells
-    )
+    # Reused below: the manifest is the canonical run record, so the age
+    # structure must appear there as well as in population_qa.json.
     population_qa = population_module.PopulationQA(
         population_version=population_version,
         status="demonstration",
@@ -845,6 +842,7 @@ def _finish_run(
                 "basis": age_report["age_band_basis"],
                 "spatial": age_report["age_structure_spatial"],
                 "band_shares": age_report["age_bands"],
+                "coverage": age_report["age_coverage"],
             },
             "time_profile": {
                 "status": "illustrative",
