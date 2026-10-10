@@ -3,9 +3,10 @@
 An open-data flood exposure, building and evacuation research platform for
 Bangkok, built on the PFLOW people–activities–trips–trajectories contract.
 
-> **Status: `demonstration` — DONE_WITH_CONCERNS.** The city run provides
-> observed annual water and conditional connectivity screening. The pilot uses
-> declared flood scenarios and uncalibrated behaviour. Neither is a forecast,
+> **Status: `demonstration` — DONE_WITH_CONCERNS.** The four-area release uses
+> declared flood scenarios and uncalibrated behaviour. The historical city run
+> provides observed annual water and conditional connectivity screening but is
+> superseded because it used an earlier source inventory. Neither is a forecast,
 > warning product or evacuation recommendation. No destination is verified.
 >
 > See [current project status and owners](docs/IMPLEMENTATION_STATUS.md) for
@@ -35,16 +36,19 @@ Bangkok, built on the PFLOW people–activities–trips–trajectories contract.
 | Network | 3,755 OSM ways → **7,514 directed edges, 6,701 nodes, 168.7 km** walkable |
 | Buildings | 6,963 OSM footprints, 2,398 intersecting the AOI |
 
-## City scale — Bangkok Metropolitan Administration
+## Historical city scale — Bangkok Metropolitan Administration
 
 A second, larger scope covers the whole BMA. It is a **separate run** and
-never silently substitutes for a pilot result.
+never silently substitutes for a pilot result. The table below documents an
+immutable historical run; there is **no current city result** on the admitted
+Geofabrik source. See the [release evidence record](docs/RELEASE_EVIDENCE_2026-10-10.md)
+for the current four-area demonstration boundary.
 
 | Property | Value |
 |---|---|
 | Area of interest | Bangkok (กรุงเทพมหานคร), admin level 4, OSM relation `R92277` |
 | Area | **1,643.5 km²** |
-| OSM source | complete Thailand Geofabrik extract dated 2026-09-29; its source polygon covers the BMA |
+| OSM source | historical BBBike Bangkok cache; superseded by the admitted Geofabrik staging inventory |
 | Network | 235,678 ways → **1,038,811 edges, 949,151 nodes, 30,060.16 km** |
 | Buildings | **272,116** footprints; height tagged for 577, derived from levels for 21,161, unknown for 250,378 |
 | Resident baseline | WorldPop 2020: **10,891,061 modelled residents**, 181,662 raster cells |
@@ -167,9 +171,11 @@ This distinction is the point of the project, so it is stated everywhere.
 - **No external control total is ingested by the run pipeline.** The paper audit
   independently reconciled NSO/DOPA controls for all 50 districts; those counts
   are comparison evidence, not a replacement for modelled or event-time residents.
-- **Age structure is unknown for every person.** No age-structure source passed
-  the licence gate, so `age_band` is `unknown` rather than an invented
-  distribution.
+- **Age bands use admitted per-cell WorldPop 2026 modelled rasters.** Cells
+  without valid raster coverage remain explicitly `unknown`; known-band shares
+  are conditional on covered cells. The 2026 structure is applied to the 2020
+  resident baseline, so the years differ. See the
+  [measured coverage gaps](docs/IMPLEMENTATION_STATUS.md#age-structure-enabled-per-cell--north-10-october-2026).
 - **Sex split, mobility, warning reach, compliance and preparation delay are
   declared priors**, not measurements.
 - **Pilot destinations are hypothetical; city candidates are unverified OSM
