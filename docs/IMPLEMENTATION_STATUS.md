@@ -4,15 +4,15 @@ Updated 11 October 2026. **DONE_WITH_CONCERNS; demonstration only.**
 This page is the shared implementation/evidence handoff. Internal validation
 does not establish empirical validity or operational readiness.
 
-> **Current snapshot.** On 11 October 2026, merged `main` was `bb16608` through
-> PR #72. PR #73 (the population-version prerequisite), PR #74 (truthful
-> run-detail stages) and PR #75 (source-realistic city API fixture) were
-> reviewed and ready but not merged. The authorised replacement four-pilot
-> release had not started because it must run from a clean, human-merged #73
-> boundary. The paper was frozen and map-inclusive build verification was
-> complete; exact identities are in [`HANDOFF_2026-10-11.md`](HANDOFF_2026-10-11.md).
-> Later sections retain explicitly dated 4–10 October evidence and should not
-> be read as a newer source or test snapshot.
+> **Current snapshot.** PRs #73--#76 are merged. The authorised replacement
+> four-pilot release was freshly staged and executed from clean merged commit
+> `db0a96b`; all eight runs, eight saved-run replays and four fixed-cohort pair
+> publications pass. Its external root/ledger/ZIP passed independent admission.
+> Exact source, run, metric and archive identities are in
+> [`RELEASE_EVIDENCE_2026-10-11.md`](RELEASE_EVIDENCE_2026-10-11.md) and the
+> current [`HANDOFF_2026-10-11.md`](HANDOFF_2026-10-11.md). Later sections
+> retain explicitly dated 4--10 October evidence and should not be read as a
+> newer source or release snapshot.
 
 ## Current source and release status
 
@@ -70,14 +70,12 @@ Those five bundles and their eight-ID plan are also immutable negative evidence;
 they cannot be pooled with a later release even though the preserved Din Daeng
 bundle passes read-only replay under the corrected #51 source.
 
-A complete common-boundary set was executed on 10 October: eight new run IDs,
-8/8 run audits and 4/4 pair audits pass, and all four pair reports are
-published. The set is acceptable as internally checked **demonstration
-evidence** with the limitations below. It is not calibrated, empirically
-validated, causal or operational evidence. Paper and app uses must attribute
-it to `f466288`, retain the exact sample denominators and avoid mixing failed
-attempts, current-source claims or superseded city values. See
-[the release evidence record](RELEASE_EVIDENCE_2026-10-10.md).
+An earlier common-boundary set was executed on 10 October: eight run IDs, 8/8
+run audits and 4/4 pair audits passed. It remains immutable historical
+demonstration evidence at `f466288`; it is no longer the current paper/app
+boundary. Current uses must follow the admitted `db0a96b` replacement and
+exact P/C and age-coverage denominators in
+[the 11 October release record](RELEASE_EVIDENCE_2026-10-11.md).
 
 ## OSM source re-freeze, 10 October 2026 — city numbers superseded
 
@@ -284,8 +282,8 @@ release attempt.
 
 North owns review and merge. The paper session owns manuscript and figure edits.
 The four-area release passed its internal run and pair gates and may be used
-only as demonstration evidence with its `f466288` boundary, exact sample
-denominators and stated limitations. Implementation changes do not
+only as demonstration evidence with its `db0a96b` boundary, exact P/C and
+age-coverage denominators and stated limitations. Implementation changes do not
 automatically replace paper results, and superseded city numbers remain out of
 scope. Historical evidence and fresh verification are separately identified in
 every PR handoff.
