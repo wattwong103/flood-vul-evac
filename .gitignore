@@ -27,3 +27,7 @@ __pycache__/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Local release-evidence copies. Admitted hashes live in the release docs;
+# the bytes stay outside git.
+/bkkflow-release-archives/
