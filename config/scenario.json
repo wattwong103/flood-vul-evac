@@ -40,8 +40,21 @@
     "description": "A dry run with the flood scenario disabled, used to isolate the flood effect on clearance time."
   },
   "sensitivity": {
+    "design": "one_at_a_time",
+    "status": "demonstration",
+    "baseline": {
+      "flood_enabled": true,
+      "flood_severity": "moderate",
+      "compliance": 0.78,
+      "warning_reach": 0.92,
+      "preparation_delay_mean_s": 900,
+      "preparation_delay_sd_s": 600,
+      "threshold_set_version": "bkk-demo-thresholds-v0.1"
+    },
     "flood_severity": ["low", "moderate", "high"],
     "compliance": [0.6, 0.78, 0.9],
+    "warning_reach": [0.7, 0.92, 1.0],
+    "preparation_delay_mean_s": [300, 900, 1800],
     "threshold_set_version": ["bkk-demo-thresholds-v0.1"]
   },
   "warnings": [

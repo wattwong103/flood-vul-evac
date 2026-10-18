@@ -177,8 +177,9 @@ def build_building_table(
     frame["height_m"] = tagged_height
     frame["height_source"] = np.where(tagged_height.notna(), "osm_height", "unknown")
     fill = levels.notna() & tagged_height.isna()
-    frame.loc[fill, "height_m"] = (levels[fill] * METRES_PER_LEVEL).round(2)
-    frame.loc[fill, "height_source"] = "osm_building_levels"
+    if fill.any():
+        frame.loc[fill, "height_m"] = (levels[fill] * METRES_PER_LEVEL).round(2)
+        frame.loc[fill, "height_source"] = "osm_building_levels"
 
     frame["height_levels"] = levels
     frame["height_confidence"] = np.where(

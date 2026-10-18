@@ -212,10 +212,19 @@ def _check_identity(
     if run_state.get("state") != "published":
         raise ValueError("run state is not published")
     active_scenario = manifest.get("active_scenario")
+    active_keys = set(active_scenario) if isinstance(active_scenario, dict) else set()
+    state = active_scenario.get("state") if isinstance(active_scenario, dict) else None
+    case_id = active_scenario.get("case_id") if isinstance(active_scenario, dict) else None
+    ordinary = active_keys == {"state", "configured_scenario_id"} and state in {"dry", "moderate"}
+    sensitivity = (
+        active_keys == {"state", "configured_scenario_id", "case_id"}
+        and state in {"dry", "low", "moderate", "high"}
+        and isinstance(case_id, str)
+        and bool(case_id)
+    )
     if (
         not isinstance(active_scenario, dict)
-        or set(active_scenario) != {"state", "configured_scenario_id"}
-        or active_scenario.get("state") not in {"dry", "moderate"}
+        or not (ordinary or sensitivity)
         or not isinstance(active_scenario.get("configured_scenario_id"), str)
         or not active_scenario["configured_scenario_id"]
         or run_state.get("active_scenario") != active_scenario
@@ -802,6 +811,26 @@ def _compare_terminal_records(actual: pd.DataFrame, saved: pd.DataFrame) -> None
                 raise ValueError("saved terminal numeric mismatch")
 
 
+def _predraw_departure(
+    seed: int, count: int, delay_mean: float, delay_sd: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Independent copy of the predraw-v1 departure streams.
+
+    This must stay aligned with ``evacuation.predraw_departure_streams`` without
+    importing the pipeline builder.
+    """
+    sequence = np.random.SeedSequence(int(seed))
+    warning_seed, compliance_seed, delay_seed = sequence.spawn(3)
+    warning = np.random.default_rng(warning_seed).random(count)
+    compliance = np.random.default_rng(compliance_seed).random(count)
+    delay = np.clip(
+        np.random.default_rng(delay_seed).normal(delay_mean, delay_sd, size=count),
+        0.0,
+        4 * 3600,
+    )
+    return warning, compliance, delay
+
+
 def replay_evacuation(bundle: AuditBundle) -> EvacuationReplayAudit:
     """Replay RNG, integerized capacity and terminal records independently."""
     routing = reconstruct_peak_routes(bundle)
@@ -814,6 +843,9 @@ def replay_evacuation(bundle: AuditBundle) -> EvacuationReplayAudit:
     delay_mean = float(_field(departure, "preparation_delay_mean_s"))
     delay_sd = float(_field(departure, "preparation_delay_sd_s"))
     if warning < 0 or not 0 <= warning_reach <= 1 or not 0 <= compliance <= 1 or delay_sd < 0:
+        raise ValueError("invalid departure-model parameter")
+    rng_mode = departure.get("rng", "sequential-v0")
+    if rng_mode not in {"predraw-v1", "sequential-v0"}:
         raise ValueError("invalid departure-model parameter")
     rng = np.random.default_rng(seed)
 
@@ -836,15 +868,30 @@ def replay_evacuation(bundle: AuditBundle) -> EvacuationReplayAudit:
             "clearance_s": clearance, "distance_m": distance,
         })
 
-    for person in cohort.itertuples():
+    people = list(cohort.itertuples())
+    warning_draw = compliance_draw = delay_draw = None
+    if rng_mode == "predraw-v1":
+        warning_draw, compliance_draw, delay_draw = _predraw_departure(
+            int(seed), len(people), delay_mean, delay_sd,
+        )
+    for index, person in enumerate(people):
         person_id, weight = str(person.person_id), float(person.weight)
-        if rng.random() > warning_reach:
+        if rng_mode == "predraw-v1":
+            missed_warning = float(warning_draw[index]) > warning_reach
+            missed_compliance = float(compliance_draw[index]) > compliance
+            delay = float(delay_draw[index])
+        else:
+            missed_warning = rng.random() > warning_reach
+            missed_compliance = False if missed_warning else rng.random() > compliance
+            delay = 0.0 if missed_warning or missed_compliance else float(
+                np.clip(rng.normal(delay_mean, delay_sd), 0, 4 * 3600)
+            )
+        if missed_warning:
             append(person_id, "did_not_depart", "not_warned", warning, weight, None, None, None)
             continue
-        if rng.random() > compliance:
+        if missed_compliance:
             append(person_id, "did_not_depart", "not_compliant", warning, weight, None, None, None)
             continue
-        delay = float(np.clip(rng.normal(delay_mean, delay_sd), 0, 4 * 3600))
         departure_time = warning + delay
         route = routing.routes[person_id]
         if route.status != "routed":

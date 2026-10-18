@@ -23,8 +23,9 @@
       "additionalProperties": false,
       "required": ["state", "configured_scenario_id"],
       "properties": {
-        "state": { "enum": ["dry", "moderate"] },
-        "configured_scenario_id": { "type": "string", "minLength": 1 }
+        "state": { "enum": ["dry", "low", "moderate", "high"] },
+        "configured_scenario_id": { "type": "string", "minLength": 1 },
+        "case_id": { "type": "string", "minLength": 1 }
       }
     },
     "code_identity": {

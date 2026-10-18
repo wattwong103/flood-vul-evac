@@ -422,6 +422,17 @@ def test_integerized_capacity_partition_preserves_fractional_weight() -> None:
     assert replay_audit.integerized_capacity_partition(2.8, 10) == (2.8, 0.0, 7)
 
 
+def test_missing_departure_rng_keeps_the_sequential_replay(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    departure = bundle.manifest["evacuation_scenario"]["departure_model"]
+    assert departure["rng"] == "predraw-v1"
+    replay_audit.replay_evacuation(bundle)
+
+    del departure["rng"]
+    with pytest.raises(ValueError, match="saved terminal"):
+        replay_audit.replay_evacuation(bundle)
+
+
 def test_replay_evacuation_matches_saved_terminal_evidence(published_run: Path) -> None:
     bundle = replay_audit.load_audit_bundle(published_run)
     audit = replay_audit.replay_evacuation(bundle)

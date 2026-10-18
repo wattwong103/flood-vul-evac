@@ -14,6 +14,7 @@ The run state machine is:
 
 from __future__ import annotations
 
+import copy
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -35,6 +36,13 @@ from . import population as population_module
 from . import validate as validate_module
 from .code_identity import capture_code_identity, verify_code_identity
 from .pilot_config import load_pilot_bundle
+from .sensitivity import (
+    build_sensitivity_ensemble,
+    ensemble_cases,
+    load_sensitivity_table,
+    require_baseline_matches_scenario,
+    select_run_case,
+)
 from .sources import pilot_stage
 from .sources.registry import load_registry
 from .util import (
@@ -173,6 +181,12 @@ def execute_run(
     max_agents: int | None = None,
     pilot_id: str | None = None,
     cohort_from_run: str | None = None,
+    sensitivity_case: str | None = None,
+    flood_severity: str | None = None,
+    compliance: float | None = None,
+    warning_reach: float | None = None,
+    preparation_delay_mean_s: float | None = None,
+    threshold_set_version: str | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline once and return the published run summary."""
     if type(flood_enabled) is not bool:
@@ -180,6 +194,20 @@ def execute_run(
     bundle = load_pilot_bundle(
         pilot_id, config_dir=CONFIG_DIR, curated_dir=CURATED_DIR
     )
+    table = load_sensitivity_table(bundle.scenario)
+    case = select_run_case(
+        table,
+        case_id=sensitivity_case,
+        dry_requested=not flood_enabled,
+        flood_severity=flood_severity,
+        compliance=compliance,
+        warning_reach=warning_reach,
+        preparation_delay_mean_s=preparation_delay_mean_s,
+        threshold_set_version=threshold_set_version,
+    )
+    if case is not None:
+        require_baseline_matches_scenario(bundle.scenario, table)
+        flood_enabled = case.flood_enabled
     if bundle.named:
         pilot_stage.validate_staged_pilot(
             bundle.input_root, expected_bundle=bundle
@@ -207,10 +235,21 @@ def execute_run(
     pilot = bundle.pilot
     population_config = bundle.population
     scenario_config = bundle.scenario
+    if case is not None:
+        scenario_config = copy.deepcopy(bundle.scenario)
+        evacuation_config = scenario_config["evacuation"]
+        evacuation_config["compliance"] = case.compliance
+        evacuation_config["warning_reach"] = case.warning_reach
+        evacuation_config["preparation_delay_mean_s"] = case.preparation_delay_mean_s
+        evacuation_config["preparation_delay_sd_s"] = case.preparation_delay_sd_s
+        if case.flood_enabled:
+            scenario_config["flood"]["severity"] = case.flood_severity
     active_scenario = {
-        "state": "moderate" if flood_enabled else "dry",
+        "state": case.active_state if case is not None else ("moderate" if flood_enabled else "dry"),
         "configured_scenario_id": str(scenario_config["flood"]["scenario_id"]),
     }
+    if case is not None:
+        active_scenario["case_id"] = case.case_id
 
     context = RunContext(
         run_id=run_id,
@@ -1003,6 +1042,8 @@ def _build_stats(
             "arrived_weighted": denominators["quantities"]["terminal_states"]["arrived"]["weight"],
             "unserved_weighted": denominators["unserved_derived"]["weight"],
             "clearance_time_minutes": outcomes["clearance_time_minutes"],
+            "clearance_sensitivity_minutes": outcomes["clearance_sensitivity_minutes"],
+            "reason_weights": outcomes["reason_weights"],
             "state_distribution": {
                 state: values["weight"]
                 for state, values in denominators["quantities"]["terminal_states"].items()
@@ -1026,4 +1067,37 @@ def _build_stats(
             }
             for entry in manifest["source_versions"]
         ],
+    }
+
+
+def execute_sensitivity_ensemble(
+    *,
+    pilot_id: str,
+    max_agents: int | None = None,
+) -> dict[str, Any]:
+    """Run the ten one-at-a-time cases on one cohort and write the report."""
+    bundle = load_pilot_bundle(pilot_id, config_dir=CONFIG_DIR, curated_dir=CURATED_DIR)
+    cases = ensemble_cases(load_sensitivity_table(bundle.scenario))
+    results = []
+    baseline_id = None
+    for case in cases:
+        result = execute_run(
+            pilot_id=pilot_id,
+            max_agents=max_agents,
+            flood_enabled=case.flood_enabled,
+            cohort_from_run=baseline_id,
+            sensitivity_case=case.case_id,
+        )
+        if not result["validation_passed"]:
+            raise ValueError(f"sensitivity case {case.case_id} failed validation")
+        if case.case_id == "baseline":
+            baseline_id = result["run_id"]
+        results.append(result)
+    report = build_sensitivity_ensemble([Path(item["run_dir"]) for item in results])
+    destination = RUNS_DIR / f"{pilot_id}-sensitivity-ensemble.json"
+    write_json(destination, report)
+    return {
+        "report_path": str(destination),
+        "run_ids": [item["run_id"] for item in results],
+        "report": report,
     }

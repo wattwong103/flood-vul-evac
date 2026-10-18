@@ -25,7 +25,10 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from .clearance import weighted_clearance_minutes
+from .clearance import sensitivity_clearance_minutes, weighted_clearance_minutes
+
+DEPARTURE_RNG_PREDRAW = "predraw-v1"
+DEPARTURE_RNG_SEQUENTIAL = "sequential-v0"
 
 # Terminal states. A person in the cohort must end in exactly one of these.
 TERMINAL_STATES = (
@@ -80,6 +83,7 @@ class EvacuationScenario:
     refuge_capacity: int = 2000
     destinations: list[dict[str, Any]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    rng: str = DEPARTURE_RNG_PREDRAW
 
     def as_manifest_entry(self, seed: int) -> dict[str, Any]:
         return {
@@ -90,6 +94,7 @@ class EvacuationScenario:
                 "compliance": self.compliance,
                 "preparation_delay_mean_s": self.preparation_delay_mean_s,
                 "preparation_delay_sd_s": self.preparation_delay_sd_s,
+                "rng": self.rng,
                 "status": "scenario_prior_uncalibrated",
             },
             "route_choice": {
@@ -275,6 +280,31 @@ def select_cohort(
     return cohort, reconciliation
 
 
+def predraw_departure_streams(
+    seed: int,
+    count: int,
+    delay_mean: float,
+    delay_sd: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Draw warning, compliance and delay for every row from one seed.
+
+    The three streams are independent, so changing one threshold does not
+    reshuffle the other draws. Delays use the same clip as the sequential path.
+    """
+    if count < 0:
+        raise ValueError("departure draw count must be non-negative")
+    sequence = np.random.SeedSequence(int(seed))
+    warning_seed, compliance_seed, delay_seed = sequence.spawn(3)
+    warning = np.random.default_rng(warning_seed).random(count)
+    compliance = np.random.default_rng(compliance_seed).random(count)
+    delay = np.clip(
+        np.random.default_rng(delay_seed).normal(delay_mean, delay_sd, size=count),
+        0.0,
+        4 * 3600,
+    )
+    return warning, compliance, delay
+
+
 def simulate_evacuation(
     cohort: pd.DataFrame,
     *,
@@ -284,10 +314,20 @@ def simulate_evacuation(
     seed: int,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Run the auditable state machine and return per-agent outcomes."""
+    if scenario.rng not in {DEPARTURE_RNG_PREDRAW, DEPARTURE_RNG_SEQUENTIAL}:
+        raise ValueError(f"unknown departure rng {scenario.rng!r}")
     rng = np.random.default_rng(seed)
     records: list[dict[str, Any]] = []
     bottleneck: dict[str, float] = {}
     capacity_remaining = {dest.dest_id: int(dest.capacity) for dest in destinations.itertuples()}
+    warning_draw = compliance_draw = delay_draw = None
+    if scenario.rng == DEPARTURE_RNG_PREDRAW and not cohort.empty:
+        warning_draw, compliance_draw, delay_draw = predraw_departure_streams(
+            seed,
+            len(cohort),
+            scenario.preparation_delay_mean_s,
+            scenario.preparation_delay_sd_s,
+        )
 
     if cohort.empty:
         return pd.DataFrame(
@@ -306,11 +346,24 @@ def simulate_evacuation(
             ]
         ), _empty_outcome_summary()
 
-    for person in cohort.itertuples():
+    for index, person in enumerate(cohort.itertuples()):
         weight = float(person.weight)
+        if scenario.rng == DEPARTURE_RNG_PREDRAW:
+            missed_warning = float(warning_draw[index]) > scenario.warning_reach
+            missed_compliance = float(compliance_draw[index]) > scenario.compliance
+            delay = float(delay_draw[index])
+        else:
+            missed_warning = rng.random() > scenario.warning_reach
+            missed_compliance = False if missed_warning else rng.random() > scenario.compliance
+            delay = 0.0 if missed_warning or missed_compliance else float(
+                np.clip(
+                    rng.normal(scenario.preparation_delay_mean_s, scenario.preparation_delay_sd_s),
+                    0,
+                    4 * 3600,
+                )
+            )
 
-        # Warning reach.
-        if rng.random() > scenario.warning_reach:
+        if missed_warning:
             records.append(
                 {
                     "person_id": person.person_id,
@@ -324,8 +377,7 @@ def simulate_evacuation(
                 }
             )
             continue
-        # Compliance decision.
-        if rng.random() > scenario.compliance:
+        if missed_compliance:
             records.append(
                 {
                     "person_id": person.person_id,
@@ -339,9 +391,6 @@ def simulate_evacuation(
                 }
             )
             continue
-        delay = float(
-            np.clip(rng.normal(scenario.preparation_delay_mean_s, scenario.preparation_delay_sd_s), 0, 4 * 3600)
-        )
         depart_time = scenario.warning_time_s + delay
         destination = None
         if not destinations.empty:
@@ -488,6 +537,13 @@ def simulate_evacuation(
         "clearance_time_minutes": weighted_clearance_minutes(
             frame, warning_time_s=scenario.warning_time_s
         ),
+        "clearance_sensitivity_minutes": sensitivity_clearance_minutes(
+            frame, warning_time_s=scenario.warning_time_s
+        ),
+        "reason_weights": {
+            str(reason): math.fsum(float(value) for value in group["weight"])
+            for reason, group in frame.groupby("reason")
+        },
         "top_bottleneck_edges": [
             {"edge_id": edge_id, "traversal_weight": round(weight, 1)}
             for edge_id, weight in sorted(bottleneck.items(), key=lambda item: -item[1])[:10]
@@ -515,6 +571,8 @@ def _empty_outcome_summary() -> dict[str, Any]:
         "arrived_weighted": 0.0,
         "unserved_weighted": 0.0,
         "clearance_time_minutes": {"p5": None, "median": None, "p95": None},
+        "clearance_sensitivity_minutes": {"p50": None, "p90": None, "arrived_weight": 0.0},
+        "reason_weights": {},
         "top_bottleneck_edges": [],
         "destinations": [],
     }
