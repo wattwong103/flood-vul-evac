@@ -35,6 +35,7 @@ from . import network as network_module
 from . import population as population_module
 from . import validate as validate_module
 from .code_identity import capture_code_identity, verify_code_identity
+from . import replay_audit
 from .pilot_config import load_pilot_bundle
 from .sensitivity import (
     build_sensitivity_ensemble,
@@ -1090,6 +1091,11 @@ def execute_sensitivity_ensemble(
         )
         if not result["validation_passed"]:
             raise ValueError(f"sensitivity case {case.case_id} failed validation")
+        audit = replay_audit.final_audit_report(
+            replay_audit.load_audit_bundle(Path(result["run_dir"]))
+        )
+        if audit["status"] != "PASS":
+            raise ValueError(f"sensitivity case {case.case_id} failed replay audit")
         if case.case_id == "baseline":
             baseline_id = result["run_id"]
         results.append(result)
