@@ -610,11 +610,20 @@ export type ObservedWaterYear = {
    */
   aoi_water_km2?: number | null;
   water_km2?: number | null;
-  /** Water extent as a share of the area classified in that year, 0..1. */
+  /**
+   * Water as a share of the area whose status is known, 0..1: water / (AOI -
+   * unknown), where unknown is yearly code 0 inside the JRC Maximum Water
+   * Extent. Null unless `share_status` is "ok". A share with no
+   * `share_status` comes from an older run that divided by classified pixels
+   * only (BKK-054) and is superseded.
+   */
   aoi_water_share?: number | null;
   water_share?: number | null;
-  aoi_area_km2?: number | null;
+  share_status?: "ok" | "max_extent_unavailable" | "no_known_pixels" | null;
+  /** Area the year classified (codes 1-3); not the share's denominator. */
   classified_km2?: number | null;
+  /** The share's denominator: classified area plus never-water code 0. */
+  known_km2?: number | null;
   excess_km2_vs_baseline?: number | null;
   baseline_year?: number | null;
   [key: string]: unknown;

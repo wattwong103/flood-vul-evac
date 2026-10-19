@@ -39,21 +39,38 @@ def test_screening_reads_selected_run_water_cells(tmp_path):
 
 def test_water_cache_retains_original_retrieval_and_rejects_changed_bytes(tmp_path, monkeypatch):
     tile, bounds = raster_fixture(tmp_path, [0, 1, 2, 3])
-    body = tile.read_bytes()
+    extent, _ = raster_fixture(tmp_path, [0, 1, 1, 1], name="extent.tif")
     calls = []
-    def fetch(*args, **kwargs):
-        calls.append(args)
+    def fetch(url, **kwargs):
+        calls.append(url)
+        body = (extent if url.startswith(gsw.EXTENT_BASE) else tile).read_bytes()
         return SimpleNamespace(body=body, retrieved_at="2026-09-29T00:00:00Z")
     monkeypatch.setattr(gsw, "STAGED_DIR", tmp_path / "staged")
     aoi = gpd.GeoDataFrame(geometry=[box(*bounds)], crs="EPSG:4326")
     client = SimpleNamespace(get=fetch)
     first = gsw.fetch_years(client, [2020], bounds, aoi)
     again = gsw.fetch_years(client, [2020], bounds, aoi)
-    assert len(calls) == 1
+    assert len(calls) == 2  # one yearly tile and one extent tile, each fetched once
     assert again["years"][0]["retrieved_at"] == first["years"][0]["retrieved_at"] == "2026-09-29T00:00:00Z"
+    assert first["max_extent"]["status"] == "ok" and first["years"][0]["aoi_water_share"] == 0.5
     Path(first["years"][0]["local_path"]).write_bytes(b"changed")
     with pytest.raises(ValueError, match="provenance"):
         gsw.fetch_years(client, [2020], bounds, aoi)
+
+
+def test_failed_extent_download_leaves_shares_null_not_inflated(tmp_path, monkeypatch):
+    tile, bounds = raster_fixture(tmp_path, [0, 1, 2, 3])
+    def fetch(url, **kwargs):
+        if url.startswith(gsw.EXTENT_BASE):
+            raise OSError("HTTP 503")
+        return SimpleNamespace(body=tile.read_bytes(), retrieved_at="2026-09-29T00:00:00Z")
+    monkeypatch.setattr(gsw, "STAGED_DIR", tmp_path / "staged")
+    aoi = gpd.GeoDataFrame(geometry=[box(*bounds)], crs="EPSG:4326")
+    summary = gsw.fetch_years(SimpleNamespace(get=fetch), [2020], bounds, aoi)
+    assert summary["max_extent"]["status"] == "unavailable" and "503" in summary["max_extent"]["reason"]
+    year = summary["years"][0]
+    assert year["aoi_water_share"] is None and year["share_status"] == "max_extent_unavailable"
+    assert year["aoi_water_pixels"] == 2 and year["aoi_water_km2"] > 0
 
 
 def test_screening_keeps_node_zero_and_honours_zero_closure(tmp_path, monkeypatch):

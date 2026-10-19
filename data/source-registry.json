@@ -260,8 +260,8 @@
       "attribution": "EC JRC/Google, Global Surface Water (Pekel et al. 2016)",
       "status": "approved",
       "reviewed_at": "2026-10-20",
-      "used_in_runs": false,
-      "notes": "Encoding per JRC Data Users Guide (2021) p12, which describes the product as all locations ever detected as water over 1984-2021: 0 = Not water, 1 = Water detected, 255 = No data. The Aggregated directory's copyright.txt grants CC BY 4.0 for this resource. Registered for BKK-054 to test whether yearly code 0 includes never-water pixels; no pipeline stage reads it yet."
+      "used_in_runs": true,
+      "notes": "Encoding per JRC Data Users Guide (2021) p12, which describes the product as all locations ever detected as water over 1984-2021: 0 = Not water, 1 = Water detected, 255 = No data. The Aggregated directory's copyright.txt grants CC BY 4.0 for this resource. Registered for BKK-054. Since BKK-054b gsw.fetch_years stages it and every GSW water share divides by AOI minus unknown (yearly code 0 inside the extent, or extent no-data); without it the share is null."
     },
     {
       "source_id": "ghsl-jrc-ghspop-ghsbuilts",

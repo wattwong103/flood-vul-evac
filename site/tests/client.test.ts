@@ -12,6 +12,7 @@ import { geoJsonBounds } from "../src/lib/map-bounds.ts";
 import { updateMapSources } from "../src/lib/map-sources.ts";
 import { isRefugeRecord } from "../src/lib/map-refuges.ts";
 import { validationChecks } from "../src/lib/validation.ts";
+import { formatObservedShare, NOT_COMPUTED } from "../src/lib/format.ts";
 import {
   caseRunLabel,
   defaultRunId,
@@ -327,4 +328,12 @@ test("geoJsonBounds covers the full Bangkok study-area geometry", () => {
   });
 
   assert.deepEqual(bounds, [100.3279, 13.2191, 100.9386, 13.9552]);
+});
+
+test("observed-water shares show only the max-extent denominator (BKK-054)", () => {
+  assert.equal(formatObservedShare(0.106, "ok"), "10.6%");
+  // A share with no status is an older run's water / classified: never shown as a share.
+  assert.equal(formatObservedShare(0.603, undefined), "superseded (BKK-054)");
+  assert.equal(formatObservedShare(null, "max_extent_unavailable"), NOT_COMPUTED);
+  assert.equal(formatObservedShare(null, null), NOT_COMPUTED);
 });

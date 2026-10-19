@@ -1327,6 +1327,32 @@ def test_export_does_not_hash_large_files(
     assert by_path["persons.parquet"]["size_bytes"] == 5000
 
 
+def test_null_water_share_serialises_as_null_and_skips_min_share(client, runs_dir):
+    # BKK-054: without the Maximum Water Extent the share is null, never water / classified.
+    rows = pd.DataFrame([{"cell_id": "no-extent", "year": 2020, "water_px": 3, "known_px": None,
+        "water_share": None, "water_km2": .5, "lon": 100.5, "lat": 13.7}])
+    _write_run(runs_dir, "no-extent", tables={"observed_water_cells": rows})
+    body = client.get("/v1/runs/no-extent/observed-water/cells?min_share=0.5").json()
+    assert [f["properties"]["water_share"] for f in body["features"]] == [None]
+    codes = {warning["code"] for warning in body["warnings"]}
+    assert "share_not_computed" in codes and "share_superseded" not in codes
+
+
+def test_legacy_classified_denominator_shares_are_flagged(client, runs_dir):
+    cells = pd.DataFrame([{"cell_id": "legacy", "year": 2020, "water_share": .6,
+        "water_km2": .5, "lon": 100.5, "lat": 13.7}])
+    legacy_year = {"year": 2020, "aoi_water_share": .6, "aoi_area_km2": 288.0}
+    _write_run(runs_dir, "legacy", tables={"observed_water_cells": cells},
+               json_files={"observed_water": {"status": "ok", "years": [legacy_year]}})
+    current_year = {"year": 2020, "aoi_water_share": .1, "share_status": "ok", "known_km2": 1500.0}
+    _write_run(runs_dir, "current", json_files={"observed_water": {"status": "ok", "years": [current_year]}})
+    for endpoint in ("observed-water", "observed-water/cells"):
+        codes = {w["code"] for w in client.get(f"/v1/runs/legacy/{endpoint}").json()["warnings"]}
+        assert "share_superseded" in codes
+    codes = {w["code"] for w in client.get("/v1/runs/current/observed-water").json()["warnings"]}
+    assert "share_superseded" not in codes
+
+
 @pytest.mark.parametrize("empty", [False, True])
 def test_water_cells_never_substitute_an_unavailable_year(client, runs_dir, empty):
     rows = pd.DataFrame([{"cell_id": "old-water", "year": 2010, "water_share": .5,

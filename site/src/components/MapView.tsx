@@ -282,30 +282,35 @@ const SOURCES = [
  * ramps above: it carries one observation, not one observation per source role.
  * Depth is separated from it by the wording of the legend, never by a hue.
  */
+/** A null share (no Maximum Water Extent, BKK-054) is grey, never the 0% hue. */
+const HAS_WATER_SHARE = ["==", ["typeof", ["get", "water_share"]], "number"] as unknown[];
+
 const WATER_SHARE_FILL = [
-  "interpolate",
-  ["linear"],
-  NUM("water_share"),
-  0,
-  "#e8f1f4",
-  0.05,
-  "#a9cfe0",
-  0.25,
-  "#4b93b8",
-  0.5,
-  "#1d5f85",
-  1,
-  "#0b3550",
+  "case",
+  HAS_WATER_SHARE,
+  [
+    "interpolate",
+    ["linear"],
+    NUM("water_share"),
+    0,
+    "#e8f1f4",
+    0.05,
+    "#a9cfe0",
+    0.25,
+    "#4b93b8",
+    0.5,
+    "#1d5f85",
+    1,
+    "#0b3550",
+  ],
+  "#9aa0a6",
 ] as unknown[];
 
 const WATER_SHARE_RADIUS = [
-  "interpolate",
-  ["linear"],
-  NUM("water_share"),
-  0,
-  3,
-  1,
-  16,
+  "case",
+  HAS_WATER_SHARE,
+  ["interpolate", ["linear"], NUM("water_share"), 0, 3, 1, 16],
+  6,
 ] as unknown[];
 
 /**

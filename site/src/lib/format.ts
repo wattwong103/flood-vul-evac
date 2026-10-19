@@ -45,6 +45,19 @@ export function formatShare(
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+/**
+ * The observed-water share (BKK-054). A share with no `share_status` comes from
+ * an older run that divided by classified pixels only, so it is superseded,
+ * not shown; a non-"ok" status is not computed.
+ */
+export function formatObservedShare(
+  share: number | null | undefined,
+  status: string | null | undefined,
+): string {
+  if (isMissing(status)) return isMissing(share) ? NOT_COMPUTED : "superseded (BKK-054)";
+  return status === "ok" ? formatShare(share) : NOT_COMPUTED;
+}
+
 export function formatNumber(
   value: number | null | undefined,
   digits = 2,

@@ -13,7 +13,8 @@ def test_city_report_preserves_unobserved_water_share(tmp_path, monkeypatch):
         "buildings": dict.fromkeys(["footprints", "height_coverage_share", "tagged_height", "derived_from_levels", "unknown_height"], 0),
         "water": {"features": 0, "waterway_length_km": 0},
         "flood": {"observed_extent": {"source_id": "JRC", "measures": "annual water classification", "years": [
-            {"year": 2011, "water_km2": 0, "water_share": None, "excess_km2_vs_baseline": 0}]},
+            {"year": 2011, "water_km2": 0, "water_share": None, "share_status": "max_extent_unavailable",
+             "excess_km2_vs_baseline": 0}]},
             "depth_status": "not_computed", "depth_reason": "no depth"},
         "destinations": {"candidates": 0, "verified": 0, "by_class": {}, "note": "unverified"},
         "validation": {"checks_total": 1, "checks_failed": 0, "passed": True, "manifest_schema_problems": 0},
@@ -24,7 +25,8 @@ def test_city_report_preserves_unobserved_water_share(tmp_path, monkeypatch):
     write_json(run / "stats.json", stats)
     monkeypatch.setattr(city_report, "RUNS_DIR", tmp_path)
     report = city_report.write_city_summary("saved", run, run / "figure.png").read_text(encoding="utf-8")
-    assert "unobserved" in report
+    assert "not computed (max_extent_unavailable)" in report
+    assert "share of known area" in report and "share of classified" not in report
     assert "flood does not appear" not in report and "Every year here is a lower bound" not in report
 
 
@@ -50,7 +52,7 @@ def test_rendered_water_panel_handles_no_observation_share(tmp_path, monkeypatch
         city_report._plot_observed_water(axis, aoi, {"flood": {"observed_extent": {"years": [
             {"year": 2020, "water_km2": 0, "water_share": None}]}}})
         figure.savefig(tmp_path / "unobserved.png")
-        assert any("unobserved" in text.get_text() for text in axis.texts)
+        assert any("share not computed" in text.get_text() for text in axis.texts)
         assert (tmp_path / "unobserved.png").stat().st_size > 0
     finally:
         plt.close(figure)

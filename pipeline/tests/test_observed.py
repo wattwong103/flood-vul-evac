@@ -22,15 +22,15 @@ from bkkflow.sources import destinations, gsw  # noqa: E402
 # --------------------------------------------------------------------------
 
 
-def raster_fixture(tmp_path, values):
+def raster_fixture(tmp_path, values, *, name="water.tif", west=100.5):
     import rasterio
     from rasterio.transform import from_origin
-    path = tmp_path / "water.tif"
+    path = tmp_path / name
     with rasterio.open(path, "w", driver="GTiff", width=len(values), height=1,
                        count=1, dtype="uint8", crs="EPSG:4326",
-                       transform=from_origin(100.5, 13.7, 0.00025, 0.00025)) as dst:
+                       transform=from_origin(west, 13.7, 0.00025, 0.00025)) as dst:
         dst.write(np.array([values], dtype="uint8"), 1)
-    return path, (100.5, 13.69975, 100.5 + len(values) * 0.00025, 13.7)
+    return path, (west, 13.69975, west + len(values) * 0.00025, 13.7)
 
 
 @pytest.mark.parametrize("clip", [False, True])
@@ -38,10 +38,12 @@ def test_source_coded_raster_preserves_water_classes(tmp_path, clip):
     # JRC Data Users Guide v4 p15: no observations, non-water, seasonal, permanent.
     from shapely.geometry import box
     path, bounds = raster_fixture(tmp_path, [0, 1, 2, 3])
+    # All inside the max extent: code 0 is unobserved that year, not never-water.
+    extent, _ = raster_fixture(tmp_path, [1, 1, 1, 1], name="extent.tif")
     result = gsw.measure_year(2020, path.name, path, bounds,
-                              aoi_geometry=box(*bounds) if clip else None)
+                              aoi_geometry=box(*bounds) if clip else None, extent_path=extent)
     assert result.aoi_water_pixels == 2
-    assert result.aoi_total_pixels == 3
+    assert result.classified_pixels == result.known_pixels == 3
     assert result.aoi_water_share == pytest.approx(2 / 3)
     assert result.aoi_seasonal_pixels == result.aoi_permanent_pixels == 1
     mask, _ = gsw.observed_water_mask(path, box(*bounds))
@@ -50,8 +52,10 @@ def test_source_coded_raster_preserves_water_classes(tmp_path, clip):
 
 def test_unobserved_area_is_not_reported_as_zero_flooding(tmp_path):
     path, bounds = raster_fixture(tmp_path, [0, 0])
-    result = gsw.measure_year(2020, path.name, path, bounds)
+    extent, _ = raster_fixture(tmp_path, [1, 255], name="extent.tif")
+    result = gsw.measure_year(2020, path.name, path, bounds, extent_path=extent)
     assert result.aoi_water_share is None
+    assert result.share_status == "no_known_pixels"
     assert result.as_dict()["aoi_water_share"] is None
 
 
@@ -90,7 +94,111 @@ def test_water_outside_aoi_is_excluded(tmp_path):
     aoi = box(bounds[0], bounds[1], bounds[2] - 0.00025, bounds[3])
     result = gsw.measure_year(2020, path.name, path, bounds, aoi_geometry=aoi)
     assert result.aoi_water_pixels == 1
-    assert result.aoi_total_pixels == 2
+    assert result.classified_pixels == 2
+
+
+# --------------------------------------------------------------------------
+# share denominator (BKK-054): yearly code 0 recoded with Maximum Water Extent
+# --------------------------------------------------------------------------
+
+# Code 0 outside the max extent was never detected as water in 1984-2021, so it
+# is observed not-water. Code 0 inside it, or under extent no-data, is unknown.
+YEARLY = [0, 0, 0, 0, 1, 2, 3]
+EXTENT = [0, 0, 1, 255, 1, 1, 1]
+
+
+@pytest.mark.parametrize("clip", [False, True])
+def test_code_zero_outside_max_extent_stays_in_the_share_denominator(tmp_path, clip):
+    from shapely.geometry import box
+    yearly, bounds = raster_fixture(tmp_path, YEARLY)
+    extent, _ = raster_fixture(tmp_path, EXTENT, name="extent.tif")
+    aoi = box(*bounds) if clip else None
+    result = gsw.measure_year(2020, yearly.name, yearly, bounds, aoi_geometry=aoi,
+                              extent_path=extent)
+    assert (result.aoi_pixels, result.classified_pixels) == (7, 3)
+    assert (result.never_water_pixels, result.unknown_pixels, result.known_pixels) == (2, 2, 5)
+    # 2 / 5, not 2 / 3: dividing by classified pixels drops never-water land.
+    assert result.aoi_water_share == pytest.approx(2 / 5)
+    assert result.share_status == "ok"
+    assert result.known_km2 / result.aoi_water_km2 == pytest.approx(5 / 2)
+    assert result.classified_km2 / result.aoi_water_km2 == pytest.approx(3 / 2)
+    # Water area never reads the extent tile, so the denominator fix cannot move it.
+    without = gsw.measure_year(2020, yearly.name, yearly, bounds, aoi_geometry=aoi)
+    assert result.aoi_water_pixels == without.aoi_water_pixels == 2
+    assert result.aoi_water_km2 == without.aoi_water_km2
+    record = result.as_dict()
+    assert record["aoi_water_share"] == pytest.approx(0.4)
+    assert "aoi_area_km2" not in record and "aoi_total_pixels" not in record
+
+
+def test_share_is_null_with_a_reason_when_max_extent_is_missing(tmp_path):
+    yearly, bounds = raster_fixture(tmp_path, YEARLY)
+    result = gsw.measure_year(2020, yearly.name, yearly, bounds)
+    assert result.aoi_water_share is None
+    assert result.share_status == "max_extent_unavailable"
+    assert result.known_pixels is result.unknown_pixels is result.known_km2 is None
+    assert result.aoi_water_pixels == 2 and result.classified_pixels == 3
+    assert result.as_dict()["share_status"] == "max_extent_unavailable"
+
+
+def test_max_extent_on_a_different_grid_is_refused(tmp_path):
+    yearly, bounds = raster_fixture(tmp_path, YEARLY)
+    extent, _ = raster_fixture(tmp_path, EXTENT, name="extent.tif", west=100.50025)
+    with pytest.raises(ValueError, match="grid"):
+        gsw.measure_year(2020, yearly.name, yearly, bounds, extent_path=extent)
+
+
+def test_unknown_max_extent_code_is_rejected():
+    with pytest.raises(ValueError, match="Maximum Water Extent"):
+        gsw.share_support(np.array([0, 1], dtype="uint8"), np.array([0, 2], dtype="uint8"))
+
+
+def test_extent_tile_uses_the_yearly_tile_offsets():
+    bounds = (100.3279, 13.2191, 100.9386, 13.9552)
+    assert gsw.extent_tile_name_for(bounds) == "extent-0000240000-0001120000.tif"
+
+
+def _stage(tmp_path, fixture, name, url):
+    from bkkflow.util import sha256_file, write_json
+    directory = tmp_path / "gsw"
+    directory.mkdir(exist_ok=True)
+    tile = directory / name
+    tile.write_bytes(fixture.read_bytes())
+    write_json(tile.with_suffix(".provenance.json"), {
+        "resource_url": url, "retrieved_at": "2026-10-20T00:00:00Z",
+        "content_sha256": sha256_file(tile)})
+    return tile
+
+
+@pytest.mark.parametrize("with_extent", [True, False])
+def test_observed_cells_share_the_measure_year_denominator(tmp_path, monkeypatch, with_extent):
+    import geopandas as gpd
+    import pandas as pd
+    from shapely.geometry import box
+    import build_observed_cells
+    from bkkflow import aoi
+    yearly, bounds = raster_fixture(tmp_path, YEARLY)
+    extent, _ = raster_fixture(tmp_path, EXTENT, name="extent.tif")
+    name = gsw.tile_name_for(2020, bounds)
+    _stage(tmp_path, yearly, name, f"{gsw.BASE}/yearlyClassification2020/{name}")
+    if with_extent:
+        extent_name = gsw.extent_tile_name_for(bounds)
+        _stage(tmp_path, extent, extent_name, f"{gsw.EXTENT_BASE}/{extent_name}")
+    monkeypatch.setattr(gsw, "STAGED_DIR", tmp_path)
+    monkeypatch.setattr(aoi, "load_aoi", lambda *a: gpd.GeoDataFrame(geometry=[box(*bounds)], crs="EPSG:4326"))
+    monkeypatch.setattr(build_observed_cells, "YEARS", (2020,))
+    result = build_observed_cells.build(out_dir=tmp_path / "output")
+    frame = pd.read_parquet(result["path"])
+    assert "classified_px" not in frame.columns
+    assert frame["water_px"].sum() == 2
+    if with_extent:
+        assert frame["known_px"].sum() == 5
+        assert frame["water_share"].tolist() == pytest.approx(
+            (frame["water_px"] / frame["known_px"]).tolist())
+        assert result["per_year"][2020]["share_status"] == "ok"
+    else:
+        assert frame["water_share"].isna().all() and frame["known_px"].isna().all()
+        assert result["per_year"][2020]["share_status"] == "max_extent_unavailable"
 
 
 def test_gsw_max_extent_is_its_own_licence_gated_resource():
@@ -107,7 +215,7 @@ def test_gsw_max_extent_is_its_own_licence_gated_resource():
     assert extent.resource_url.endswith("/GSWE/Aggregated/LATEST/extent/tiles/")
     assert extent.licence.startswith("CC BY 4.0")
     assert extent.raw["licence_url"].endswith("/GSWE/Aggregated/copyright.txt")
-    assert extent.raw["used_in_runs"] is False
+    assert extent.raw["used_in_runs"] is True  # BKK-054b: the share denominator reads it
 
 
 @pytest.mark.parametrize("wet_column", [1, 6, 11])

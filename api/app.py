@@ -1572,6 +1572,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         warnings: list[ApiWarning] = []
         payload, json_warnings = _read_json_object(artefact_path(run, "observed_water.json"))
         warnings.extend(json_warnings)
+        if payload is not None and any(
+            isinstance(entry, dict) and entry.get("aoi_water_share") is not None
+            and "share_status" not in entry for entry in payload.get("years", [])
+        ):
+            warnings.append(make_warning(
+                "share_superseded",
+                "this run's water_share divides by yearly classified pixels only; BKK-054 found that overstates water about 6x. Regenerate the run for water / (AOI - unknown)",
+                "observed_water.json",
+            ))
         if payload is None:
             return {
                 "run_id": run.run_id,
@@ -1651,9 +1660,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         selected_year = year if year is not None else max(years)
         frame = frame[frame["year"] == selected_year]
 
-        filtered = frame[frame["water_share"] >= min_share]
-        if filtered.empty:
+        shares = pd.to_numeric(frame["water_share"], errors="coerce")
+        if "known_px" not in frame.columns and shares.notna().any():
+            warnings.append(make_warning(
+                "share_superseded",
+                "this run's water_share divides by yearly classified pixels only; BKK-054 found that overstates water about 6x. Regenerate the run for water / (AOI - unknown)",
+                "observed_water_cells.parquet",
+            ))
+        if shares.isna().all():
+            # A null share has no basis for min_share; every cell is returned.
             filtered = frame
+            warnings.append(make_warning(
+                "share_not_computed",
+                "water_share is null for this year (no JRC Maximum Water Extent); min_share not applied",
+                "observed_water_cells.parquet",
+            ))
+        else:
+            filtered = frame[shares >= min_share]
+            if filtered.empty:
+                filtered = frame
 
         matched = len(filtered)
         truncated = matched > limit
@@ -1673,7 +1698,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 {
                     "cell_id": row.cell_id,
                     "year": int(row.year),
-                    "water_share": float(row.water_share),
+                    "water_share": None if pd.isna(row.water_share) else float(row.water_share),
                     "water_km2": float(row.water_km2),
                     "source_role": "observed",
                     "measures": "extent_only",
