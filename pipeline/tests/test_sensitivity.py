@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -144,11 +145,13 @@ def _write_case(root: Path, case_id: str, *, cohort: str, compliance: float = 0.
                 not_warned: float = 10.0, not_compliant: float = 20.0,
                 route_failed: float = 5.0, shelter_full: float = 15.0,
                 stranded: float = 0.0, arrived: float = 50.0,
-                p50: float | None = 12.0, p90: float | None = 20.0) -> Path:
+                p50: float | None = 12.0, p90: float | None = 20.0, commit: str = "c" * 40,
+                git_status: str = "clean", seed: int = 29092026, max_agents: int = 4) -> Path:
     run_dir = root / case_id
     run_dir.mkdir(parents=True)
     did_not_depart = not_warned + not_compliant
     write_json(run_dir / "manifest.json", {
+        "code_identity": {"git_commit": commit, "git_tree": "t" * 40, "source_sha256": "s" * 64, "git_status": git_status},
         "geography": {"aoi_id": aoi},
         "active_scenario": {
             "state": state,
@@ -172,7 +175,7 @@ def _write_case(root: Path, case_id: str, *, cohort: str, compliance: float = 0.
         "geography": {"aoi_id": aoi},
         "denominators": {
             "quantities": {"cohort": {"rows": 10, "weight": 100.0}},
-            "pairing": {"common_identity": {"cohort_digest": cohort}},
+            "pairing": {"common_identity": {"cohort_digest": cohort, "seed": seed, "max_agents": max_agents}},
             "clearance_denominator": {"weight": arrived},
         },
         "evacuation": {
@@ -219,18 +222,32 @@ def _passing_audit(run_dir: Path) -> dict:
     }
 
 
-def _ensemble(*run_dirs: Path) -> dict:
-    return build_sensitivity_ensemble(list(run_dirs), [_passing_audit(path) for path in run_dirs])
+def _write_ensemble(root: Path, *, cohort: str, overrides: dict | None = None, **common) -> list[Path]:
+    """Write the ten approved cases; ``overrides`` maps a case id to _write_case arguments."""
+    run_dirs = []
+    for case in ensemble_cases(_table()):
+        values = {
+            "cohort": cohort, "compliance": case.compliance, "warning": case.warning_reach,
+            "delay": case.preparation_delay_mean_s, "severity": case.flood_severity,
+            "state": case.active_state, **common, **(overrides or {}).get(case.case_id, {}),
+        }
+        run_dirs.append(_write_case(root, case.case_id, **values))
+    return run_dirs
+
+
+def _ensemble(run_dirs: list[Path], audits: list[dict] | None = None) -> dict:
+    audits = [_passing_audit(path) for path in run_dirs] if audits is None else audits
+    return build_sensitivity_ensemble(run_dirs, audits, expected_cases=ensemble_cases(_table()))
 
 
 def test_ensemble_report_publishes_demonstration_shares(tmp_path):
     cohort = "a" * 64
-    baseline = _write_case(tmp_path, "baseline", cohort=cohort)
-    other = _write_case(
-        tmp_path, "compliance-0.60", cohort=cohort, compliance=0.6,
-        not_compliant=40.0, arrived=30.0,
+    run_dirs = _write_ensemble(
+        tmp_path, cohort=cohort,
+        overrides={"compliance-0.60": {"not_compliant": 40.0, "arrived": 30.0}},
     )
-    report = _ensemble(baseline, other)
+    other = tmp_path / "compliance-0.60"
+    report = _ensemble(run_dirs)
 
     assert report["status"] == "demonstration"
     assert report["design"] == "one_at_a_time"
@@ -240,6 +257,8 @@ def test_ensemble_report_publishes_demonstration_shares(tmp_path):
     assert report["aoi_id"] == "khlong-san-district"
     assert report["citywide"] is False
     assert report["cohort_id"] == cohort
+    assert report["code_identity"] == {"git_commit": "c" * 40, "git_tree": "t" * 40, "source_sha256": "s" * 64}
+    assert (report["seed"], report["max_agents"]) == (29092026, 4)
     assert any("uncalibrated" in item for item in report["limitations"])
     compliance = next(row for row in report["cases"] if row["case_id"] == "compliance-0.60")
     assert compliance["factor"] == "compliance"
@@ -251,31 +270,34 @@ def test_ensemble_report_publishes_demonstration_shares(tmp_path):
     assert compliance["clearance_minutes"]["arrived_weight"] == pytest.approx(30.0)
     assert compliance["sample_denominator"] == {"rows": 10, "weight": 100.0}
     assert compliance["audited_hashes"] == _passing_audit(other)["audited_hashes"]
+    assert [row["case_id"] for row in report["cases"]] == list(CASE_IDS)
+    assert [row["level"] for row in report["cases"]] == [
+        "baseline", "dry", "low", "high", "0.60", "0.90", "0.70", "1.00", "300", "1800"]
     assert "2026-10-11" not in json.dumps(report)
 
 
 def test_ensemble_report_rejects_files_changed_after_their_audit(tmp_path):
-    baseline = _write_case(tmp_path, "baseline", cohort="9" * 64)
-    audit = _passing_audit(baseline)
-    stats = read_json(baseline / "stats.json")
+    run_dirs = _write_ensemble(tmp_path, cohort="9" * 64)
+    audits = [_passing_audit(path) for path in run_dirs]
+    stats = read_json(run_dirs[0] / "stats.json")
     stats["denominators"]["quantities"]["cohort"]["weight"] = 50.0
-    write_json(baseline / "stats.json", stats)
+    write_json(run_dirs[0] / "stats.json", stats)
 
     with pytest.raises(ValueError, match="stats.json differs from the replay-audited bytes"):
-        build_sensitivity_ensemble([baseline], [audit])
+        _ensemble(run_dirs, audits)
 
-    audit["audited_hashes"].pop("stats.json")
+    audits[0]["audited_hashes"].pop("stats.json")
     with pytest.raises(ValueError, match="stats.json differs from the replay-audited bytes"):
-        build_sensitivity_ensemble([baseline], [audit])
+        _ensemble(run_dirs, audits)
 
 
 def test_ensemble_report_publishes_the_replay_values_not_saved_stats(tmp_path):
-    baseline = _write_case(tmp_path, "baseline", cohort="e" * 64)
-    audit = _passing_audit(baseline)
-    audit["reconstructed"]["clearance_sensitivity_minutes"]["p90"] = 21.5
-    audit["reconstructed"]["reason_weights"] = {"not_warned": 12.0, "not_compliant": 18.0}
+    run_dirs = _write_ensemble(tmp_path, cohort="e" * 64)
+    audits = [_passing_audit(path) for path in run_dirs]
+    audits[0]["reconstructed"]["clearance_sensitivity_minutes"]["p90"] = 21.5
+    audits[0]["reconstructed"]["reason_weights"] = {"not_warned": 12.0, "not_compliant": 18.0}
 
-    row = build_sensitivity_ensemble([baseline], [audit])["cases"][0]
+    row = _ensemble(run_dirs, audits)["cases"][0]
 
     assert row["clearance_minutes"]["p90"] == pytest.approx(21.5)
     assert row["shares"]["not_warned"] == pytest.approx(0.12)
@@ -283,37 +305,70 @@ def test_ensemble_report_publishes_the_replay_values_not_saved_stats(tmp_path):
 
 
 def test_ensemble_report_requires_a_passing_audit_of_the_same_run(tmp_path):
-    baseline = _write_case(tmp_path, "baseline", cohort="f" * 64)
+    run_dirs = _write_ensemble(tmp_path, cohort="f" * 64)
+    audits = [_passing_audit(path) for path in run_dirs]
     with pytest.raises(ValueError, match="one replay audit per run"):
-        build_sensitivity_ensemble([baseline], [])
+        _ensemble(run_dirs, audits[:-1])
 
-    failed = {**_passing_audit(baseline), "status": "FAIL"}
     with pytest.raises(ValueError, match="no passing replay audit"):
-        build_sensitivity_ensemble([baseline], [failed])
+        _ensemble(run_dirs, [{**audits[0], "status": "FAIL"}, *audits[1:]])
 
-    other_run = {**_passing_audit(baseline), "run_id": "someone-else"}
     with pytest.raises(ValueError, match="audit is for another run"):
-        build_sensitivity_ensemble([baseline], [other_run])
+        _ensemble(run_dirs, [{**audits[0], "run_id": "someone-else"}, *audits[1:]])
 
 
-def test_ensemble_report_rejects_a_mismatched_cohort_or_two_factors(tmp_path):
-    cohort = "b" * 64
-    baseline = _write_case(tmp_path, "baseline", cohort=cohort)
-    other = _write_case(tmp_path, "compliance-0.60", cohort="c" * 64, compliance=0.6)
-    with pytest.raises(ValueError, match="cohort id"):
-        _ensemble(baseline, other)
+@pytest.mark.parametrize(("values", "message"), [
+    ({"cohort": "c" * 64}, "cohort id does not match"),
+    ({"commit": "d" * 40}, "mixes code identities"),
+    ({"git_status": "dirty"}, "clean checkout"),
+    ({"seed": 7}, "mixes seeds or max_agents"),
+    ({"max_agents": 5}, "mixes seeds or max_agents"),
+    ({"seed": True}, "seed or max_agents is missing"),
+])
+def test_ensemble_report_rejects_a_mixed_identity(tmp_path, values, message):
+    run_dirs = _write_ensemble(tmp_path, cohort="b" * 64, overrides={"compliance-0.60": values})
+    with pytest.raises(ValueError, match=message):
+        _ensemble(run_dirs)
 
-    mixed = _write_case(
-        tmp_path / "mixed", "flood-high", cohort=cohort, severity="high", state="high", compliance=0.6,
-    )
-    with pytest.raises(ValueError, match="more than one factor"):
-        _ensemble(baseline, mixed)
+
+@pytest.mark.parametrize(("case_id", "values", "field"), [
+    pytest.param("compliance-0.60", {"compliance": 0.601}, "compliance", id="off-grid-compliance"),
+    pytest.param("delay-mean-1800", {"delay": 1800.4}, "preparation delay", id="off-grid-delay"),
+    pytest.param("warning-reach-0.70", {"warning": 0.701}, "warning reach", id="off-grid-warning"),
+    # 0.90 is an approved compliance level, but not the baseline's.
+    pytest.param("baseline", {"compliance": 0.9}, "compliance", id="wrong-baseline"),
+    pytest.param("flood-dry", {"state": "moderate"}, "flood", id="wrong-flood"),
+    pytest.param("flood-high", {"compliance": 0.6}, "compliance", id="two-factors"),
+])
+def test_ensemble_report_rejects_a_case_off_its_definition(tmp_path, case_id, values, field):
+    run_dirs = _write_ensemble(tmp_path, cohort="1" * 64, overrides={case_id: values})
+    with pytest.raises(ValueError, match=f"{re.escape(case_id)} differs from its approved definition: {field}$"):
+        _ensemble(run_dirs)
+
+
+def test_ensemble_report_rejects_a_missing_case(tmp_path):
+    run_dirs = _write_ensemble(tmp_path, cohort="3" * 64)
+    with pytest.raises(ValueError, match="missing approved cases: delay-mean-1800$"):
+        _ensemble(run_dirs[:-1])
+    with pytest.raises(ValueError, match="missing approved cases: flood-dry, .*, delay-mean-1800$"):
+        _ensemble(run_dirs[:1])
+
+
+@pytest.mark.parametrize(("case_id", "values"), [
+    ("compliance-0.50", {"compliance": 0.5}),
+    ("delay-mean-900", {"delay": 900.4}),
+])
+def test_ensemble_report_rejects_an_extra_case(tmp_path, case_id, values):
+    run_dirs = _write_ensemble(tmp_path, cohort="4" * 64)
+    extra = _write_case(tmp_path, case_id, cohort="4" * 64, **values)
+    with pytest.raises(ValueError, match=f"unapproved cases: {case_id}$"):
+        _ensemble([*run_dirs, extra])
 
 
 def test_ensemble_report_rejects_a_citywide_area(tmp_path):
-    run_dir = _write_case(tmp_path, "baseline", cohort="d" * 64, aoi="bangkok-bma")
+    run_dirs = _write_ensemble(tmp_path, cohort="d" * 64, aoi="bangkok-bma")
     with pytest.raises(ValueError, match="not a Bangkok result"):
-        _ensemble(run_dir)
+        _ensemble(run_dirs)
 
 
 def _stub_ensemble_runs(monkeypatch, *, audit_fails=None, invalid=None):
@@ -339,14 +394,15 @@ def _stub_ensemble_runs(monkeypatch, *, audit_fails=None, invalid=None):
                         "detail": "saved terminal record mismatch"}],
         }
 
-    def fake_build(run_dirs, audits):
-        built.update(run_dirs=run_dirs, audits=audits)
+    def fake_build(run_dirs, audits, *, expected_cases):
+        built.update(run_dirs=run_dirs, audits=audits, expected_cases=expected_cases)
         return {"status": "demonstration", "aoi_id": "khlong-san-district", "cases": []}
 
     monkeypatch.setattr(runner, "execute_run", fake_run)
     monkeypatch.setattr(runner.replay_audit, "load_audit_bundle", lambda path: Path(path).name)
     monkeypatch.setattr(runner.replay_audit, "final_audit_report", fake_audit)
     monkeypatch.setattr(runner, "build_sensitivity_ensemble", fake_build)
+    runner.RUNS_DIR.mkdir(parents=True, exist_ok=True)
     return calls, built
 
 
@@ -364,9 +420,37 @@ def test_ensemble_reuses_the_baseline_cohort_and_hands_over_every_audit(
     assert {call["max_agents"] for call in calls} == {4}
     assert [audit["run_id"] for audit in built["audits"]] == [f"run-{case}" for case in CASE_IDS]
     assert [Path(path).name for path in built["run_dirs"]] == list(CASE_IDS)
+    assert built["expected_cases"] == ensemble_cases(_table())
     assert summary["run_ids"] == [f"run-{case}" for case in CASE_IDS]
-    assert Path(summary["report_path"]) == pilot_inputs / "khlong-san-district-sensitivity-ensemble.json"
+    assert Path(summary["report_path"]) == pilot_inputs / "khlong-san-district-sensitivity-ensemble-run-baseline.json"
     assert read_json(summary["report_path"])["status"] == "demonstration"
+    assert [path.name for path in pilot_inputs.glob("*sensitivity-ensemble*")] == [Path(summary["report_path"]).name]
+
+
+def test_ensemble_refuses_an_existing_report_and_leaves_it_untouched(pilot_inputs, monkeypatch):  # noqa: F811
+    _stub_ensemble_runs(monkeypatch)
+    existing = pilot_inputs / "khlong-san-district-sensitivity-ensemble-run-baseline.json"
+    existing.write_text("earlier report", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="report already exists"):
+        runner.execute_sensitivity_ensemble(pilot_id="khlong-san-district")
+
+    assert existing.read_text(encoding="utf-8") == "earlier report"
+    assert [path.name for path in pilot_inputs.glob("*sensitivity-ensemble*")] == [existing.name]
+
+
+def test_ensemble_write_failure_leaves_no_partial_report(pilot_inputs, monkeypatch):  # noqa: F811
+    _stub_ensemble_runs(monkeypatch)
+
+    def failing_write(path, payload):
+        Path(path).write_text('{"status": "demo', encoding="utf-8")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runner, "write_json", failing_write)
+    with pytest.raises(OSError, match="disk full"):
+        runner.execute_sensitivity_ensemble(pilot_id="khlong-san-district")
+
+    assert not list(pilot_inputs.glob("*sensitivity-ensemble*"))
 
 
 def test_ensemble_stops_at_a_failed_replay_audit_before_any_report(
@@ -379,7 +463,7 @@ def test_ensemble_stops_at_a_failed_replay_audit_before_any_report(
 
     assert calls[-1]["sensitivity_case"] == "compliance-0.60"
     assert not built
-    assert not (pilot_inputs / "khlong-san-district-sensitivity-ensemble.json").exists()
+    assert not list(pilot_inputs.glob("*sensitivity-ensemble*"))
 
 
 def test_ensemble_stops_at_a_failed_validation_before_any_report(
@@ -392,7 +476,7 @@ def test_ensemble_stops_at_a_failed_validation_before_any_report(
 
     assert calls[-1]["sensitivity_case"] == "flood-low"
     assert not built
-    assert not (pilot_inputs / "khlong-san-district-sensitivity-ensemble.json").exists()
+    assert not list(pilot_inputs.glob("*sensitivity-ensemble*"))
 
 
 def test_cli_sensitivity_ensemble_prints_the_report_summary(monkeypatch, capsys):

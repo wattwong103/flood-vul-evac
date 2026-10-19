@@ -19,12 +19,6 @@ APPROVED_WARNING_REACH = (0.7, 0.92, 1.0)
 APPROVED_DELAY_MEAN_S = (300.0, 900.0, 1800.0)
 APPROVED_DELAY_SD_S = 600.0
 APPROVED_THRESHOLD = "bkk-demo-thresholds-v0.1"
-COMPARISON_FACTORS = (
-    "flood",
-    "compliance",
-    "warning_reach",
-    "preparation_delay_mean_s",
-)
 ENSEMBLE_DEPARTURE_RNG = "predraw-v1"
 LIMITATIONS = (
     "Departure priors are uncalibrated scenario bounds.",
@@ -35,6 +29,7 @@ LIMITATIONS = (
     "never with ordinary or release runs, which use sequential-v0 draws.",
 )
 _CITYWIDE_AOI = {"bangkok", "bangkok-bma"}
+_CODE_IDENTITY_KEYS = ("git_commit", "git_tree", "source_sha256")
 _LEVEL_TOLERANCE = 1e-9
 
 
@@ -92,7 +87,7 @@ def _level_text(factor: str, level: str) -> str:
     if factor == "warning_reach":
         return f"warning-reach-{float(level):.2f}"
     if factor == "preparation_delay_mean_s":
-        return f"delay-mean-{int(float(level))}"
+        return f"delay-mean-{round(float(level))}"
     raise ValueError(f"unknown sensitivity factor {factor!r}")
 
 
@@ -268,7 +263,7 @@ def resolve_sensitivity_case(
     if not _matches(warning_value, table.baseline.warning_reach):
         changes.append(("warning_reach", f"{warning_value:.2f}"))
     if not _matches(delay_value, table.baseline.preparation_delay_mean_s):
-        changes.append(("preparation_delay_mean_s", str(int(delay_value))))
+        changes.append(("preparation_delay_mean_s", str(round(delay_value))))
     if len(changes) > 1:
         raise ValueError("sensitivity case changes more than one factor")
     factor, level = (None, "baseline") if not changes else changes[0]
@@ -404,12 +399,6 @@ def require_baseline_matches_scenario(scenario: dict[str, Any], table: Sensitivi
         )
 
 
-def _same(left: Any, right: Any) -> bool:
-    if isinstance(left, str) or isinstance(right, str):
-        return left == right
-    return _matches(float(left), float(right))
-
-
 def _flood_level(manifest: dict[str, Any]) -> str:
     active = manifest.get("active_scenario")
     if not isinstance(active, dict):
@@ -481,11 +470,31 @@ def _audited_outcomes(
     return parts
 
 
+def _require_case_definition(case: SensitivityCase, parameters: dict[str, Any]) -> None:
+    """Reject a run whose saved parameters are not exactly its approved case."""
+    checks = (
+        (parameters["flood"] == case.active_state, "flood"),
+        (_matches(parameters["compliance"], case.compliance), "compliance"),
+        (_matches(parameters["warning_reach"], case.warning_reach), "warning reach"),
+        (_matches(parameters["preparation_delay_mean_s"], case.preparation_delay_mean_s), "preparation delay"),
+        (_matches(parameters["preparation_delay_sd_s"], case.preparation_delay_sd_s), "preparation delay sd"),
+        (parameters["threshold"] == case.threshold_set_version, "threshold set"),
+    )
+    mismatched = [name for passed, name in checks if not passed]
+    if mismatched:
+        names = ", ".join(mismatched)
+        raise ValueError(f"sensitivity case {case.case_id} differs from its approved definition: {names}")
+
+
 def build_sensitivity_ensemble(
-    run_dirs: list[Path], audits: list[dict[str, Any]],
+    run_dirs: list[Path],
+    audits: list[dict[str, Any]],
+    *,
+    expected_cases: tuple[SensitivityCase, ...],
 ) -> dict[str, Any]:
     """Publish one demonstration sensitivity table from replay-audited runs.
 
+    The runs must be exactly ``expected_cases``, each saved with its canonical parameters.
     Shares and clearance come from each run's independent replay, so only the
     identity, cohort and denominator fields are read from the saved stats.
     """
@@ -493,6 +502,7 @@ def build_sensitivity_ensemble(
         raise ValueError("sensitivity ensemble has no runs")
     if len(audits) != len(run_dirs):
         raise ValueError("sensitivity ensemble needs one replay audit per run")
+    expected = {case.case_id: case for case in expected_cases}
     loaded = []
     for run_dir, audit in zip(run_dirs, audits):
         manifest = _read_audited_json(Path(run_dir) / "manifest.json", audit)
@@ -501,6 +511,8 @@ def build_sensitivity_ensemble(
 
     aoi_ids = set()
     cohort_ids = set()
+    code_ids = set()
+    settings = set()
     rows = []
     for run_dir, manifest, stats, audit in loaded:
         geography = manifest.get("geography") if isinstance(manifest.get("geography"), dict) else {}
@@ -518,6 +530,14 @@ def build_sensitivity_ensemble(
         if not isinstance(cohort_id, str) or len(cohort_id) != 64:
             raise ValueError("sensitivity ensemble cohort id is missing")
         cohort_ids.add(cohort_id)
+        code = manifest.get("code_identity") if isinstance(manifest.get("code_identity"), dict) else {}
+        if code.get("git_status") != "clean":
+            raise ValueError("sensitivity ensemble needs every run from a clean checkout")
+        code_ids.add(tuple(code.get(key) for key in _CODE_IDENTITY_KEYS))
+        setting = (identity.get("seed"), identity.get("max_agents"))
+        if any(type(value) is not int for value in setting):
+            raise ValueError("sensitivity ensemble seed or max_agents is missing")
+        settings.add(setting)
         active = manifest.get("active_scenario") if isinstance(manifest.get("active_scenario"), dict) else {}
         case_id = active.get("case_id")
         if not isinstance(case_id, str) or not case_id:
@@ -581,45 +601,30 @@ def build_sensitivity_ensemble(
         raise ValueError("sensitivity ensemble mixes areas of interest")
     if len(cohort_ids) != 1:
         raise ValueError("sensitivity ensemble cohort id does not match")
+    if len(code_ids) != 1:
+        raise ValueError("sensitivity ensemble mixes code identities")
+    if len(settings) != 1:
+        raise ValueError("sensitivity ensemble mixes seeds or max_agents")
+    seed, max_agents = next(iter(settings))
     case_ids = [row["case_id"] for row in rows]
     if len(case_ids) != len(set(case_ids)):
         raise ValueError("duplicate sensitivity case")
-    baseline_rows = [row for row in rows if row["case_id"] == "baseline"]
-    if len(baseline_rows) != 1:
-        raise ValueError("sensitivity ensemble baseline is missing")
-    baseline = baseline_rows[0]
+    unapproved = [case_id for case_id in case_ids if case_id not in expected]
+    if unapproved:
+        raise ValueError("sensitivity ensemble has unapproved cases: " + ", ".join(unapproved))
+    missing = [case_id for case_id in expected if case_id not in case_ids]
+    if missing:
+        raise ValueError("sensitivity ensemble is missing approved cases: " + ", ".join(missing))
     published_rows = []
     for row in rows:
-        changes = [
-            factor for factor in COMPARISON_FACTORS
-            if not _same(row["parameters"][factor], baseline["parameters"][factor])
-        ]
-        if (
-            not _same(row["parameters"]["preparation_delay_sd_s"], baseline["parameters"]["preparation_delay_sd_s"])
-            or row["parameters"]["threshold"] != baseline["parameters"]["threshold"]
-        ):
-            raise ValueError("sensitivity case changes more than one factor")
-        if len(changes) > 1:
-            raise ValueError("sensitivity case changes more than one factor")
-        if not changes:
-            if row["case_id"] != "baseline":
-                raise ValueError("sensitivity case id does not match its factor")
-            factor, level = None, "baseline"
-        else:
-            factor = changes[0]
-            level = str(row["parameters"][factor])
-            if factor in {"compliance", "warning_reach"}:
-                level = f"{float(level):.2f}"
-            elif factor == "preparation_delay_mean_s":
-                level = str(int(float(level)))
-            if row["case_id"] != _case_id(factor, level):
-                raise ValueError("sensitivity case id does not match its factor")
+        case = expected[row["case_id"]]
+        _require_case_definition(case, row["parameters"])
         total = row["sample_denominator"]["weight"]
         published_rows.append({
             "case_id": row["case_id"],
             "run_id": row["run_id"],
-            "factor": factor,
-            "level": level if factor != "flood" else row["parameters"]["flood"],
+            "factor": case.factor,
+            "level": case.level,
             "cohort_id": row["cohort_id"],
             "sample_denominator": row["sample_denominator"],
             "shares": {
@@ -644,6 +649,9 @@ def build_sensitivity_ensemble(
         "departure_rng": ENSEMBLE_DEPARTURE_RNG,
         "aoi_id": aoi_id,
         "cohort_id": next(iter(cohort_ids)),
+        "code_identity": dict(zip(_CODE_IDENTITY_KEYS, next(iter(code_ids)))),
+        "seed": seed,
+        "max_agents": max_agents,
         "citywide": False,
         "limitations": list(LIMITATIONS),
         "cases": published_rows,

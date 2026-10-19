@@ -14,7 +14,9 @@ The run state machine is:
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -1080,6 +1082,19 @@ def _build_stats(
     }
 
 
+def _publish_new_json(target: Path, payload: Any) -> None:
+    """Write beside ``target``, then hard-link it into place; never overwrite a report."""
+    if target.exists():
+        raise ValueError(f"sensitivity ensemble report already exists: {target.name}")
+    scratch = target.with_name(f".{target.name}.partial")
+    try:
+        write_json(scratch, payload)
+        os.link(scratch, target)  # atomic, and refuses a target another writer installed
+    finally:
+        with contextlib.suppress(OSError):  # never mask the real error with a cleanup one
+            scratch.unlink()
+
+
 def execute_sensitivity_ensemble(
     *,
     pilot_id: str,
@@ -1114,9 +1129,9 @@ def execute_sensitivity_ensemble(
             baseline_id = result["run_id"]
         results.append(result)
         audits.append(audit)
-    report = build_sensitivity_ensemble([Path(item["run_dir"]) for item in results], audits)
-    destination = RUNS_DIR / f"{pilot_id}-sensitivity-ensemble.json"
-    write_json(destination, report)
+    report = build_sensitivity_ensemble([Path(item["run_dir"]) for item in results], audits, expected_cases=cases)
+    destination = RUNS_DIR / f"{pilot_id}-sensitivity-ensemble-{baseline_id}.json"
+    _publish_new_json(destination, report)
     return {
         "report_path": str(destination),
         "run_ids": [item["run_id"] for item in results],
