@@ -246,6 +246,24 @@
       "notes": "Landsat 5/7/8 derived water/non-water classification per year. Measures EXTENT, not depth, duration or direction. An annual composite under-detects short-lived inundation, so each year is a lower bound; 2011 is known to be poorly captured. A year cannot resolve within-year timing, so it cannot validate a 4-hour evacuation scenario directly, but it can validate spatial extent."
     },
     {
+      "source_id": "jrc-global-surface-water-max-extent-v1.4",
+      "agency": "European Commission, Joint Research Centre (Copernicus Programme)",
+      "dataset": "Global Surface Water v1.4 Maximum Water Extent, 1984-2021",
+      "model_role": "Support mask only: separates yearly-classification code 0 into never-detected-as-water and unobserved; not a hazard or flood layer",
+      "resource_url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GSWE/Aggregated/LATEST/extent/tiles/",
+      "format": "GeoTIFF, 10 degree tiles named extent-<lat_offset>-<lon_offset>.tif, same 0.00025 degree grid as the yearly tiles",
+      "spatial_resolution": "About 30 m",
+      "temporal_resolution": "Single aggregate, 1984-2021",
+      "authentication": "None; public JEODPP open-data mirror",
+      "licence": "CC BY 4.0",
+      "licence_url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GSWE/Aggregated/copyright.txt",
+      "attribution": "EC JRC/Google, Global Surface Water (Pekel et al. 2016)",
+      "status": "approved",
+      "reviewed_at": "2026-10-20",
+      "used_in_runs": false,
+      "notes": "Encoding per JRC Data Users Guide (2021) p12, which describes the product as all locations ever detected as water over 1984-2021: 0 = Not water, 1 = Water detected, 255 = No data. The Aggregated directory's copyright.txt grants CC BY 4.0 for this resource. Registered for BKK-054 to test whether yearly code 0 includes never-water pixels; no pipeline stage reads it yet."
+    },
+    {
       "source_id": "ghsl-jrc-ghspop-ghsbuilts",
       "agency": "European Commission, Joint Research Centre / EC Copernicus",
       "dataset": "Global Human Settlement Layer GHS-POP and GHS-BUILT-S",

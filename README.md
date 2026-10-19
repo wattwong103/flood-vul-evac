@@ -30,7 +30,7 @@ Bangkok, built on the PFLOW people–activities–trips–trajectories contract.
 | API | `api/` | FastAPI service over the immutable run artefacts |
 | Site | `site/` | React + MapLibre frontend, reads only from the API |
 | Contracts | `schemas/`, `docs/RUN_ARTIFACT_CONTRACT.md` | Run manifest schema and the run/API/website contract |
-| Registry | `data/source-registry.json` | Licence-aware source gate: 22 resources, 3 allowed status values |
+| Registry | `data/source-registry.json` | Licence-aware source gate: 23 resources, 3 allowed status values |
 | Config | `config/` | Resolved pilot area, population and scenario configuration |
 
 ## The pilot
