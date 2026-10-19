@@ -1,11 +1,18 @@
 # BKK/FLOW — unfinished work
 
-**Live list:** 11 October 2026
+**Live list:** 11 October 2026; updated 20 October 2026 (paper scope,
+BKK-016a, BKK-052, BKK-053)
 
 **Baseline:** `main` at merge commit `959d6f9` (PR #77)
 
 **Evidence boundary:** the admitted four-area release remains demonstration
 evidence; the city layer has no current result.
+
+**Paper scope (North, 20 October 2026):** a bounded methods/demonstration paper
+on the four-area release: one-at-a-time sensitivity (BKK-016a), related work
+(BKK-052) and the observed-extent check (BKK-053). The citywide P0 gates
+(BKK-034 to BKK-040) are stated future work in the manuscript, not submission
+blockers. They still gate any citywide claim.
 
 This is the forward-looking task list. Completed release work is intentionally
 absent. Historical detail stays in
@@ -22,6 +29,8 @@ release identities stay in
   it does not currently hold.
 - `BLOCKED` means another numbered task must pass first.
 - `PARKED` means real work, but not part of the next pass.
+- `IN PROGRESS` means a named owner has open work or pull requests against the
+  task.
 
 Each implementation task gets its own branch, tests and pull request. A task is
 closed only when every acceptance criterion is evidenced. New data and run
@@ -55,7 +64,10 @@ holder before work assigned to that role starts.
 | P2 | BKK-048 — profile frontend performance concerns | PARKED | Implementer | — |
 | P2 | BKK-049 — harden named-pilot identity edge cases | PARKED | Implementer | — |
 | P2 | BKK-050 — complete paper metadata and ODbL statement | READY | Paper owner + authors | — |
-| P2 | BKK-051 — prepare a submission package | BLOCKED | Paper owner | BKK-033, BKK-050 |
+| P2 | BKK-016a — four-area one-at-a-time sensitivity ensemble | IN PROGRESS | Implementer (sensitivity session; PR #79) | — |
+| P2 | BKK-051 — prepare a submission package | BLOCKED | Paper owner | BKK-033, BKK-050, BKK-016a |
+| P2 | BKK-052 — related work and novelty defence | IN PROGRESS | Paper owner (related-work session) | — |
+| P2 | BKK-053 — observed-extent plausibility check | IN PROGRESS | Paper owner (design note), then North (metric) | — |
 
 ## P0 — evidence needed before stronger scientific or citywide claims
 
@@ -270,15 +282,54 @@ name list in
 - Add a manuscript-specific ODbL attribution/produced-work statement consistent
   with the actual OSM-derived artefacts and the target journal's data policy.
 
+### BKK-016a — Run the four-area one-at-a-time sensitivity ensemble
+
+In progress since 20 October 2026 as PR #79, kept as one pull request by North's
+decision. Size concern: about 1,200 changed lines against the ~300-line
+guideline. This is the one-at-a-time part of the MEDIUM BKK-016 item in
+[`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
+
+- Record a case table of approved levels: each case moves one factor (flood
+  severity, compliance, warning reach or mean preparation delay) away from the
+  baseline.
+- Run every case with predrawn departure draws (`predraw-v1`).
+- Publish the ensemble report only after the saved-run replay audit passes for
+  every case.
+- Run the four admitted pilots from merged `main`; outputs stay outside Git.
+- This is not calibration and not an interaction study; both remain BKK-038.
+  Report the results as scenario sensitivity for the named areas only.
+
 ### BKK-051 — Prepare the paper submission package
 
-- First decide whether the paper remains a bounded demonstration/methodology
-  paper or waits for the P0 scientific gates; state that scope in the manuscript.
+- Scope decided 20 October 2026 (North): a bounded methods/demonstration paper
+  built on BKK-016a, BKK-052 and BKK-053. State in the manuscript that the
+  citywide P0 gates (BKK-034 to BKK-040) are future work.
 - Rebuild and inspect the final PDF, verify citations and claims, and prepare the
   journal-specific source, figures, supplement, data/code availability statement
   and cover letter.
 - Point to the durable release identifier and exact code/release boundary; do
   not imply citywide, calibrated or operational validity.
+
+### BKK-052 — Write the related work and novelty defence
+
+In progress since 20 October 2026. Needs no repository code.
+
+- Drafts go to `Research/flood-landuse/papers/bkkflow/drafts/` under the
+  Dropbox root, outside this repository.
+- Close it under the workspace documents rule: claims traced, citations
+  verified, novelty checked against prior art, fresh-context review.
+
+### BKK-053 — Check modelled flood extent against observed extent
+
+In progress since 20 October 2026. A design note is being drafted at
+`Research/flood-landuse/papers/bkkflow/analysis/observed-extent-check-design.md`
+under the Dropbox root.
+
+- Decision required: North picks the comparison metric from the design note.
+  The implementation task is opened only after that choice.
+- Extent-only plausibility check. Observed extent never feeds the depth surface
+  and never tunes the flood model.
+- It is not held-out hydraulic validation, which remains BKK-036B and BKK-036C.
 
 ## Invariants for every next pass
 
@@ -291,5 +342,5 @@ name list in
   in each pull request and handoff.
 
 **DONE_WITH_CONCERNS** — the merged release is closed; every known unfinished
-item is either actionable, decision-gated, externally gated or explicitly
-parked above.
+item is either actionable, in progress, decision-gated, externally gated or
+explicitly parked above.
