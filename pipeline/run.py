@@ -17,6 +17,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -191,35 +192,54 @@ def cmd_sensitivity_ensemble(args: argparse.Namespace) -> int:
     return 0
 
 
-def _case_id(run_dir: Path) -> str | None:
-    """The sensitivity case a run records, or ``None`` when it records none.
-
-    An unreadable manifest records none too, so ``None`` means "not a known
-    case", not "certainly ordinary".
-    """
+def _read_manifest(run_dir: Path) -> dict[str, Any] | None:
+    """A run's manifest, or ``None`` when it is missing, undecodable or not an object."""
     try:
         manifest = read_json(run_dir / "manifest.json")
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
-    active = manifest.get("active_scenario") if isinstance(manifest, dict) else None
+    return manifest if isinstance(manifest, dict) else None
+
+
+def _case_id(manifest: dict[str, Any]) -> str | None:
+    """The sensitivity case a readable manifest records, or ``None`` when it records none."""
+    active = manifest.get("active_scenario")
     case_id = active.get("case_id") if isinstance(active, dict) else None
     return case_id if isinstance(case_id, str) and case_id else None
 
 
 def _default_validate_run() -> tuple[str, str] | None:
-    """``(run_id, why)``: the newest run recording no case, else the newest case run."""
+    """``(run_id, why)``, newest first within each tier.
+
+    A run known to be ordinary wins; then a run whose manifest cannot be read,
+    since it may or may not be a case; then a sensitivity case run.
+    """
     runs = sorted(
         RUNS_DIR.glob("*/validation.json"),
         key=lambda path: (path.stat().st_mtime, path.parent.name),
         reverse=True,
     )
-    if not runs:
-        return None
-    newest = [path.parent for path in runs]
-    for run in newest:
-        if _case_id(run) is None:
+    unreadable: Path | None = None
+    case_run: tuple[Path, str] | None = None
+    for run in (path.parent for path in runs):
+        manifest = _read_manifest(run)
+        if manifest is None:
+            if unreadable is None:
+                unreadable = run
+            continue
+        case_id = _case_id(manifest)
+        if case_id is None:
             return run.name, "newest run with no sensitivity case recorded"
-    return newest[0].name, f"sensitivity case {_case_id(newest[0])!r}; no ordinary run found"
+        if case_run is None:
+            case_run = (run, case_id)
+    if unreadable is not None:
+        return unreadable.name, (
+            "manifest unreadable, so its sensitivity case is unknown; no ordinary run found"
+        )
+    if case_run is not None:
+        run, case_id = case_run
+        return run.name, f"sensitivity case {case_id!r}; no ordinary run found"
+    return None
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
