@@ -5,7 +5,7 @@
     python pipeline/run.py run         # execute one full run
     python pipeline/run.py run --baseline   # dry run for comparison
     python pipeline/run.py run --pilot sai-mai-district
-    python pipeline/run.py validate    # re-validate the newest run
+    python pipeline/run.py validate    # re-validate the newest ordinary run
 
 Everything downloaded or derived is written under data/ and runs/, both of
 which are git-ignored. Nothing in this tool is an emergency service.
@@ -191,14 +191,46 @@ def cmd_sensitivity_ensemble(args: argparse.Namespace) -> int:
     return 0
 
 
+def _case_id(run_dir: Path) -> str | None:
+    """The sensitivity case a run records, or ``None`` when it records none.
+
+    An unreadable manifest records none too, so ``None`` means "not a known
+    case", not "certainly ordinary".
+    """
+    try:
+        manifest = read_json(run_dir / "manifest.json")
+    except (OSError, ValueError):
+        return None
+    active = manifest.get("active_scenario") if isinstance(manifest, dict) else None
+    case_id = active.get("case_id") if isinstance(active, dict) else None
+    return case_id if isinstance(case_id, str) and case_id else None
+
+
+def _default_validate_run() -> tuple[str, str] | None:
+    """``(run_id, why)``: the newest run recording no case, else the newest case run."""
+    runs = sorted(
+        RUNS_DIR.glob("*/validation.json"),
+        key=lambda path: (path.stat().st_mtime, path.parent.name),
+        reverse=True,
+    )
+    if not runs:
+        return None
+    newest = [path.parent for path in runs]
+    for run in newest:
+        if _case_id(run) is None:
+            return run.name, "newest run with no sensitivity case recorded"
+    return newest[0].name, f"sensitivity case {_case_id(newest[0])!r}; no ordinary run found"
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     run_id = args.run_id
     if not run_id:
-        runs = sorted(RUNS_DIR.glob("*/validation.json"), key=lambda p: p.stat().st_mtime)
-        if not runs:
+        picked = _default_validate_run()
+        if picked is None:
             print("no runs found", file=sys.stderr)
             return 1
-        run_id = runs[-1].parent.name
+        run_id, why = picked
+        print(f"validating run {run_id} ({why})", file=sys.stderr)
     payload = read_json(RUNS_DIR / run_id / "validation.json")
     print(json.dumps(payload, indent=2)[:4000])
     return 0 if payload["passed"] else 2

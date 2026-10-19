@@ -28,6 +28,7 @@ import { ObservedAssets } from "@/screens/ObservedAssets";
 import { RunProvider, useRuns, API_BASE_URL } from "@/lib/run-context";
 import { resolveValidationStatus } from "@/components/primitives";
 import { formatText } from "@/lib/format";
+import { caseRunLabel } from "@/lib/runs";
 import "./App.css";
 
 const MOTION_KEY = "bkkflow.reducedMotion";
@@ -205,9 +206,11 @@ function Shell() {
 /** Live reachability of the API, so a blank screen is never ambiguous. */
 function ApiStatus() {
   const { runs, stats, activeRunId } = useRuns();
+  const activeRun = runs.data?.find((run) => run?.run_id === activeRunId);
   const status = resolveValidationStatus(
-    stats.data?.validation_status ?? runs.data?.[0]?.validation_status ?? null,
+    stats.data?.validation_status ?? activeRun?.validation_status ?? null,
   );
+  const caseLabel = caseRunLabel(activeRun);
 
   return (
     <span className="api-status">
@@ -224,7 +227,7 @@ function ApiStatus() {
             : runs.phase === "missing"
               ? "no run yet"
               : activeRunId
-                ? `run ${activeRunId.slice(0, 8)} · ${formatText(status)}`
+                ? `run ${activeRunId.slice(0, 8)} · ${formatText(status)}${caseLabel ? ` · ${caseLabel}` : ""}`
                 : "no completed run"}
       </span>
     </span>

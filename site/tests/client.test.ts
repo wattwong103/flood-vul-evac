@@ -12,6 +12,57 @@ import { geoJsonBounds } from "../src/lib/map-bounds.ts";
 import { updateMapSources } from "../src/lib/map-sources.ts";
 import { isRefugeRecord } from "../src/lib/map-refuges.ts";
 import { validationChecks } from "../src/lib/validation.ts";
+import {
+  caseRunLabel,
+  defaultRunId,
+  resolveActiveRunId,
+  runOptionLabel,
+} from "../src/lib/runs.ts";
+
+// Case runs get uuid run ids like any other run; only the label names the case.
+const caseRun = {
+  run_id: "4fa6ff39-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+  created_at: "2026-06-01T00:00:00+00:00",
+  active_scenario: { state: "moderate", case_id: "delay-mean-1800" },
+};
+const ordinaryRun = {
+  run_id: "d3dd91f1-6a7b-4c8d-9e0f-1a2b3c4d5e6f",
+  created_at: "2026-01-01T00:00:00+00:00",
+  active_scenario: { state: "dry", case_id: null },
+};
+const legacyRun = { run_id: "legacy", created_at: "2025-01-01T00:00:00+00:00" };
+
+test("the default run skips sensitivity cases while an ordinary run exists", () => {
+  assert.equal(defaultRunId([caseRun, ordinaryRun, legacyRun]), ordinaryRun.run_id);
+  assert.equal(defaultRunId([caseRun, legacyRun]), "legacy");
+  assert.equal(defaultRunId([ordinaryRun, caseRun]), ordinaryRun.run_id);
+  assert.equal(defaultRunId([caseRun]), caseRun.run_id);
+  assert.equal(defaultRunId([]), null);
+});
+
+test("an explicit run choice survives; a stale or empty one falls back to the default", () => {
+  const list = [caseRun, ordinaryRun];
+  assert.equal(resolveActiveRunId(list, caseRun.run_id), caseRun.run_id);
+  assert.equal(resolveActiveRunId(list, "no-longer-listed"), ordinaryRun.run_id);
+  assert.equal(resolveActiveRunId(list, null), ordinaryRun.run_id);
+  assert.equal(resolveActiveRunId([], "no-longer-listed"), null);
+});
+
+test("run lists label sensitivity cases and leave ordinary runs as they were", () => {
+  assert.equal(caseRunLabel(caseRun), "sensitivity case delay-mean-1800");
+  assert.equal(caseRunLabel(ordinaryRun), null);
+  assert.equal(caseRunLabel(legacyRun), null);
+  assert.equal(caseRunLabel({ run_id: "odd", active_scenario: { case_id: "" } }), null);
+  assert.equal(
+    runOptionLabel(caseRun),
+    "4fa6ff39 · 2026-06-01 00:00:00Z · sensitivity case delay-mean-1800",
+  );
+  assert.equal(runOptionLabel(ordinaryRun), "d3dd91f1 · 2026-01-01 00:00:00Z");
+  assert.equal(
+    runOptionLabel({ ...legacyRun, status: "completed" }),
+    "legacy · 2025-01-01 00:00:00Z · completed",
+  );
+});
 
 test("validation reads the API envelope and preserves zero-valued observations", () => {
   const checks = [{ check_id: "persons.unique_ids", description: "Synthetic IDs", passed: true, observed: 0, threshold: "0 duplicates", detail: null }];

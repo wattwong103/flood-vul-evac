@@ -278,6 +278,8 @@ export type RunSummary = {
   stage?: string | null;
   status?: StageStatus | null;
   progress?: number | null;
+  /** Null for runs older than the field; `case_id` is null for ordinary runs. */
+  active_scenario?: { state?: string | null; case_id?: string | null } | null;
   [key: string]: unknown;
 };
 
