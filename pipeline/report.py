@@ -16,7 +16,6 @@ import re
 import shutil
 import sys
 import tempfile
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,7 +30,7 @@ import pandas as pd  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bkkflow import replay_audit  # noqa: E402
-from bkkflow.util import RUNS_DIR, ensure_dir  # noqa: E402
+from bkkflow.util import RUNS_DIR, ensure_dir, retry_while_held  # noqa: E402
 
 STATUS_COLOUR = {
     "demonstration": "#b45309",
@@ -852,25 +851,10 @@ def _publish_atomic(
     """Rename ``scratch`` onto ``target``, waiting out a transient file handle.
 
     The rename itself stays atomic -- this never copies, moves file by file, or
-    exposes a half-written report. It only re-attempts while something still
-    holds the freshly written directory. Measured on a Dropbox-synced tree: the
-    rename is refused immediately and succeeds after roughly 15 seconds, once the
-    sync client lets go. Both ERROR_ACCESS_DENIED and ERROR_SHARING_VIOLATION
-    surface as ``PermissionError`` on Windows.
+    exposes a half-written report.
     """
-    last: OSError | None = None
-    for attempt in range(attempts):
-        try:
-            scratch.replace(target)
-            return
-        except PermissionError as exc:
-            last = exc
-            if attempt + 1 < attempts:
-                time.sleep(delay_s)
-    raise RuntimeError(
-        f"pair report could not be published after {attempts} attempts; "
-        f"a file handle on {scratch.name} never released: {last}"
-    )
+    retry_while_held(lambda: scratch.replace(target), what="pair report", held=scratch.name,
+                     attempts=attempts, delay_s=delay_s)
 
 
 def publish_pair_report(first_run_id: str, second_run_id: str) -> dict[str, Any]:

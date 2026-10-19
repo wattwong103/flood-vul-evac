@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import networkx as nx
@@ -40,6 +42,8 @@ CASE_IDS = (
     "delay-mean-300",
     "delay-mean-1800",
 )
+RUN_IDS = [f"run-{case}" for case in CASE_IDS]
+RUN_CODE = {"git_commit": "c" * 40, "git_tree": "t" * 40, "source_sha256": "s" * 64}
 
 
 def _table():
@@ -276,6 +280,15 @@ def test_ensemble_report_publishes_demonstration_shares(tmp_path):
     assert "2026-10-11" not in json.dumps(report)
 
 
+def test_ensemble_report_lists_cases_in_approved_order_whatever_the_run_order(tmp_path):
+    run_dirs = _write_ensemble(tmp_path, cohort="a" * 64)
+
+    shuffled = _ensemble([*reversed(run_dirs)])
+
+    assert shuffled == _ensemble(run_dirs)
+    assert [row["case_id"] for row in shuffled["cases"]] == list(CASE_IDS)
+
+
 def test_ensemble_report_rejects_files_changed_after_their_audit(tmp_path):
     run_dirs = _write_ensemble(tmp_path, cohort="9" * 64)
     audits = [_passing_audit(path) for path in run_dirs]
@@ -371,7 +384,7 @@ def test_ensemble_report_rejects_a_citywide_area(tmp_path):
         _ensemble(run_dirs)
 
 
-def _stub_ensemble_runs(monkeypatch, *, audit_fails=None, invalid=None):
+def _stub_ensemble_runs(monkeypatch, *, audit_fails=None, invalid=None, git_status="clean"):
     """Replace the expensive run and replay with recorders; keep the orchestration real."""
     calls: list[dict] = []
     built: dict = {}
@@ -381,27 +394,30 @@ def _stub_ensemble_runs(monkeypatch, *, audit_fails=None, invalid=None):
         case_id = kwargs["sensitivity_case"]
         return {
             "run_id": f"run-{case_id}",
-            "run_dir": str(Path("runs") / case_id),
+            "run_dir": str(runner.RUNS_DIR / f"run-{case_id}"),
             "validation_passed": case_id != invalid,
         }
 
-    def fake_audit(case_id):
-        status = "FAIL" if case_id == audit_fails else "PASS"
+    def fake_audit(run_id):
+        status = "FAIL" if run_id == f"run-{audit_fails}" else "PASS"
         return {
             "status": status,
-            "run_id": f"run-{case_id}",
+            "run_id": run_id,
             "checks": [{"name": "independent_saved_bundle_replay", "status": status,
                         "detail": "saved terminal record mismatch"}],
         }
 
     def fake_build(run_dirs, audits, *, expected_cases):
         built.update(run_dirs=run_dirs, audits=audits, expected_cases=expected_cases)
-        return {"status": "demonstration", "aoi_id": "khlong-san-district", "cases": []}
+        rows = [{"case_id": case.case_id, "run_id": audit["run_id"]} for case, audit in zip(expected_cases, audits)]
+        return {"status": "demonstration", "aoi_id": "khlong-san-district", "code_identity": RUN_CODE, "cases": rows}
 
+    monkeypatch.setattr(runner, "capture_code_identity", lambda: {"git_status": git_status, **RUN_CODE})
     monkeypatch.setattr(runner, "execute_run", fake_run)
     monkeypatch.setattr(runner.replay_audit, "load_audit_bundle", lambda path: Path(path).name)
     monkeypatch.setattr(runner.replay_audit, "final_audit_report", fake_audit)
     monkeypatch.setattr(runner, "build_sensitivity_ensemble", fake_build)
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     runner.RUNS_DIR.mkdir(parents=True, exist_ok=True)
     return calls, built
 
@@ -419,7 +435,7 @@ def test_ensemble_reuses_the_baseline_cohort_and_hands_over_every_audit(
     assert [call["sensitivity_case"] for call in calls if not call["flood_enabled"]] == ["flood-dry"]
     assert {call["max_agents"] for call in calls} == {4}
     assert [audit["run_id"] for audit in built["audits"]] == [f"run-{case}" for case in CASE_IDS]
-    assert [Path(path).name for path in built["run_dirs"]] == list(CASE_IDS)
+    assert [Path(path).name for path in built["run_dirs"]] == RUN_IDS
     assert built["expected_cases"] == ensemble_cases(_table())
     assert summary["run_ids"] == [f"run-{case}" for case in CASE_IDS]
     assert Path(summary["report_path"]) == pilot_inputs / "khlong-san-district-sensitivity-ensemble-run-baseline.json"
@@ -479,6 +495,131 @@ def test_ensemble_stops_at_a_failed_validation_before_any_report(
     assert not list(pilot_inputs.glob("*sensitivity-ensemble*"))
 
 
+@pytest.mark.parametrize("rebuild", [False, True], ids=["run", "rebuild"])
+def test_ensemble_refuses_a_dirty_checkout_before_any_work(pilot_inputs, monkeypatch, rebuild):  # noqa: F811
+    calls, built = _stub_ensemble_runs(monkeypatch, git_status="dirty")
+
+    with pytest.raises(ValueError, match="clean checkout; git status is 'dirty'"):
+        if rebuild:
+            runner.rebuild_sensitivity_ensemble(pilot_id="khlong-san-district", run_ids=RUN_IDS)
+        else:
+            runner.execute_sensitivity_ensemble(pilot_id="khlong-san-district")
+
+    assert not calls
+    assert not built
+
+
+def test_ensemble_report_link_waits_out_a_transient_handle(pilot_inputs, monkeypatch):  # noqa: F811
+    _stub_ensemble_runs(monkeypatch)
+    attempts = []
+    real_link = os.link
+
+    def held_twice(source, target):
+        attempts.append(Path(target).name)
+        if len(attempts) < 3:
+            raise PermissionError(32, "used by another process")
+        real_link(source, target)
+
+    monkeypatch.setattr(os, "link", held_twice)
+    summary = runner.execute_sensitivity_ensemble(pilot_id="khlong-san-district")
+
+    assert attempts == [Path(summary["report_path"]).name] * 3
+    assert read_json(summary["report_path"])["status"] == "demonstration"
+    assert [path.name for path in pilot_inputs.glob("*sensitivity-ensemble*")] == [attempts[0]]
+
+
+def test_failed_report_link_is_recovered_from_the_saved_runs(pilot_inputs, monkeypatch):  # noqa: F811
+    calls, built = _stub_ensemble_runs(monkeypatch)
+    real_link = os.link
+
+    def always_held(source, target):
+        raise PermissionError(32, "used by another process")
+
+    monkeypatch.setattr(os, "link", always_held)
+    with pytest.raises(RuntimeError, match="could not be published after 8 attempts") as failure:
+        runner.execute_sensitivity_ensemble(pilot_id="khlong-san-district")
+
+    assert "--from-runs " + " ".join(RUN_IDS) in "\n".join(failure.value.__notes__)
+    assert not list(pilot_inputs.glob("*sensitivity-ensemble*"))
+
+    monkeypatch.setattr(os, "link", real_link)
+    calls.clear()
+    built.clear()
+    summary = runner.rebuild_sensitivity_ensemble(pilot_id="khlong-san-district", run_ids=RUN_IDS)
+
+    assert not calls, "a rebuild must not re-run any case"
+    assert [audit["run_id"] for audit in built["audits"]] == RUN_IDS
+    assert built["expected_cases"] == ensemble_cases(_table())
+    assert summary["run_ids"] == RUN_IDS
+    assert Path(summary["report_path"]) == pilot_inputs / "khlong-san-district-sensitivity-ensemble-run-baseline.json"
+    assert read_json(summary["report_path"])["status"] == "demonstration"
+
+
+def test_rebuild_reruns_the_replay_audit_and_stops_at_a_failure(pilot_inputs, monkeypatch):  # noqa: F811
+    _, built = _stub_ensemble_runs(monkeypatch, audit_fails="flood-high")
+
+    with pytest.raises(ValueError, match="run-flood-high failed replay audit: saved terminal"):
+        runner.rebuild_sensitivity_ensemble(pilot_id="khlong-san-district", run_ids=RUN_IDS)
+
+    assert not built
+    assert not list(pilot_inputs.glob("*sensitivity-ensemble*"))
+
+
+@pytest.mark.parametrize("run_id", [
+    "../run-baseline", "run-baseline/..", "", str(Path(__file__).resolve().parent / "run-baseline"),
+    pytest.param(r"\\host\share\run-baseline", marks=pytest.mark.skipif(sys.platform != "win32", reason="UNC")),
+])
+def test_rebuild_reads_only_direct_children_of_runs(pilot_inputs, monkeypatch, run_id):  # noqa: F811
+    _, built = _stub_ensemble_runs(monkeypatch)
+
+    with pytest.raises(ValueError, match="direct child of runs/"):
+        runner.rebuild_sensitivity_ensemble(pilot_id="khlong-san-district", run_ids=[run_id, *RUN_IDS[1:]])
+
+    assert not built
+
+
+def test_rebuild_refuses_runs_of_another_pilot(pilot_inputs, monkeypatch):  # noqa: F811
+    _stub_ensemble_runs(monkeypatch)
+    stubbed_build = runner.build_sensitivity_ensemble
+    monkeypatch.setattr(runner, "build_sensitivity_ensemble",
+                        lambda *args, **kwargs: {**stubbed_build(*args, **kwargs), "aoi_id": "sai-mai-district"})
+
+    with pytest.raises(ValueError, match="runs are for 'sai-mai-district', not 'khlong-san-district'"):
+        runner.rebuild_sensitivity_ensemble(pilot_id="khlong-san-district", run_ids=RUN_IDS)
+
+    assert not list(pilot_inputs.glob("*sensitivity-ensemble*"))
+
+
+def test_rebuild_refuses_a_checkout_other_than_the_runs(pilot_inputs, monkeypatch):  # noqa: F811
+    _stub_ensemble_runs(monkeypatch)
+    moved = {"git_status": "clean", **RUN_CODE, "source_sha256": "d" * 64}
+    monkeypatch.setattr(runner, "capture_code_identity", lambda: moved)
+
+    with pytest.raises(ValueError, match=f"checkout that made the runs, git commit {'c' * 40}"):
+        runner.rebuild_sensitivity_ensemble(pilot_id="khlong-san-district", run_ids=RUN_IDS)
+
+    assert not list(pilot_inputs.glob("*sensitivity-ensemble*"))
+
+
+def test_a_report_installed_meanwhile_is_kept_and_gets_no_rebuild_advice(pilot_inputs, monkeypatch):  # noqa: F811
+    _stub_ensemble_runs(monkeypatch)
+    attempts = []
+    real_link = os.link
+
+    def raced(source, target):
+        attempts.append(target)
+        Path(target).write_text("other writer", encoding="utf-8")
+        real_link(source, target)
+
+    monkeypatch.setattr(os, "link", raced)
+    with pytest.raises(FileExistsError) as failure:
+        runner.execute_sensitivity_ensemble(pilot_id="khlong-san-district")
+
+    assert len(attempts) == 1, "an installed report is never retried over"
+    assert not getattr(failure.value, "__notes__", [])
+    assert Path(attempts[0]).read_text(encoding="utf-8") == "other writer"
+
+
 def test_cli_sensitivity_ensemble_prints_the_report_summary(monkeypatch, capsys):
     import run as cli
 
@@ -503,6 +644,31 @@ def test_cli_sensitivity_ensemble_prints_the_report_summary(monkeypatch, capsys)
     printed = json.loads(capsys.readouterr().out)
     assert printed["aoi_id"] == "sai-mai-district"
     assert printed["cases"] == ["baseline"]
+
+
+def test_cli_sensitivity_ensemble_rebuilds_from_saved_runs(monkeypatch, capsys):
+    import run as cli
+
+    received: dict = {}
+
+    def fake_rebuild(**kwargs):
+        received.update(kwargs)
+        return {"report_path": "report.json", "run_ids": kwargs["run_ids"],
+                "report": {"status": "demonstration", "aoi_id": kwargs["pilot_id"], "cases": []}}
+
+    monkeypatch.setattr(runner, "rebuild_sensitivity_ensemble", fake_rebuild)
+    argv = ["run.py", "sensitivity-ensemble", "--pilot", "sai-mai-district", "--from-runs", "run-a", "run-b"]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert cli.main() == 0
+    assert received == {"pilot_id": "sai-mai-district", "run_ids": ["run-a", "run-b"]}
+    assert json.loads(capsys.readouterr().out)["run_ids"] == ["run-a", "run-b"]
+
+    monkeypatch.setattr(sys, "argv", [*argv, "--max-agents", "4"])
+    with pytest.raises(SystemExit) as refused:
+        cli.main()
+    assert refused.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
 
 
 def test_execute_run_rejects_sensitivity_overrides_before_a_run_directory():

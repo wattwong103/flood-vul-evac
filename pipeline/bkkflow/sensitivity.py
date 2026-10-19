@@ -641,6 +641,8 @@ def build_sensitivity_ensemble(
             "clearance_minutes": row["clearance_minutes"],
             "audited_hashes": row["audited_hashes"],
         })
+    approved_order = list(expected)  # rows never depend on the order the runs were given
+    published_rows.sort(key=lambda row: approved_order.index(row["case_id"]))
     aoi_id = next(iter(aoi_ids))
     return {
         "status": "demonstration",

@@ -40,6 +40,7 @@ from .code_identity import capture_code_identity, verify_code_identity
 from . import replay_audit
 from .pilot_config import load_pilot_bundle
 from .sensitivity import (
+    SensitivityCase,
     build_sensitivity_ensemble,
     ensemble_cases,
     load_sensitivity_table,
@@ -53,6 +54,7 @@ from .util import (
     REPO_ROOT,
     RUNS_DIR,
     read_json,
+    retry_while_held,
     utc_now_iso,
     write_json,
 )
@@ -1089,10 +1091,59 @@ def _publish_new_json(target: Path, payload: Any) -> None:
     scratch = target.with_name(f".{target.name}.partial")
     try:
         write_json(scratch, payload)
-        os.link(scratch, target)  # atomic, and refuses a target another writer installed
+        # atomic, and refuses a target another writer installed
+        retry_while_held(lambda: os.link(scratch, target), what="sensitivity ensemble report", held=scratch.name)
     finally:
         with contextlib.suppress(OSError):  # never mask the real error with a cleanup one
             scratch.unlink()
+
+
+def _require_clean_checkout() -> dict[str, Any]:
+    """Fail before hours of runs: the builder accepts only runs from a clean checkout."""
+    identity = capture_code_identity()
+    if identity["git_status"] != "clean":
+        raise ValueError(f"sensitivity ensemble needs a clean checkout; git status is {identity['git_status']!r}")
+    return identity
+
+
+def _require_passing_audit(label: str, run_dir: Path) -> dict[str, Any]:
+    audit = replay_audit.final_audit_report(replay_audit.load_audit_bundle(run_dir))
+    if audit["status"] != "PASS":
+        detail = "; ".join(
+            str(check.get("detail", "")) for check in audit.get("checks", [])
+            if check.get("status") != "PASS"
+        )
+        raise ValueError(f"{label} failed replay audit: {detail}")
+    return audit
+
+
+def _publish_sensitivity_ensemble(
+    pilot_id: str, aoi_id: str, cases: tuple[SensitivityCase, ...],
+    run_ids: list[str], run_dirs: list[Path], audits: list[dict[str, Any]],
+    *, checkout: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the report from audited runs and install it, naming the rebuild if the install fails.
+
+    A rebuild passes its ``checkout``, which must be the code that made the runs.
+    """
+    report = build_sensitivity_ensemble(run_dirs, audits, expected_cases=cases)
+    if report["aoi_id"] != aoi_id:
+        raise ValueError(f"sensitivity ensemble runs are for {report['aoi_id']!r}, not {aoi_id!r}")
+    runs_code = report["code_identity"]
+    if checkout is not None and any(checkout.get(key) != value for key, value in runs_code.items()):
+        raise ValueError(f"rebuild from the checkout that made the runs, git commit {runs_code['git_commit']}")
+    baseline_id = next(row["run_id"] for row in report["cases"] if row["case_id"] == "baseline")
+    destination = RUNS_DIR / f"{pilot_id}-sensitivity-ensemble-{baseline_id}.json"
+    try:
+        _publish_new_json(destination, report)
+    except (OSError, RuntimeError) as exc:
+        if not destination.exists():  # a report another writer installed needs no rebuild
+            exc.add_note(
+                "The case runs are kept. Publish their report without re-running them:\n"
+                f"  python pipeline/run.py sensitivity-ensemble --pilot {pilot_id} --from-runs {' '.join(run_ids)}"
+            )
+        raise
+    return {"report_path": str(destination), "run_ids": run_ids, "report": report}
 
 
 def execute_sensitivity_ensemble(
@@ -1101,6 +1152,7 @@ def execute_sensitivity_ensemble(
     max_agents: int | None = None,
 ) -> dict[str, Any]:
     """Run the ten one-at-a-time cases on one cohort and write the report."""
+    _require_clean_checkout()
     bundle = load_pilot_bundle(pilot_id, config_dir=CONFIG_DIR, curated_dir=CURATED_DIR)
     cases = ensemble_cases(load_sensitivity_table(bundle.scenario))
     results = []
@@ -1116,24 +1168,31 @@ def execute_sensitivity_ensemble(
         )
         if not result["validation_passed"]:
             raise ValueError(f"sensitivity case {case.case_id} failed validation")
-        audit = replay_audit.final_audit_report(
-            replay_audit.load_audit_bundle(Path(result["run_dir"]))
-        )
-        if audit["status"] != "PASS":
-            detail = "; ".join(
-                str(check.get("detail", "")) for check in audit.get("checks", [])
-                if check.get("status") != "PASS"
-            )
-            raise ValueError(f"sensitivity case {case.case_id} failed replay audit: {detail}")
+        audits.append(_require_passing_audit(f"sensitivity case {case.case_id}", Path(result["run_dir"])))
         if case.case_id == "baseline":
             baseline_id = result["run_id"]
         results.append(result)
-        audits.append(audit)
-    report = build_sensitivity_ensemble([Path(item["run_dir"]) for item in results], audits, expected_cases=cases)
-    destination = RUNS_DIR / f"{pilot_id}-sensitivity-ensemble-{baseline_id}.json"
-    _publish_new_json(destination, report)
-    return {
-        "report_path": str(destination),
-        "run_ids": [item["run_id"] for item in results],
-        "report": report,
-    }
+    return _publish_sensitivity_ensemble(
+        pilot_id, bundle.aoi_id, cases,
+        [item["run_id"] for item in results], [Path(item["run_dir"]) for item in results], audits,
+    )
+
+
+def rebuild_sensitivity_ensemble(*, pilot_id: str, run_ids: list[str]) -> dict[str, Any]:
+    """Re-audit finished case runs and publish their report without re-running them."""
+    checkout = _require_clean_checkout()
+    bundle = load_pilot_bundle(pilot_id, config_dir=CONFIG_DIR, curated_dir=CURATED_DIR)
+    cases = ensemble_cases(load_sensitivity_table(bundle.scenario))
+    run_dirs = []
+    for run_id in run_ids:
+        named = bool(run_id) and run_id != ".." and Path(run_id).name == run_id  # no drive, UNC or separator
+        if not named or (RUNS_DIR / run_id).resolve().parent != RUNS_DIR.resolve():
+            raise ValueError(f"sensitivity run {run_id!r} must be a direct child of runs/")
+        run_dirs.append(RUNS_DIR / run_id)
+    audits = [
+        _require_passing_audit(f"sensitivity run {run_id}", run_dir)
+        for run_id, run_dir in zip(run_ids, run_dirs)
+    ]
+    return _publish_sensitivity_ensemble(
+        pilot_id, bundle.aoi_id, cases, list(run_ids), run_dirs, audits, checkout=checkout,
+    )

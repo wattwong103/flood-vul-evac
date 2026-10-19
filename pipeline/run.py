@@ -178,9 +178,12 @@ def cmd_city(args: argparse.Namespace) -> int:
 
 
 def cmd_sensitivity_ensemble(args: argparse.Namespace) -> int:
-    from bkkflow.runner import execute_sensitivity_ensemble
+    from bkkflow import runner
 
-    summary = execute_sensitivity_ensemble(pilot_id=args.pilot, max_agents=args.max_agents)
+    if args.from_runs:
+        summary = runner.rebuild_sensitivity_ensemble(pilot_id=args.pilot, run_ids=args.from_runs)
+    else:
+        summary = runner.execute_sensitivity_ensemble(pilot_id=args.pilot, max_agents=args.max_agents)
     print(json.dumps({
         "report_path": summary["report_path"],
         "run_ids": summary["run_ids"],
@@ -277,7 +280,12 @@ def main() -> int:
         help="run the one-at-a-time sensitivity cases for one named pilot",
     )
     ensemble.add_argument("--pilot", required=True)
-    ensemble.add_argument("--max-agents", type=int, default=None)
+    source = ensemble.add_mutually_exclusive_group()
+    source.add_argument("--max-agents", type=int, default=None)
+    source.add_argument(
+        "--from-runs", nargs="+", default=None, metavar="RUN_ID",
+        help="re-audit these finished case runs and publish their report without re-running them",
+    )
     ensemble.set_defaults(func=cmd_sensitivity_ensemble)
 
     validate = sub.add_parser("validate", help="re-validate a run")
