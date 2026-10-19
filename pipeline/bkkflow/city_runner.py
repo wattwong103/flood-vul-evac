@@ -333,9 +333,9 @@ def execute_city_run(
     )
     if unreliable:
         warnings.append(
-            f"MitrEarth mapped flood extent is UNRELIABLE for {unreliable}: those years contain "
-            "features with self-intersecting rings that had to be discarded, so the published "
-            "extent would be a truncated artifact rather than a measurement. Only the "
+            f"MitrEarth mapped flood extent is UNRELIABLE for {unreliable}: those years lost "
+            "features whose geometry could not be repaired, or whose repair changed their "
+            "area, so the published extent is not a faithful copy of the mapping. Only the "
             "reliable years may be used."
         )
     record(

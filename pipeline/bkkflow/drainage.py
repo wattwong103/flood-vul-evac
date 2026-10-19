@@ -640,7 +640,7 @@ def build_drainage_index(
             if basins.table is not None and "STREAM_ID" in basins.table.columns
             else np.arange(len(basins.geoms))
         )
-        # STREAM_ID repeats across the 137 mapped polygons, so the id carries
+        # STREAM_ID repeats across the mapped polygons, so the id carries
         # the row too and stays unique and traceable.
         basin_ids = np.array(
             [f"bas_{int(s)}_{i:03d}" for i, s in enumerate(stream_ids)], dtype=object

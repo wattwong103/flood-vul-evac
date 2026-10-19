@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
+import pandas as pd
 from shapely.ops import unary_union
 
 from ..util import CURATED_DIR, ensure_dir, sha256_file, utc_now_iso, write_json
@@ -55,6 +56,13 @@ EXCLUDED = {
     "contours": "Derived from the same rejected DEM, so they encode its noise.",
     "transportation": "OSM from the regional extract is more detailed and better attributed.",
 }
+
+#: A repaired polygon is trusted only if ``make_valid`` kept its area within
+#: this fraction of the raw ring area. The self-intersections in this extract
+#: are rings that pinch or touch themselves, and their repair keeps the area to
+#: within 0.03%. A bow-tie whose lobes cancel in the raw area does not, so a
+#: larger change means the repair altered the mapped extent.
+REPAIR_AREA_TOLERANCE = 0.01
 
 
 @dataclass
@@ -108,12 +116,12 @@ def ingest(
 
         # These shapefiles contain invalid rings. One invalid polygon aborts the
         # whole spatial test, so they are repaired before clipping and any that
-        # cannot be repaired are dropped and counted rather than retained.
-        # Measure the area about to be discarded, so a year whose extent was
-        # mostly invalid geometry is marked unreliable instead of published
-        # as a small, confident number.
-        discarded = _invalid_area_by_year(frame)
-        repaired, dropped = _repair(frame)
+        # cannot be repaired are dropped and counted rather than retained. The
+        # outcome is kept per year, so a year that lost a feature, or whose
+        # repair changed a feature's area, is marked unreliable.
+        rows_total = len(frame)
+        frame, outcome = _repair(frame)
+        invalid_geometry = _invalid_geometry_by_year(frame, outcome)
         frame = frame[frame.geometry.notna() & ~frame.geometry.is_empty & frame.geometry.is_valid].copy()
 
         inside = frame.intersects(clip)
@@ -134,12 +142,13 @@ def ingest(
         frames[name] = clipped
 
         layers[name] = {
-            "discarded_invalid_area_by_year": discarded,
+            "invalid_geometry_by_year": invalid_geometry,
             "status": "ok",
             "source_file": relative,
-            "rows_total": int(len(frame) + dropped),
-            "repaired_geometries": int(repaired),
-            "dropped_unrepairable": int(dropped),
+            "rows_total": int(rows_total),
+            "repaired_geometries": int((outcome != "dropped").sum()),
+            "repaired_area_changed": int((outcome == "repaired_area_changed").sum()),
+            "dropped_unrepairable": int((outcome == "dropped").sum()),
             "rows_in_aoi": int(len(clipped)),
             "area_km2": round(float(clipped.area.sum() / 1e6), 3)
             if not clipped.empty and clipped.geom_type.isin(["Polygon", "MultiPolygon"]).any()
@@ -153,7 +162,7 @@ def ingest(
     flood_extent = _flood_extent_by_year(
         frames.get("flood_extent_gistda"),
         target,
-        layers.get("flood_extent_gistda", {}).get("discarded_invalid_area_by_year", {}),
+        layers.get("flood_extent_gistda", {}).get("invalid_geometry_by_year", {}),
     )
 
     result = IngestResult(
@@ -166,15 +175,16 @@ def ingest(
 def _flood_extent_by_year(
     frame: gpd.GeoDataFrame | None,
     target: Path,
-    discarded: dict[str, float] | None = None,
+    invalid_geometry: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     """Dissolve the flood layer by year and record the unioned extent.
 
     The raw polygons overlap heavily, so summing their areas would triple-count
     the flood. Only the union is a meaningful extent.
     """
-    if frame is None or frame.empty or "year" not in frame.columns:
+    if frame is None or "year" not in frame.columns:
         return {"status": "unavailable", "years": []}
+    invalid_geometry = invalid_geometry or {}
 
     records: list[dict[str, Any]] = []
     for year in sorted(frame["year"].dropna().unique()):
@@ -186,7 +196,7 @@ def _flood_extent_by_year(
             {
                 "year": int(year),
                 "polygons": int(len(subset)),
-                "discarded_invalid": (discarded or {}).get(str(int(year)), {}),
+                "invalid_geometry": invalid_geometry.get(str(int(year)), {}),
                 "union_km2": round(float(dissolved.area / 1e6), 3),
                 "raw_sum_km2": round(float(subset.area.sum() / 1e6), 3),
                 "overlap_factor": round(
@@ -197,27 +207,45 @@ def _flood_extent_by_year(
             }
         )
 
+    # A year whose every feature was dropped has no rows left to dissolve, but
+    # it still lost its extent. Record it, with the extent unknown rather than
+    # zero, so it is reported as unreliable instead of missing from the summary.
+    present = {entry["year"] for entry in records}
+    for key, invalid in invalid_geometry.items():
+        if int(key) not in present and invalid.get("dropped", 0):
+            records.append(
+                {
+                    "year": int(key),
+                    "polygons": 0,
+                    "invalid_geometry": invalid,
+                    "union_km2": None,
+                    "raw_sum_km2": None,
+                    "overlap_factor": None,
+                }
+            )
+    if not records:
+        return {"status": "unavailable", "years": []}
+    records.sort(key=lambda entry: entry["year"])
+
+    # A year is unreliable if it lost a feature to unrepairable geometry, or if
+    # a repair changed a feature's area beyond REPAIR_AREA_TOLERANCE. No area is
+    # invented for lost features. A repair that keeps the area only fixed how
+    # the ring was drawn, so it leaves the year reliable.
+    for entry in records:
+        invalid = entry["invalid_geometry"]
+        entry["reliable"] = (
+            invalid.get("dropped", 0) == 0 and invalid.get("repaired_area_changed", 0) == 0
+        )
+
     # A year of 0 means "unspecified" in this extract; keep it out of the
     # per-year comparison but record it so the gap is visible.
-    # A year is unreliable when the geometry it lost could have covered far
-    # more than what survived. Comparing against the published extent keeps
-    # a handful of discarded slivers from disqualifying an otherwise sound year.
-    for entry in records:
-        # Conservative and simple: a year that lost any feature to unrepairable
-        # geometry is reported as unreliable. No area is invented for the lost
-        # features, because a self-intersecting ring reports an arbitrary area
-        # and its bounding box can be nonsense too.
-        entry["reliable"] = float(
-            (entry.get("discarded_invalid") or {}).get("invalid_features", 0)
-        ) == 0
-
     unspecified = next((r for r in records if r["year"] == 0), None)
     dated = [r for r in records if r["year"] != 0]
 
-    if dated:
-        largest = max(dated, key=lambda entry: entry["union_km2"])
-        for entry in dated:
-            entry["is_largest_mapped_event"] = entry["year"] == largest["year"]
+    measured = [r for r in dated if r["union_km2"] is not None]
+    largest = max(measured, key=lambda entry: entry["union_km2"]) if measured else None
+    for entry in dated:
+        entry["is_largest_mapped_event"] = largest is not None and entry["year"] == largest["year"]
 
     return {
         "status": "ok",
@@ -229,69 +257,66 @@ def _flood_extent_by_year(
             "Polygons overlap heavily, so only the dissolved union is an extent. "
             "The LAYER field is 'Unknown Area Type' for every feature in this "
             "extract, so hazard type is not recoverable. This layer is a mapping, "
-            "not an observation, and is labelled source_role='mapped'. A year whose apparent extent "
-            "was mostly self-intersecting geometry is reported as unreliable "
-            "rather than published as a small confident number."
+            "not an observation, and is labelled source_role='mapped'. Self-intersecting "
+            "rings are repaired with make_valid. A year that lost a feature to "
+            "unrepairable geometry, or whose repair changed a feature's area by more "
+            f"than {REPAIR_AREA_TOLERANCE:.0%}, is reported as unreliable."
         ),
     }
 
 
-def _repair(frame: gpd.GeoDataFrame) -> tuple[int, int]:
-    """Repair invalid rings; drop what cannot be repaired. Returns (repaired, dropped)."""
+def _repair(frame: gpd.GeoDataFrame) -> tuple[gpd.GeoDataFrame, pd.Series]:
+    """Repair invalid rings in a copy of ``frame``.
+
+    Returns the repaired frame and, for each feature that was invalid, its
+    outcome: ``repaired``, ``repaired_area_changed`` or ``dropped``. Geometry
+    that cannot be repaired into a line or polygon is left invalid in the
+    returned frame, so the caller's validity filter drops exactly those.
+    """
     import numpy as np
     import shapely
 
     invalid = ~frame.geometry.is_valid
-    count = int(invalid.sum())
-    if not count:
-        return 0, 0
-    original = frame.geometry.values[invalid]
-    fixed = shapely.make_valid(original)
-    usable = np.array(
-        [shapely.get_type_id(item) in (1, 2, 3, 6) for item in fixed]  # line/ring/polygon/multipolygon
-    )
-    frame = frame.copy()
-    frame.loc[invalid, "geometry"] = np.where(usable, fixed, original)
-    still_invalid = ~frame.geometry.is_valid
-    dropped = int(still_invalid.sum())
-    return count - dropped, dropped
-
-
-
-def _invalid_area_by_year(frame: gpd.GeoDataFrame) -> dict[str, dict[str, float]]:
-    """Envelope of the geometry about to be discarded, keyed by year.
-
-    A self-intersecting ring reports an arbitrary `area`, and its bounding box
-    can contain stray far-off coordinates, so no area is derived here at all.
-    Only the count is reported, and any year that lost a feature is marked
-    unreliable so its published extent is never mistaken for a measurement.
-    """
-    import math
-
-    if frame is None or frame.empty or "year" not in frame.columns:
-        return {}
-    invalid = ~frame.geometry.is_valid
     if not invalid.any():
-        return {}
+        return frame, pd.Series([], dtype=object)
+    original = np.asarray(frame.geometry.values[invalid])
+    fixed = shapely.make_valid(original)
+    usable = np.isin(shapely.get_type_id(fixed), (1, 2, 3, 6))  # line/ring/polygon/multipolygon
+    repaired_frame = frame.copy()
+    repaired_frame.loc[invalid, "geometry"] = np.where(usable, fixed, original)
 
-    out: dict[str, dict[str, float]] = {}
-    for year, block in frame[invalid].groupby("year"):
-        west = east = south = north = None
-        for geometry in block.geometry:
-            try:
-                x0, y0, x1, y1 = geometry.bounds
-            except Exception:
-                continue
-            if not all(math.isfinite(v) for v in (x0, y0, x1, y1)):
-                continue
-            west = x0 if west is None else min(west, x0)
-            east = x1 if east is None else max(east, x1)
-            south = y0 if south is None else min(south, y0)
-            north = y1 if north is None else max(north, y1)
-        if west is None:
-            continue
+    # Lines have no area to keep, so only polygons are checked.
+    polygonal = np.isin(shapely.get_type_id(original), (3, 6))
+    raw_area = shapely.area(original)
+    area_kept = (raw_area > 0) & (
+        np.abs(shapely.area(fixed) - raw_area) <= REPAIR_AREA_TOLERANCE * raw_area
+    )
+    still_invalid = ~repaired_frame.geometry.is_valid[invalid].to_numpy()
+    outcome = np.where(
+        still_invalid,
+        "dropped",
+        np.where(~polygonal | area_kept, "repaired", "repaired_area_changed"),
+    )
+    return repaired_frame, pd.Series(outcome, index=frame.index[invalid], dtype=object)
+
+
+def _invalid_geometry_by_year(
+    frame: gpd.GeoDataFrame, outcome: pd.Series
+) -> dict[str, dict[str, int]]:
+    """Count the features that were invalid, by year and repair outcome.
+
+    No area is derived for a dropped feature: a ring that cannot be repaired
+    reports an arbitrary area, and its bounding box can be nonsense too.
+    """
+    if outcome.empty or "year" not in frame.columns:
+        return {}
+    out: dict[str, dict[str, int]] = {}
+    for year, block in outcome.groupby(frame.loc[outcome.index, "year"]):
+        counts = block.value_counts()
         out[str(int(year))] = {
             "invalid_features": int(len(block)),
-            "bounds_were_finite": bool(west is not None),
+            "repaired": int(counts.get("repaired", 0)),
+            "repaired_area_changed": int(counts.get("repaired_area_changed", 0)),
+            "dropped": int(counts.get("dropped", 0)),
         }
     return out
