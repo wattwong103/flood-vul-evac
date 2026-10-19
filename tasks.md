@@ -65,7 +65,7 @@ holder before work assigned to that role starts.
 | P2 | BKK-049 — harden named-pilot identity edge cases | PARKED | Implementer | — |
 | P2 | BKK-050 — complete paper metadata and ODbL statement | READY | Paper owner + authors | — |
 | P2 | BKK-016a — four-area one-at-a-time sensitivity ensemble | IN PROGRESS | Implementer (sensitivity session; PR #79) | — |
-| P2 | BKK-051 — prepare a submission package | BLOCKED | Paper owner | BKK-033, BKK-050, BKK-016a |
+| P2 | BKK-051 — prepare a submission package | BLOCKED | Paper owner | BKK-033, BKK-050, BKK-016a, BKK-052, BKK-053 |
 | P2 | BKK-052 — related work and novelty defence | IN PROGRESS | Paper owner (related-work session) | — |
 | P2 | BKK-053 — observed-extent plausibility check | IN PROGRESS | Paper owner (design note), then North (metric) | — |
 
