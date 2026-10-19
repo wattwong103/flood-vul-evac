@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 from itertools import accumulate
 from typing import Any
@@ -21,8 +22,10 @@ _QUANTILES = (
 )
 
 
-def weighted_clearance_minutes(
-    states: pd.DataFrame, *, warning_time_s: Any
+def _inverse_weighted_minutes(
+    states: pd.DataFrame,
+    warning_time_s: Any,
+    quantiles: tuple[tuple[str, Decimal], ...],
 ) -> dict[str, float | None]:
     """Return exact inverse weighted-ECDF clearance quantiles in minutes.
 
@@ -44,7 +47,7 @@ def weighted_clearance_minutes(
 
     arrived = states.loc[states["state"] == "arrived"]
     if arrived.empty:
-        return dict(EMPTY_CLEARANCE_MINUTES)
+        return {label: None for label, _ in quantiles}
     missing = {"event_time_s", "weight"} - set(arrived.columns)
     if missing:
         raise ValueError(f"arrived rows are missing required columns: {sorted(missing)}")
@@ -67,5 +70,26 @@ def weighted_clearance_minutes(
                 next(index for index, weight in enumerate(cumulative) if weight >= q * total_weight)
             ]
         ) / 60.0
-        for label, q in _QUANTILES
+        for label, q in quantiles
     }
+
+
+def weighted_clearance_minutes(
+    states: pd.DataFrame, *, warning_time_s: Any
+) -> dict[str, float | None]:
+    """Return the published p5, median and p95 clearance quantiles."""
+    return _inverse_weighted_minutes(states, warning_time_s, _QUANTILES)
+
+
+def sensitivity_clearance_minutes(
+    states: pd.DataFrame, *, warning_time_s: Any
+) -> dict[str, float | None]:
+    """Return arrived-only p50 and p90 plus the arrived weight those use."""
+    quantiles = _inverse_weighted_minutes(
+        states,
+        warning_time_s,
+        (("p50", Decimal("0.50")), ("p90", Decimal("0.90"))),
+    )
+    arrived = states.loc[states["state"] == "arrived"] if "state" in states.columns else states.iloc[0:0]
+    arrived_weight = math.fsum(float(value) for value in arrived["weight"]) if len(arrived) else 0.0
+    return {**quantiles, "arrived_weight": arrived_weight}

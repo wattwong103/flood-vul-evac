@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from api.errors import RunNotFoundError
-from api.models import ApiWarning
+from api.models import ActiveScenarioSummary, ApiWarning
 from api.settings import get_settings
 
 LOGGER = logging.getLogger("bkkflow.api.runs")
@@ -129,6 +129,22 @@ class RunRef:
                 return value
         value = self.run_state.get("population_version")
         return value if isinstance(value, str) and value else None
+
+    @property
+    def active_scenario(self) -> ActiveScenarioSummary | None:
+        """``state`` and ``case_id`` from ``manifest.active_scenario``.
+
+        ``None`` when the manifest predates the field or records it in a shape
+        this service does not recognise; ``case_id`` is ``None`` for an
+        ordinary run, which is how the site tells it from a sensitivity case.
+        """
+        scenario = self.manifest.get("active_scenario")
+        if not isinstance(scenario, dict):
+            return None
+        return ActiveScenarioSummary(
+            state=_first_str(scenario, ("state",)),
+            case_id=_first_str(scenario, ("case_id",)),
+        )
 
     @property
     def warnings_count(self) -> int:

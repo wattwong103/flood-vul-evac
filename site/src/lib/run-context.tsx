@@ -17,6 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import { asRunList } from "@/lib/client";
+import { resolveActiveRunId } from "@/lib/runs";
 import { useApi, type AsyncState } from "@/hooks/useApi";
 import type { RunDetail, RunStats, RunSummary } from "@/lib/api";
 
@@ -57,18 +58,12 @@ export function RunProvider({ children }: { children: ReactNode }) {
     [rawRuns.phase, rawRuns.data, rawRuns.error, rawRuns.loadedAt, rawRuns.reload],
   );
 
-  // Keep the selection valid: prefer an explicit choice, else the newest run.
+  // Keep the selection valid: prefer an explicit choice, else the newest
+  // ordinary run, so a sensitivity case never becomes the landing run.
   useEffect(() => {
     if (runs.phase !== "ready") return;
-    const list = runs.data ?? [];
-    if (list.length === 0) {
-      if (activeRunId !== null) setActiveRunIdState(null);
-      return;
-    }
-    const known = list.some((run) => run?.run_id === activeRunId);
-    if (!known) {
-      setActiveRunIdState(typeof list[0]?.run_id === "string" ? list[0].run_id : null);
-    }
+    const next = resolveActiveRunId(runs.data ?? [], activeRunId);
+    if (next !== activeRunId) setActiveRunIdState(next);
   }, [runs.phase, runs.data, activeRunId]);
 
   const setActiveRunId = useCallback((id: string) => {

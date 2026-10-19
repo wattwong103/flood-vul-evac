@@ -5,7 +5,7 @@
     python pipeline/run.py run         # execute one full run
     python pipeline/run.py run --baseline   # dry run for comparison
     python pipeline/run.py run --pilot sai-mai-district
-    python pipeline/run.py validate    # re-validate the newest run
+    python pipeline/run.py validate    # re-validate the newest ordinary run
 
 Everything downloaded or derived is written under data/ and runs/, both of
 which are git-ignored. Nothing in this tool is an emergency service.
@@ -111,6 +111,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         max_agents=args.max_agents,
         pilot_id=args.pilot,
         cohort_from_run=args.cohort_from_run,
+        sensitivity_case=args.sensitivity_case,
+        flood_severity=args.severity,
+        compliance=args.compliance,
+        warning_reach=args.warning_reach,
+        preparation_delay_mean_s=args.delay_mean_s,
     )
     print(json.dumps({key: value for key, value in summary.items() if key != "stats"}, indent=2))
     print(json.dumps(summary["stats"]["population"], indent=2))
@@ -172,14 +177,60 @@ def cmd_city(args: argparse.Namespace) -> int:
     return 0 if summary["validation_passed"] else 2
 
 
+def cmd_sensitivity_ensemble(args: argparse.Namespace) -> int:
+    from bkkflow.runner import execute_sensitivity_ensemble
+
+    summary = execute_sensitivity_ensemble(pilot_id=args.pilot, max_agents=args.max_agents)
+    print(json.dumps({
+        "report_path": summary["report_path"],
+        "run_ids": summary["run_ids"],
+        "status": summary["report"]["status"],
+        "aoi_id": summary["report"]["aoi_id"],
+        "cases": [row["case_id"] for row in summary["report"]["cases"]],
+    }, indent=2))
+    return 0
+
+
+def _case_id(run_dir: Path) -> str | None:
+    """The sensitivity case a run records, or ``None`` when it records none.
+
+    An unreadable manifest records none too, so ``None`` means "not a known
+    case", not "certainly ordinary".
+    """
+    try:
+        manifest = read_json(run_dir / "manifest.json")
+    except (OSError, ValueError):
+        return None
+    active = manifest.get("active_scenario") if isinstance(manifest, dict) else None
+    case_id = active.get("case_id") if isinstance(active, dict) else None
+    return case_id if isinstance(case_id, str) and case_id else None
+
+
+def _default_validate_run() -> tuple[str, str] | None:
+    """``(run_id, why)``: the newest run recording no case, else the newest case run."""
+    runs = sorted(
+        RUNS_DIR.glob("*/validation.json"),
+        key=lambda path: (path.stat().st_mtime, path.parent.name),
+        reverse=True,
+    )
+    if not runs:
+        return None
+    newest = [path.parent for path in runs]
+    for run in newest:
+        if _case_id(run) is None:
+            return run.name, "newest run with no sensitivity case recorded"
+    return newest[0].name, f"sensitivity case {_case_id(newest[0])!r}; no ordinary run found"
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     run_id = args.run_id
     if not run_id:
-        runs = sorted(RUNS_DIR.glob("*/validation.json"), key=lambda p: p.stat().st_mtime)
-        if not runs:
+        picked = _default_validate_run()
+        if picked is None:
             print("no runs found", file=sys.stderr)
             return 1
-        run_id = runs[-1].parent.name
+        run_id, why = picked
+        print(f"validating run {run_id} ({why})", file=sys.stderr)
     payload = read_json(RUNS_DIR / run_id / "validation.json")
     print(json.dumps(payload, indent=2)[:4000])
     return 0 if payload["passed"] else 2
@@ -209,12 +260,25 @@ def main() -> int:
     run.add_argument("--baseline", action="store_true", help="disable the flood scenario")
     run.add_argument("--max-agents", type=int, default=None)
     run.add_argument("--cohort-from-run", default=None)
+    run.add_argument("--severity", choices=["low", "moderate", "high"], default=None)
+    run.add_argument("--compliance", type=float, default=None)
+    run.add_argument("--warning-reach", type=float, default=None)
+    run.add_argument("--delay-mean-s", type=float, default=None)
+    run.add_argument("--sensitivity-case", default=None)
     run.add_argument(
         "--pilot",
         default=None,
         help="named AOI configuration; omit for the legacy Khlong San invocation",
     )
     run.set_defaults(func=cmd_run)
+
+    ensemble = sub.add_parser(
+        "sensitivity-ensemble",
+        help="run the one-at-a-time sensitivity cases for one named pilot",
+    )
+    ensemble.add_argument("--pilot", required=True)
+    ensemble.add_argument("--max-agents", type=int, default=None)
+    ensemble.set_defaults(func=cmd_sensitivity_ensemble)
 
     validate = sub.add_parser("validate", help="re-validate a run")
     validate.add_argument("--run-id", default=None)

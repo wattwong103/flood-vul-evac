@@ -46,6 +46,18 @@ class HealthResponse(BaseModel):
     run_count: int
 
 
+class ActiveScenarioSummary(BaseModel):
+    """Which scenario a run simulated, read from ``manifest.active_scenario``."""
+
+    state: str | None = Field(
+        default=None, description="Flood state simulated: dry, low, moderate or high."
+    )
+    case_id: str | None = Field(
+        default=None,
+        description="Sensitivity-ensemble case id; null for an ordinary run.",
+    )
+
+
 class RunSummary(BaseModel):
     run_id: str
     created_at: str | None = None
@@ -57,6 +69,10 @@ class RunSummary(BaseModel):
     )
     population_version: str | None = None
     warnings_count: int = 0
+    active_scenario: ActiveScenarioSummary | None = Field(
+        default=None,
+        description="Null for runs whose manifest predates active_scenario.",
+    )
 
 
 class SkippedRunDetail(BaseModel):

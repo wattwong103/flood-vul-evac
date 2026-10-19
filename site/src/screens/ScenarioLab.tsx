@@ -54,6 +54,7 @@ import {
 } from "@/components/primitives";
 import { useApi } from "@/hooks/useApi";
 import { useRuns } from "@/lib/run-context";
+import { runOptionLabel } from "@/lib/runs";
 import { availableModelTimes, shouldLoadStaticFallback } from "@/lib/map-copy";
 import {
   API_BASE_URL,
@@ -734,8 +735,7 @@ function RunPicker() {
           <SelectContent>
             {list.map((run) => (
               <SelectItem key={run.run_id} value={run.run_id}>
-                {run.run_id.slice(0, 8)} · {formatTimestamp(run.created_at)}
-                {run.status ? ` · ${run.status}` : ""}
+                {runOptionLabel(run)}
               </SelectItem>
             ))}
           </SelectContent>

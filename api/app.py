@@ -443,6 +443,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 state=run.state,
                 population_version=run.population_version,
                 warnings_count=run.warnings_count,
+                active_scenario=run.active_scenario,
             )
             for run in runs
         ]

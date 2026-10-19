@@ -287,6 +287,10 @@ def test_pilot_saved_fractional_clearance_round_trips_through_both_api_routes(
             "clearance_time_minutes": _weighted_quantiles_minutes(
                 clearance_s, emitted["weights"]
             ),
+            "clearance_sensitivity_minutes": {
+                "p50": None, "p90": None, "arrived_weight": total_weight,
+            },
+            "reason_weights": {"admitted": total_weight},
             "top_bottleneck_edges": [],
             "destinations": [],
         }

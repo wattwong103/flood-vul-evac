@@ -378,6 +378,35 @@ def test_run_state_falls_back_to_overall_state(client: TestClient, runs_dir: Pat
     assert summary["stage"] == "failed_validation"
 
 
+def test_run_summary_names_sensitivity_cases(client: TestClient, runs_dir: Path) -> None:
+    """A case run carries its case id; ordinary, legacy and malformed runs do not."""
+    ordinary = _manifest("ordinary", "2026-01-01T00:00:00+00:00")
+    ordinary["active_scenario"] = {"state": "dry", "configured_scenario_id": "bma-2011"}
+    case = _manifest("case-run", "2026-06-01T00:00:00+00:00")
+    case["active_scenario"] = {
+        "state": "moderate",
+        "configured_scenario_id": "bma-2011",
+        "case_id": "delay-mean-1800",
+    }
+    malformed = _manifest("malformed", "2025-06-01T00:00:00+00:00")
+    malformed["active_scenario"] = ["moderate"]
+    _write_run(runs_dir, "ordinary", manifest=ordinary)
+    _write_run(runs_dir, "case-run", manifest=case)
+    _write_run(runs_dir, "legacy", manifest=_manifest("legacy", "2025-01-01T00:00:00+00:00"))
+    _write_run(runs_dir, "malformed", manifest=malformed)
+
+    runs = {run["run_id"]: run for run in client.get("/v1/runs").json()["runs"]}
+    assert runs["ordinary"]["active_scenario"] == {"state": "dry", "case_id": None}
+    assert runs["case-run"]["active_scenario"] == {
+        "state": "moderate",
+        "case_id": "delay-mean-1800",
+    }
+    assert runs["legacy"]["active_scenario"] is None
+    assert runs["malformed"]["active_scenario"] is None
+    # The scenario state is not the run's lifecycle state.
+    assert runs["case-run"]["state"] is None
+
+
 def test_corrupt_manifest_is_skipped_not_fatal(client: TestClient, runs_dir: Path) -> None:
     _write_run(runs_dir, "good", manifest=_manifest("good", "2026-06-01T00:00:00+00:00"))
     broken = runs_dir / "broken"
