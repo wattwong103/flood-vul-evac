@@ -54,7 +54,9 @@ export function formatObservedShare(
   share: number | null | undefined,
   status: string | null | undefined,
 ): string {
-  if (isMissing(status)) return isMissing(share) ? NOT_COMPUTED : "superseded (BKK-054)";
+  if (status === "superseded" || (isMissing(status) && !isMissing(share))) {
+    return "superseded (BKK-054)";
+  }
   return status === "ok" ? formatShare(share) : NOT_COMPUTED;
 }
 

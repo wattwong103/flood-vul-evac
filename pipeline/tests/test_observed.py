@@ -22,12 +22,12 @@ from bkkflow.sources import destinations, gsw  # noqa: E402
 # --------------------------------------------------------------------------
 
 
-def raster_fixture(tmp_path, values, *, name="water.tif", west=100.5):
+def raster_fixture(tmp_path, values, *, name="water.tif", west=100.5, crs="EPSG:4326"):
     import rasterio
     from rasterio.transform import from_origin
     path = tmp_path / name
     with rasterio.open(path, "w", driver="GTiff", width=len(values), height=1,
-                       count=1, dtype="uint8", crs="EPSG:4326",
+                       count=1, dtype="uint8", crs=crs,
                        transform=from_origin(west, 13.7, 0.00025, 0.00025)) as dst:
         dst.write(np.array([values], dtype="uint8"), 1)
     return path, (west, 13.69975, west + len(values) * 0.00025, 13.7)
@@ -201,14 +201,14 @@ def test_observed_cells_share_the_measure_year_denominator(tmp_path, monkeypatch
         assert result["per_year"][2020]["share_status"] == "max_extent_unavailable"
 
 
-def _build_cells(tmp_path, monkeypatch, aoi_geometry, extent_nodata=None):
+def _build_cells(tmp_path, monkeypatch, aoi_geometry, extent_nodata=None, extent_crs="EPSG:4326"):
     import geopandas as gpd
     import pandas as pd
     import rasterio
     import build_observed_cells
     from bkkflow import aoi
     yearly, bounds = raster_fixture(tmp_path, YEARLY)
-    extent, _ = raster_fixture(tmp_path, EXTENT, name="extent.tif")
+    extent, _ = raster_fixture(tmp_path, EXTENT, name="extent.tif", crs=extent_crs)
     if extent_nodata is not None:
         with rasterio.open(extent, "r+") as dst:
             dst.nodata = extent_nodata
@@ -239,6 +239,12 @@ def test_observed_cells_refuse_an_extent_tile_with_a_zero_nodata_tag(tmp_path, m
     from shapely.geometry import box
     with pytest.raises(ValueError, match="nodata"):
         _build_cells(tmp_path, monkeypatch, lambda bounds: box(*bounds), extent_nodata=0)
+
+
+def test_observed_cells_refuse_an_extent_tile_in_another_crs(tmp_path, monkeypatch):
+    from shapely.geometry import box
+    with pytest.raises(ValueError, match="grid"):
+        _build_cells(tmp_path, monkeypatch, lambda bounds: box(*bounds), extent_crs="EPSG:32647")
 
 
 def test_max_extent_with_a_slightly_different_pixel_size_is_refused(tmp_path):

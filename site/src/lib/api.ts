@@ -619,7 +619,7 @@ export type ObservedWaterYear = {
    */
   aoi_water_share?: number | null;
   water_share?: number | null;
-  share_status?: "ok" | "max_extent_unavailable" | "no_known_pixels" | null;
+  share_status?: "ok" | "max_extent_unavailable" | "no_known_pixels" | "superseded" | null;
   /** Area the year classified (codes 1-3); not the share's denominator. */
   classified_km2?: number | null;
   /** The share's denominator: classified area plus never-water code 0. */

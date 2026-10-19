@@ -68,6 +68,7 @@ def build(*, out_dir: Path | None = None) -> dict:
             data, transform = rio_mask(
                 dataset, [aoi_wgs84], crop=True, filled=True, nodata=gsw.CODE_NO_OBSERVATIONS
             )
+            yearly_crs = dataset.crs
         array = data[0]
         extent = None
         if extent_path is not None:
@@ -76,6 +77,8 @@ def build(*, out_dir: Path | None = None) -> dict:
                 # turn never-water into unknown, so refuse any tag but 255.
                 if dataset_extent.nodata not in (None, gsw.EXTENT_NODATA):
                     raise ValueError(f"{extent_path.name} has nodata tag {dataset_extent.nodata}")
+                if dataset_extent.crs != yearly_crs:
+                    raise ValueError(f"{extent_path.name} is not on the yearly tile's grid (CRS)")
                 # Outside the AOI fills as extent no-data, so it is unknown, not dry.
                 extent_data, extent_transform = rio_mask(
                     dataset_extent, [aoi_wgs84], crop=True, filled=True, nodata=gsw.EXTENT_NODATA

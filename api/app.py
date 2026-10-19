@@ -1572,10 +1572,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         warnings: list[ApiWarning] = []
         payload, json_warnings = _read_json_object(artefact_path(run, "observed_water.json"))
         warnings.extend(json_warnings)
-        if payload is not None and any(
-            isinstance(entry, dict) and entry.get("aoi_water_share") is not None
-            and "share_status" not in entry for entry in payload.get("years") or []
-        ):
+        years = (payload.get("years") or []) if payload is not None else []
+        if any(isinstance(entry, dict) and entry.get("aoi_water_share") is not None
+               and "share_status" not in entry for entry in years):
+            # A legacy share divided by classified pixels only; it is withheld, never served.
+            years = [
+                {**entry, "aoi_water_share": None, "share_status": "superseded"}
+                if isinstance(entry, dict) and "share_status" not in entry else entry
+                for entry in years
+            ]
             warnings.append(make_warning(
                 "share_superseded",
                 "this run's water_share divided by yearly classified pixels only (BKK-054) and is "
@@ -1606,7 +1611,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "product": payload.get("product"),
             "measures": payload.get("measures"),
             "baseline_year": payload.get("baseline_year"),
-            "years": jsonable(payload.get("years", [])),
+            "years": jsonable(years),
             "unavailable_years": jsonable(payload.get("unavailable_years", [])),
             "interpretation_notes": payload.get("interpretation_notes", []),
             "note": payload.get("note"),

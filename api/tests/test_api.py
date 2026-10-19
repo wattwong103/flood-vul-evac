@@ -1349,7 +1349,9 @@ def test_legacy_classified_denominator_shares_are_flagged(client, runs_dir):
     for endpoint in ("observed-water", "observed-water/cells"):
         codes = {w["code"] for w in client.get(f"/v1/runs/legacy/{endpoint}").json()["warnings"]}
         assert "share_superseded" in codes
-    # The inflated per-cell share is withheld, never drawn on the map as a number.
+    # The inflated annual and per-cell shares are withheld, never served as numbers.
+    years = client.get("/v1/runs/legacy/observed-water").json()["years"]
+    assert years == [{**legacy_year, "aoi_water_share": None, "share_status": "superseded"}]
     cells = client.get("/v1/runs/legacy/observed-water/cells?min_share=0.9").json()
     assert [f["properties"]["water_share"] for f in cells["features"]] == [None]
     codes = {w["code"] for w in client.get("/v1/runs/current/observed-water").json()["warnings"]}

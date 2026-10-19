@@ -334,6 +334,7 @@ test("observed-water shares show only the max-extent denominator (BKK-054)", () 
   assert.equal(formatObservedShare(0.106, "ok"), "10.6%");
   // A share with no status is an older run's water / classified: never shown as a share.
   assert.equal(formatObservedShare(0.603, undefined), "superseded (BKK-054)");
+  assert.equal(formatObservedShare(null, "superseded"), "superseded (BKK-054)");
   assert.equal(formatObservedShare(null, "max_extent_unavailable"), NOT_COMPUTED);
   assert.equal(formatObservedShare(null, null), NOT_COMPUTED);
 });
