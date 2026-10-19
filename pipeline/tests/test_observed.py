@@ -93,6 +93,23 @@ def test_water_outside_aoi_is_excluded(tmp_path):
     assert result.aoi_total_pixels == 2
 
 
+def test_gsw_max_extent_is_its_own_licence_gated_resource():
+    # Yearly code 0 cannot be split into "never water" and "unobserved" without
+    # the Maximum Water Extent product (guide p12: 0 not water, 1 water
+    # detected, 255 no data). The licence gate is per resource, so it needs its
+    # own entry rather than riding on the yearly classification's approval.
+    from bkkflow.sources.registry import REGISTRY_PATH, SourceRegistry
+    from bkkflow.util import read_json
+    registry = SourceRegistry(read_json(REGISTRY_PATH))
+    yearly = registry.get(gsw.SOURCE_ID)
+    extent = registry.get("jrc-global-surface-water-max-extent-v1.4")
+    assert yearly.resource_url.endswith("/GSWE/YearlyClassification/LATEST/tiles/")
+    assert extent.resource_url.endswith("/GSWE/Aggregated/LATEST/extent/tiles/")
+    assert extent.licence.startswith("CC BY 4.0")
+    assert extent.raw["licence_url"].endswith("/GSWE/Aggregated/copyright.txt")
+    assert extent.raw["used_in_runs"] is False
+
+
 @pytest.mark.parametrize("wet_column", [1, 6, 11])
 def test_road_samples_cover_each_entire_edge_without_mixing_edges(monkeypatch, wet_column):
     import geopandas as gpd
