@@ -302,6 +302,12 @@ def execute_city_run(
             ) + ". It is EXTENT, not depth, and the annual classification does not resolve the "
             "timing or peak extent of a flood event."
         )
+        extent = observed.get("max_extent") or {}
+        if extent.get("status") != "ok":
+            warnings.append(
+                "JRC Maximum Water Extent unavailable, so every observed water share is null: "
+                + str(extent.get("reason", "no reason recorded"))[:200]
+            )
         anomaly = max(observed_years, key=lambda entry: entry["aoi_water_km2"])
         observed_note = (
             f"JRC GSW yearly classification; wettest year {anomaly['year']} at "
@@ -794,6 +800,11 @@ def execute_city_run(
                 "source_id": "jrc-global-surface-water-v1.4",
                 "licence": "CC BY 4.0",
                 "status": "approved" if observed_source is not None else "unavailable",
+            },
+            {
+                "source_id": gsw.EXTENT_SOURCE_ID,
+                "licence": "CC BY 4.0",
+                "status": "approved" if extent_source is not None else "unavailable",
             },
         ],
         "elapsed_seconds": round(time.time() - started, 1),

@@ -201,6 +201,58 @@ def test_observed_cells_share_the_measure_year_denominator(tmp_path, monkeypatch
         assert result["per_year"][2020]["share_status"] == "max_extent_unavailable"
 
 
+def _build_cells(tmp_path, monkeypatch, aoi_geometry, extent_nodata=None):
+    import geopandas as gpd
+    import pandas as pd
+    import rasterio
+    import build_observed_cells
+    from bkkflow import aoi
+    yearly, bounds = raster_fixture(tmp_path, YEARLY)
+    extent, _ = raster_fixture(tmp_path, EXTENT, name="extent.tif")
+    if extent_nodata is not None:
+        with rasterio.open(extent, "r+") as dst:
+            dst.nodata = extent_nodata
+    name, extent_name = gsw.tile_name_for(2020, bounds), gsw.extent_tile_name_for(bounds)
+    _stage(tmp_path, yearly, name, f"{gsw.BASE}/yearlyClassification2020/{name}")
+    _stage(tmp_path, extent, extent_name, f"{gsw.EXTENT_BASE}/{extent_name}")
+    monkeypatch.setattr(gsw, "STAGED_DIR", tmp_path)
+    monkeypatch.setattr(aoi, "load_aoi", lambda *a: gpd.GeoDataFrame(geometry=[aoi_geometry(bounds)], crs="EPSG:4326"))
+    monkeypatch.setattr(build_observed_cells, "YEARS", (2020,))
+    result = build_observed_cells.build(out_dir=tmp_path / "output")
+    return result, pd.read_parquet(result["path"])
+
+
+def test_observed_cells_keep_pixels_outside_the_aoi_out_of_the_denominator(tmp_path, monkeypatch):
+    from shapely.geometry import box
+    # A sliver keeps pixels 0-1 (never-water) inside the crop window but outside
+    # the AOI; they must fill as unknown, not as never-water land.
+    def aoi_geometry(bounds):
+        west, south, east, north = bounds
+        return box(west, south, west + 0.00002, north).union(box(west + 2 * 0.00025, south, east, north))
+    result, frame = _build_cells(tmp_path, monkeypatch, aoi_geometry)
+    assert result["max_extent"]["status"] == "ok"
+    assert frame["water_px"].sum() == 2 and frame["known_px"].sum() == 3
+    assert frame["water_share"].tolist() == pytest.approx([2 / 3])
+
+
+def test_observed_cells_refuse_an_extent_tile_with_a_zero_nodata_tag(tmp_path, monkeypatch):
+    from shapely.geometry import box
+    with pytest.raises(ValueError, match="nodata"):
+        _build_cells(tmp_path, monkeypatch, lambda bounds: box(*bounds), extent_nodata=0)
+
+
+def test_max_extent_with_a_slightly_different_pixel_size_is_refused(tmp_path):
+    import rasterio
+    from rasterio.transform import from_origin
+    yearly, bounds = raster_fixture(tmp_path, YEARLY)
+    extent = tmp_path / "extent.tif"
+    with rasterio.open(extent, "w", driver="GTiff", width=7, height=1, count=1, dtype="uint8",
+                       crs="EPSG:4326", transform=from_origin(100.5, 13.7, 0.000245, 0.00025)) as dst:
+        dst.write(np.array([EXTENT], dtype="uint8"), 1)
+    with pytest.raises(ValueError, match="grid"):
+        gsw.measure_year(2020, yearly.name, yearly, bounds, extent_path=extent)
+
+
 def test_gsw_max_extent_is_its_own_licence_gated_resource():
     # Yearly code 0 cannot be split into "never water" and "unobserved" without
     # the Maximum Water Extent product (guide p12: 0 not water, 1 water

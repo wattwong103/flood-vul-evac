@@ -77,6 +77,9 @@ EXTENT_BASE = (
 EXTENT_NOT_WATER = 0
 EXTENT_NODATA = 255
 EXTENT_CODES = {0: "not_water", 1: "water_detected", 255: "no_data"}
+# Both products share one grid exactly; affine's default 1e-5 would admit a
+# 4% pixel-size error (review, BKK-054b).
+GRID_TOLERANCE_DEGREES = 1e-9
 SHARE_BASIS = (
     "water / (AOI - unknown). Unknown is yearly code 0 inside the JRC Maximum Water "
     "Extent (unobserved that year) or under its no-data; yearly code 0 outside it "
@@ -258,7 +261,8 @@ def measure_year(
         if extent_path is not None:
             with rasterio.open(extent_path) as extent_dataset:
                 if (extent_dataset.crs != dataset.crs or extent_dataset.shape != dataset.shape
-                        or not extent_dataset.transform.almost_equals(dataset.transform)):
+                        or not extent_dataset.transform.almost_equals(
+                            dataset.transform, precision=GRID_TOLERANCE_DEGREES)):
                     raise ValueError(f"{Path(extent_path).name} is not on the yearly tile's grid")
                 extent = read(extent_dataset)
 

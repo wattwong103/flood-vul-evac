@@ -137,7 +137,7 @@ export const LAYER_LABELS: Record<LayerId, { name: string; quantity: string }> =
   observedWater: {
     name: "Observed water extent",
     quantity:
-      "JRC Global Surface Water: share of each cell classified as water in the selected year. Extent, not depth",
+      "JRC Global Surface Water: share of each cell's known area that is water in the selected year. Extent, not depth",
   },
 };
 
@@ -912,8 +912,9 @@ function MapLegend({ layers }: { layers: LayerState }) {
             <i className="water-1" />
           </p>
           <p>
-            Share of each cell classified as water in the selected year. Marker
-            size rises with the share as well as colour. <b>Extent only:</b> the
+            Share of each cell&apos;s known area that is water in the selected year;
+            grey means the share was not computed. Marker size rises with the
+            share as well as colour. <b>Extent only:</b> the
             classification carries no depth, duration or direction, and no year
             here is a forecast.
           </p>

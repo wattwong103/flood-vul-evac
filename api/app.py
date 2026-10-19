@@ -1574,11 +1574,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         warnings.extend(json_warnings)
         if payload is not None and any(
             isinstance(entry, dict) and entry.get("aoi_water_share") is not None
-            and "share_status" not in entry for entry in payload.get("years", [])
+            and "share_status" not in entry for entry in payload.get("years") or []
         ):
             warnings.append(make_warning(
                 "share_superseded",
-                "this run's water_share divides by yearly classified pixels only; BKK-054 found that overstates water about 6x. Regenerate the run for water / (AOI - unknown)",
+                "this run's water_share divided by yearly classified pixels only (BKK-054) and is "
+                "superseded; regenerate the run for water / (AOI - unknown)",
                 "observed_water.json",
             ))
         if payload is None:
@@ -1662,19 +1663,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         shares = pd.to_numeric(frame["water_share"], errors="coerce")
         if "known_px" not in frame.columns and shares.notna().any():
+            # A legacy share divided by classified pixels only; it is withheld, never served.
+            shares = pd.Series(float("nan"), index=frame.index)
+            frame = frame.assign(water_share=shares)
             warnings.append(make_warning(
                 "share_superseded",
-                "this run's water_share divides by yearly classified pixels only; BKK-054 found that overstates water about 6x. Regenerate the run for water / (AOI - unknown)",
+                "this run's water_share divided by yearly classified pixels only (BKK-054), so it is "
+                "withheld; regenerate the run for water / (AOI - unknown)",
                 "observed_water_cells.parquet",
             ))
-        if shares.isna().all():
-            # A null share has no basis for min_share; every cell is returned.
-            filtered = frame
+        elif shares.isna().all():
             warnings.append(make_warning(
                 "share_not_computed",
                 "water_share is null for this year (no JRC Maximum Water Extent); min_share not applied",
                 "observed_water_cells.parquet",
             ))
+        if shares.isna().all():
+            # A null share has no basis for min_share; every cell is returned.
+            filtered = frame
         else:
             filtered = frame[shares >= min_share]
             if filtered.empty:

@@ -201,6 +201,8 @@ def _write_city_run(root: Path) -> Path:
         {
             "cell_id": ["water-2010", "water-2012"],
             "year": [2010, 2012],
+            "water_px": [1, 2],
+            "known_px": [5, 5],
             "water_share": [0.2, 0.4],
             "water_km2": [0.2, 0.4],
             "lon": [100.5, 100.51],
@@ -314,6 +316,7 @@ def test_observed_water_cells_are_geojson_with_extent_only_properties(client: Te
     assert properties["source_role"] == "observed"
     assert properties["measures"] == "extent_only"
     assert "depth" not in properties
+    assert properties["water_share"] == 0.4  # a current run's share is served as a number
     assert features[0]["geometry"]["type"] == "Point"
 
 

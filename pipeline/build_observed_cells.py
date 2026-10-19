@@ -50,12 +50,12 @@ def build(*, out_dir: Path | None = None) -> dict:
     per_year: dict[int, dict] = {}
     # One extent tile serves every year. Without it shares are null, not
     # water / classified (BKK-054).
-    extent_path: Path | None = gsw.STAGED_DIR / "gsw" / gsw.extent_tile_name_for(bounds)
-    extent_source = {"status": "not_staged", "tile": extent_path.name}
-    if extent_path.is_file():
-        extent_path, extent_source = gsw.staged_extent_tile(bounds)
-    else:
-        extent_path = None
+    extent_path: Path | None = None
+    extent_name = gsw.extent_tile_name_for(bounds)
+    extent_source: dict = {"status": "not_staged", "tile_name": extent_name}
+    if (gsw.STAGED_DIR / "gsw" / extent_name).is_file():
+        extent_path, provenance = gsw.staged_extent_tile(bounds)
+        extent_source = {"status": "ok", "tile_name": extent_name, **provenance}
 
     for year in YEARS:
         name = gsw.tile_name_for(year, bounds)
@@ -72,11 +72,16 @@ def build(*, out_dir: Path | None = None) -> dict:
         extent = None
         if extent_path is not None:
             with rasterio.open(extent_path) as dataset_extent:
+                # rio_mask also masks the tile's own nodata tag; a tag of 0 would
+                # turn never-water into unknown, so refuse any tag but 255.
+                if dataset_extent.nodata not in (None, gsw.EXTENT_NODATA):
+                    raise ValueError(f"{extent_path.name} has nodata tag {dataset_extent.nodata}")
                 # Outside the AOI fills as extent no-data, so it is unknown, not dry.
                 extent_data, extent_transform = rio_mask(
                     dataset_extent, [aoi_wgs84], crop=True, filled=True, nodata=gsw.EXTENT_NODATA
                 )
-            if not extent_transform.almost_equals(transform) or extent_data[0].shape != array.shape:
+            if (not extent_transform.almost_equals(transform, precision=gsw.GRID_TOLERANCE_DEGREES)
+                    or extent_data[0].shape != array.shape):
                 raise ValueError(f"{extent_path.name} is not on the yearly tile's grid")
             extent = extent_data[0]
         water, known = gsw.share_support(array, extent)
@@ -146,6 +151,8 @@ def build(*, out_dir: Path | None = None) -> dict:
         frame["lon"] = wgs84.geometry.x
         frame["lat"] = wgs84.geometry.y
         frame = frame[columns]
+    # Typed even when every share is null, so other parquet readers see numbers.
+    frame = frame.astype({"known_px": "Int64", "water_share": "float64"})
     frame.to_parquet(destination, index=False)
 
     return {
