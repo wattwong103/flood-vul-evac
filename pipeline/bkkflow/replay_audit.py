@@ -89,6 +89,8 @@ class EvacuationReplayAudit:
     remaining_capacity: dict[str, int]
     denominators: dict[str, Any]
     clearance_time_minutes: dict[str, float | None]
+    reason_weights: dict[str, float]
+    clearance_sensitivity_minutes: dict[str, float | None]
 
 
 def _sha256(path: Path) -> str:
@@ -306,8 +308,15 @@ def load_audit_bundle(run_dir: str | Path) -> AuditBundle:
                        cohort_metadata, denominators, file_hashes)
 
 
+_PUBLISHED_QUANTILES = (("p5", Decimal("0.05")), ("median", Decimal("0.50")), ("p95", Decimal("0.95")))
+_SENSITIVITY_QUANTILES = (("p50", Decimal("0.50")), ("p90", Decimal("0.90")))
+
+
 def inverse_weighted_clearance(
-    states: pd.DataFrame, *, warning_time_s: Any
+    states: pd.DataFrame,
+    *,
+    warning_time_s: Any,
+    quantiles: tuple[tuple[str, Decimal], ...] = _PUBLISHED_QUANTILES,
 ) -> dict[str, float | None]:
     """Independently calculate the declared inverse weighted ECDF in minutes."""
     warning = float(warning_time_s)
@@ -315,7 +324,7 @@ def inverse_weighted_clearance(
         raise ValueError("invalid warning time or terminal states")
     arrived = states.loc[states["state"] == "arrived"]
     if arrived.empty:
-        return {"p5": None, "median": None, "p95": None}
+        return {label: None for label, _ in quantiles}
     if not {"event_time_s", "weight"} <= set(arrived):
         raise ValueError("arrived records are incomplete")
     weights = pd.to_numeric(arrived["weight"], errors="coerce").to_numpy(float)
@@ -327,7 +336,6 @@ def inverse_weighted_clearance(
     for value in weights[order]:
         total += Decimal(str(value))
         cumulative.append(total)
-    quantiles = (("p5", Decimal("0.05")), ("median", Decimal("0.50")), ("p95", Decimal("0.95")))
     return {label: float(clearances[order[next(i for i, value in enumerate(cumulative)
                                                if value >= q * total)]]) / 60.0
             for label, q in quantiles}
@@ -831,6 +839,50 @@ def _predraw_departure(
     return warning, compliance, delay
 
 
+def _published_close(observed: Any, expected: float | None) -> bool:
+    if (observed is None) != (expected is None):
+        return False
+    if expected is None:
+        return True
+    value = float(observed)
+    return math.isfinite(value) and abs(value - expected) <= 0.01
+
+
+def _check_sensitivity_metrics(
+    bundle: AuditBundle, states: pd.DataFrame, warning: float, published: dict[str, Any],
+) -> tuple[dict[str, float], dict[str, float | None]]:
+    """Rebuild the ensemble's reason split and p50/p90 from replayed records.
+
+    Release-era stats predate both fields and are accepted without them. A
+    sensitivity case must carry both, and they must match the replay.
+    """
+    reasons = {
+        str(reason): math.fsum(float(value) for value in group["weight"])
+        for reason, group in states.groupby("reason", dropna=False)
+    }
+    clearance = inverse_weighted_clearance(
+        states, warning_time_s=warning, quantiles=_SENSITIVITY_QUANTILES,
+    )
+    arrived = states.loc[states["state"] == "arrived", "weight"]
+    clearance["arrived_weight"] = math.fsum(float(value) for value in arrived)
+
+    observed_reasons = published.get("reason_weights")
+    observed_clearance = published.get("clearance_sensitivity_minutes")
+    case_run = "case_id" in (bundle.manifest.get("active_scenario") or {})
+    if observed_reasons is None and observed_clearance is None and not case_run:
+        return reasons, clearance
+    if (
+        not isinstance(observed_reasons, dict)
+        or set(observed_reasons) != set(reasons)
+        or not all(_published_close(observed_reasons[key], reasons[key]) for key in reasons)
+        or not isinstance(observed_clearance, dict)
+        or set(observed_clearance) != set(clearance)
+        or not all(_published_close(observed_clearance[key], clearance[key]) for key in clearance)
+    ):
+        raise ValueError("published sensitivity mismatch")
+    return reasons, clearance
+
+
 def replay_evacuation(bundle: AuditBundle) -> EvacuationReplayAudit:
     """Replay RNG, integerized capacity and terminal records independently."""
     routing = reconstruct_peak_routes(bundle)
@@ -973,7 +1025,10 @@ def replay_evacuation(bundle: AuditBundle) -> EvacuationReplayAudit:
     expected_capacity = {key: (capacity[key], remaining[key]) for key in capacity}
     if observed_capacity != expected_capacity:
         raise ValueError("published destination capacity mismatch")
-    return EvacuationReplayAudit(states, remaining, denominators, clearance)
+    reasons, sensitivity_clearance = _check_sensitivity_metrics(bundle, states, warning, published)
+    return EvacuationReplayAudit(
+        states, remaining, denominators, clearance, reasons, sensitivity_clearance,
+    )
 
 
 def final_audit_report(bundle: AuditBundle) -> dict[str, Any]:
@@ -997,6 +1052,8 @@ def final_audit_report(bundle: AuditBundle) -> dict[str, Any]:
             "terminal_weights": {key: terminal[key]["weight"] for key in TERMINAL_STATES},
             "remaining_capacity": audit.remaining_capacity,
             "clearance_time_minutes": audit.clearance_time_minutes,
+            "reason_weights": audit.reason_weights,
+            "clearance_sensitivity_minutes": audit.clearance_sensitivity_minutes,
             "conservation": audit.denominators["conservation"],
         },
     }

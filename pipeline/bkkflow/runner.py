@@ -74,6 +74,9 @@ class RunContext:
     sources: dict[str, str]
     named_pilot: bool
     active_scenario: dict[str, str]
+    # Ordinary runs keep the release's sequential draws; only sensitivity
+    # cases predraw, so one factor's change cannot reshuffle the others.
+    departure_rng: str = evacuation_module.DEPARTURE_RNG_SEQUENTIAL
     stages: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     source_versions: list[dict[str, Any]] = field(default_factory=list)
@@ -263,6 +266,11 @@ def execute_run(
         sources=bundle.sources,
         named_pilot=bundle.named,
         active_scenario=active_scenario,
+        departure_rng=(
+            evacuation_module.DEPARTURE_RNG_PREDRAW
+            if case is not None
+            else evacuation_module.DEPARTURE_RNG_SEQUENTIAL
+        ),
     )
     context.write_state("validating_inputs")
 
@@ -787,6 +795,7 @@ def _finish_run(
         refuge_capacity=evac_config["refuge_capacity"],
         destinations=destinations.drop(columns="geometry").to_dict("records"),
         notes=list(evac_config["notes"]),
+        rng=context.departure_rng,
     )
     states, outcomes = evacuation_module.simulate_evacuation(
         cohort, destinations=destinations, route_lookup=route_lookup,
@@ -1080,6 +1089,7 @@ def execute_sensitivity_ensemble(
     bundle = load_pilot_bundle(pilot_id, config_dir=CONFIG_DIR, curated_dir=CURATED_DIR)
     cases = ensemble_cases(load_sensitivity_table(bundle.scenario))
     results = []
+    audits = []
     baseline_id = None
     for case in cases:
         result = execute_run(
@@ -1095,11 +1105,16 @@ def execute_sensitivity_ensemble(
             replay_audit.load_audit_bundle(Path(result["run_dir"]))
         )
         if audit["status"] != "PASS":
-            raise ValueError(f"sensitivity case {case.case_id} failed replay audit")
+            detail = "; ".join(
+                str(check.get("detail", "")) for check in audit.get("checks", [])
+                if check.get("status") != "PASS"
+            )
+            raise ValueError(f"sensitivity case {case.case_id} failed replay audit: {detail}")
         if case.case_id == "baseline":
             baseline_id = result["run_id"]
         results.append(result)
-    report = build_sensitivity_ensemble([Path(item["run_dir"]) for item in results])
+        audits.append(audit)
+    report = build_sensitivity_ensemble([Path(item["run_dir"]) for item in results], audits)
     destination = RUNS_DIR / f"{pilot_id}-sensitivity-ensemble.json"
     write_json(destination, report)
     return {

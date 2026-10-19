@@ -83,7 +83,7 @@ class EvacuationScenario:
     refuge_capacity: int = 2000
     destinations: list[dict[str, Any]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-    rng: str = DEPARTURE_RNG_PREDRAW
+    rng: str = DEPARTURE_RNG_SEQUENTIAL
 
     def as_manifest_entry(self, seed: int) -> dict[str, Any]:
         return {

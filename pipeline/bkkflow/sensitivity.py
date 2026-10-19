@@ -6,12 +6,12 @@ the baseline. It is not a calibration, an interaction study, or a city result.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-from .util import read_json
 
 APPROVED_FLOOD_SEVERITIES = ("low", "moderate", "high")
 APPROVED_COMPLIANCE = (0.6, 0.78, 0.9)
@@ -25,11 +25,14 @@ COMPARISON_FACTORS = (
     "warning_reach",
     "preparation_delay_mean_s",
 )
+ENSEMBLE_DEPARTURE_RNG = "predraw-v1"
 LIMITATIONS = (
     "Departure priors are uncalibrated scenario bounds.",
     "The design is one-at-a-time and is not an interaction study.",
     "Clearance percentiles use arrived weight only and sit beside the not-departed shares.",
     "These are scenario results for the named area of interest.",
+    "Cases use predraw-v1 departure draws and compare only with the ensemble baseline, "
+    "never with ordinary or release runs, which use sequential-v0 draws.",
 )
 _CITYWIDE_AOI = {"bangkok", "bangkok-bma"}
 _LEVEL_TOLERANCE = 1e-9
@@ -425,8 +428,8 @@ def _case_parameters(manifest: dict[str, Any]) -> dict[str, Any]:
     thresholds = (manifest.get("evacuation_scenario") or {}).get("mode_thresholds")
     if not isinstance(departure, dict) or not isinstance(thresholds, dict):
         raise ValueError("departure model is missing")
-    if departure.get("rng") != "predraw-v1":
-        raise ValueError("sensitivity runs require departure rng predraw-v1")
+    if departure.get("rng") != ENSEMBLE_DEPARTURE_RNG:
+        raise ValueError(f"sensitivity runs require departure rng {ENSEMBLE_DEPARTURE_RNG}")
     return {
         "flood": _flood_level(manifest),
         "compliance": _finite_number(departure.get("compliance"), "compliance"),
@@ -445,20 +448,61 @@ def _share(weight: float, total: float) -> float:
     return weight / total
 
 
-def build_sensitivity_ensemble(run_dirs: list[Path]) -> dict[str, Any]:
-    """Read saved runs and publish one demonstration sensitivity table."""
+def _read_audited_json(path: Path, audit: Any) -> Any:
+    """Parse a saved file only if its bytes are the ones the replay audit hashed."""
+    hashes = audit.get("audited_hashes") if isinstance(audit, dict) else None
+    expected = hashes.get(path.name) if isinstance(hashes, dict) else None
+    data = path.read_bytes()
+    if not isinstance(expected, str) or hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError(f"{path.name} differs from the replay-audited bytes")
+    return json.loads(data.decode("utf-8"))
+
+
+def _audited_outcomes(
+    audit: Any, run_id: Any, aoi_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Return one case's terminal, reason and clearance values from its replay audit."""
+    if not isinstance(audit, dict) or audit.get("status") != "PASS":
+        raise ValueError("sensitivity case has no passing replay audit")
+    if audit.get("run_id") != run_id or audit.get("aoi_id") != aoi_id:
+        raise ValueError("sensitivity replay audit is for another run")
+    reconstructed = audit.get("reconstructed")
+    parts = tuple(
+        reconstructed.get(name) if isinstance(reconstructed, dict) else None
+        for name in (
+            "terminal_weights",
+            "reason_weights",
+            "clearance_sensitivity_minutes",
+            "clearance_time_minutes",
+        )
+    )
+    if not all(isinstance(part, dict) for part in parts):
+        raise ValueError("sensitivity replay audit is incomplete")
+    return parts
+
+
+def build_sensitivity_ensemble(
+    run_dirs: list[Path], audits: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Publish one demonstration sensitivity table from replay-audited runs.
+
+    Shares and clearance come from each run's independent replay, so only the
+    identity, cohort and denominator fields are read from the saved stats.
+    """
     if not run_dirs:
         raise ValueError("sensitivity ensemble has no runs")
+    if len(audits) != len(run_dirs):
+        raise ValueError("sensitivity ensemble needs one replay audit per run")
     loaded = []
-    for run_dir in run_dirs:
-        manifest = read_json(Path(run_dir) / "manifest.json")
-        stats = read_json(Path(run_dir) / "stats.json")
-        loaded.append((Path(run_dir), manifest, stats))
+    for run_dir, audit in zip(run_dirs, audits):
+        manifest = _read_audited_json(Path(run_dir) / "manifest.json", audit)
+        stats = _read_audited_json(Path(run_dir) / "stats.json", audit)
+        loaded.append((Path(run_dir), manifest, stats, audit))
 
     aoi_ids = set()
     cohort_ids = set()
     rows = []
-    for run_dir, manifest, stats in loaded:
+    for run_dir, manifest, stats, audit in loaded:
         geography = manifest.get("geography") if isinstance(manifest.get("geography"), dict) else {}
         stats_geography = stats.get("geography") if isinstance(stats.get("geography"), dict) else {}
         aoi_id = geography.get("aoi_id")
@@ -482,15 +526,9 @@ def build_sensitivity_ensemble(run_dirs: list[Path]) -> dict[str, Any]:
         cohort_weight = _finite_number(cohort.get("weight"), "cohort weight")
         if cohort_weight <= 0:
             raise ValueError("sensitivity cohort weight must be positive")
-        evacuation = stats.get("evacuation") if isinstance(stats.get("evacuation"), dict) else {}
-        states = evacuation.get("state_distribution")
-        reasons = evacuation.get("reason_weights")
-        clearance = evacuation.get("clearance_sensitivity_minutes")
-        published = evacuation.get("clearance_time_minutes")
-        if not isinstance(states, dict) or not isinstance(reasons, dict) or not isinstance(clearance, dict):
-            raise ValueError("sensitivity clearance is missing")
-        if not isinstance(published, dict):
-            raise ValueError("sensitivity clearance is missing")
+        states, reasons, clearance, published = _audited_outcomes(
+            audit, stats.get("run_id"), aoi_id
+        )
         arrived_denominator = (
             (stats.get("denominators") or {}).get("clearance_denominator") or {}
         ).get("weight")
@@ -536,6 +574,7 @@ def build_sensitivity_ensemble(run_dirs: list[Path]) -> dict[str, Any]:
                 "p90": None if p90 is None else _finite_number(p90, "p90"),
                 "arrived_weight": arrived_weight,
             },
+            "audited_hashes": dict(audit.get("audited_hashes") or {}),
         })
 
     if len(aoi_ids) != 1:
@@ -595,12 +634,14 @@ def build_sensitivity_ensemble(run_dirs: list[Path]) -> dict[str, Any]:
                 )
             },
             "clearance_minutes": row["clearance_minutes"],
+            "audited_hashes": row["audited_hashes"],
         })
     aoi_id = next(iter(aoi_ids))
     return {
         "status": "demonstration",
         "design": "one_at_a_time",
         "compared_with": "ensemble_baseline",
+        "departure_rng": ENSEMBLE_DEPARTURE_RNG,
         "aoi_id": aoi_id,
         "cohort_id": next(iter(cohort_ids)),
         "citywide": False,

@@ -172,6 +172,9 @@ class NetworkIndex:
         self.graph = graph
         self.analysis_crs = analysis_crs
         nodes = list(graph.nodes(data=True))
+        if not nodes:
+            # A flood state that closes every edge leaves nothing to snap to.
+            raise ValueError("no open routing network: every edge is closed or the graph is empty")
         self.node_ids = [node for node, _ in nodes]
         self.coords = np.array([[data["x"], data["y"]] for _, data in nodes], dtype="float64")
         self.tree = cKDTree(self.coords)

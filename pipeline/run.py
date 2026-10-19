@@ -242,7 +242,7 @@ def main() -> int:
 
     ensemble = sub.add_parser(
         "sensitivity-ensemble",
-        help="run the one-at-a-time Khlong San sensitivity cases",
+        help="run the one-at-a-time sensitivity cases for one named pilot",
     )
     ensemble.add_argument("--pilot", required=True)
     ensemble.add_argument("--max-agents", type=int, default=None)

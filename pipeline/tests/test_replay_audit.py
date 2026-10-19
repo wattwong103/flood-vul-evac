@@ -425,10 +425,13 @@ def test_integerized_capacity_partition_preserves_fractional_weight() -> None:
 def test_missing_departure_rng_keeps_the_sequential_replay(published_run: Path) -> None:
     bundle = replay_audit.load_audit_bundle(published_run)
     departure = bundle.manifest["evacuation_scenario"]["departure_model"]
-    assert departure["rng"] == "predraw-v1"
+    assert departure["rng"] == "sequential-v0"
+
+    # Release-era manifests carry no rng key and must replay sequentially.
+    del departure["rng"]
     replay_audit.replay_evacuation(bundle)
 
-    del departure["rng"]
+    departure["rng"] = "predraw-v1"
     with pytest.raises(ValueError, match="saved terminal"):
         replay_audit.replay_evacuation(bundle)
 
@@ -457,6 +460,46 @@ def test_final_audit_report_never_passes_failed_replay(published_run: Path) -> N
     assert report["status"] == "FAIL"
     assert "PASS" not in str(report)
     assert report["checks"][0]["status"] == "FAIL"
+
+
+@pytest.mark.parametrize("field", ["reason", "p90", "arrived_weight"])
+def test_replay_rejects_altered_sensitivity_metrics(published_run: Path, field: str) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    evacuation = bundle.stats["evacuation"]
+    if field == "reason":
+        reasons = evacuation["reason_weights"]
+        reasons["not_warned"] = float(reasons.get("not_warned", 0.0)) + 1.0
+    elif field == "p90":
+        clearance = evacuation["clearance_sensitivity_minutes"]
+        clearance["p90"] = float(clearance["p90"] or 0.0) + 1.0
+    else:
+        evacuation["clearance_sensitivity_minutes"]["arrived_weight"] += 1.0
+
+    with pytest.raises(ValueError, match="published sensitivity mismatch"):
+        replay_audit.replay_evacuation(bundle)
+
+
+def test_final_audit_report_reconstructs_sensitivity_metrics(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    report = replay_audit.final_audit_report(bundle)
+
+    assert report["status"] == "PASS"
+    reconstructed = report["reconstructed"]
+    published = bundle.stats["evacuation"]
+    assert set(reconstructed["reason_weights"]) == set(published["reason_weights"])
+    for reason, weight in published["reason_weights"].items():
+        assert reconstructed["reason_weights"][reason] == pytest.approx(weight)
+    for key, value in published["clearance_sensitivity_minutes"].items():
+        rebuilt = reconstructed["clearance_sensitivity_minutes"][key]
+        assert rebuilt == (None if value is None else pytest.approx(value))
+
+
+def test_release_era_stats_without_sensitivity_metrics_still_replay(published_run: Path) -> None:
+    bundle = replay_audit.load_audit_bundle(published_run)
+    del bundle.stats["evacuation"]["reason_weights"]
+    del bundle.stats["evacuation"]["clearance_sensitivity_minutes"]
+
+    replay_audit.replay_evacuation(bundle)
 
 
 @pytest.mark.parametrize("field", ["cohort_weighted", "median_clearance", "terminal_event"])
