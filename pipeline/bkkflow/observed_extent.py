@@ -27,7 +27,7 @@ LATTICE_M = 50.0
 BLOCK_NODES = 2  # a 100 m block is an exact 2 x 2 group of lattice points (D4, R2)
 STORAGE_FLOOR_M = 0.01  # the scenario stores only points deeper than this
 OBSERVED_WET_RULE = 0.5  # observed-wet share of a block's evaluable area (D4)
-MIN_EVALUABLE = 0.5  # share of a block evaluable on both sides to enter the domain (D4)
+MIN_EVALUABLE = 0.5  # share evaluable on both sides: a block to enter the domain (D4), a point to set its rank
 _LATTICE_TOL_M = 1e-3
 _TOL = 1e-9
 _FRACTIONS = ["observed_wet_frac", "channel_frac"]
@@ -214,10 +214,15 @@ def block_table(nodes: pd.DataFrame, observed: pd.DataFrame, layer: str) -> pd.D
     in the AOI and the comparison layer outside the channel mask (``observed_wet_frac``),
     and in the AOI and the union channel mask (``channel_frac``). Areas are true areas:
     a square's AOI share comes from ``aoi_frac``, and AOI slivers of squares centred
-    outside the AOI were never stored, so they count as outside. A block's declared rank
-    is its minimum stored distance; blocks with no stored point tie at the bottom (``inf``).
-    Blocks below the evaluable rule are ``unknown``, with the reason that removed most
-    area (ties go outside_aoi, then not_evaluated, then channel).
+    outside the AOI were never stored, so they count as outside. Blocks below the
+    evaluable rule are ``unknown``, with the reason that removed most area (ties go
+    outside_aoi, then not_evaluated, then channel).
+
+    A block's primary declared rank, ``min_stored_distance_m``, is the minimum stored
+    distance over its evaluable points: those with at least half their square evaluable,
+    so masked water cannot re-enter through the declared side (North, 20 Oct 2026, #4).
+    ``min_stored_distance_all_m`` keeps the literal rank over every stored point for the
+    pre-declared sensitivity row. Either rank is ``inf`` (a bottom tie) with no qualifying point.
     """
     spec = _comparison_spec(layer)
     _require_role(observed, spec["source_role"], "observed")
@@ -229,15 +234,16 @@ def block_table(nodes: pd.DataFrame, observed: pd.DataFrame, layer: str) -> pd.D
     channel = frame["channel_frac"].where(evaluated, 0.0)
     if ((wet < -_TOL) | (channel < -_TOL) | (wet + channel > frame["aoi_frac"] + _TOL)).any():
         raise ValueError("observed fractions must be disjoint shares of each square's AOI part")
+    open_area = (frame["aoi_frac"] - channel).where(evaluated, 0.0)
     frame = frame.assign(
-        bi=frame["i"] // BLOCK_NODES, bj=frame["j"] // BLOCK_NODES, wet=wet, channel=channel,
-        open=(frame["aoi_frac"] - channel).where(evaluated, 0.0),
+        bi=frame["i"] // BLOCK_NODES, bj=frame["j"] // BLOCK_NODES, wet=wet, channel=channel, open=open_area,
         not_evaluated=frame["aoi_frac"].where(~evaluated, 0.0),
+        rank_distance=frame["distance_to_water_m"].where(open_area >= MIN_EVALUABLE - _TOL),
     )
     blocks = frame.groupby(["bi", "bj"], as_index=False).agg(
         points=("i", "size"), in_aoi=("aoi_frac", "sum"), open=("open", "sum"), wet=("wet", "sum"),
         channel=("channel", "sum"), not_evaluated=("not_evaluated", "sum"),
-        min_stored_distance_m=("distance_to_water_m", "min"),
+        min_stored_distance_m=("rank_distance", "min"), min_stored_distance_all_m=("distance_to_water_m", "min"),
     )
     cells = BLOCK_NODES ** 2
     in_domain = blocks["open"] >= MIN_EVALUABLE * cells - _TOL
@@ -249,6 +255,7 @@ def block_table(nodes: pd.DataFrame, observed: pd.DataFrame, layer: str) -> pd.D
         evaluable_share=blocks["open"] / cells,
         bottom_tie=blocks["min_stored_distance_m"].isna(),
         min_stored_distance_m=blocks["min_stored_distance_m"].fillna(np.inf),
+        min_stored_distance_all_m=blocks["min_stored_distance_all_m"].fillna(np.inf),
         state=np.where(in_domain, observed_state, "unknown"),
         unknown_reason=removed.idxmax(axis=1).where(~in_domain),
     )
@@ -291,7 +298,9 @@ def build_record(
             "source_role": "scenario",
             "model": f"{flood_scenario['model_name']} {flood_scenario['model_version']}",
             "severity": params["severity"], "rank_field": "distance_to_water_m",
-            "block_rank": "min_stored_distance", "storage_corridor_m": round(corridor),
+            "block_rank": "min_stored_distance_over_evaluable_points",
+            "sensitivity_block_rank": "min_stored_distance_over_all_stored_points",
+            "storage_corridor_m": round(corridor),
             "not_evaluated_share": declared_coverage(nodes)["not_evaluated_share"],
             "input_sha256": declared_sha256,
         },

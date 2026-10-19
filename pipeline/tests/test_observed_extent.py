@@ -139,6 +139,39 @@ def test_blocks_are_lattice_aligned_and_ranked_by_minimum_stored_distance():
     assert blocks.loc[(1, 1), ["state", "unknown_reason"]].tolist() == ["unknown", "not_evaluated"]
 
 
+def test_primary_rank_uses_only_evaluable_points_and_the_sensitivity_rank_keeps_all():
+    s, b = "stored", "evaluated_below_storage"
+    nodes = nodes_frame([
+        (0, 0, s, 2.0), (1, 0, s, 60.0), (0, 1, s, 70.0), (1, 1, s, 80.0),  # a canal point beside land
+        (2, 0, s, 5.0), (3, 0, b, None), (2, 1, b, None), (3, 1, b, None),  # only the canal is stored
+        (4, 0, s, 3.0), (5, 0, s, 40.0), (4, 1, s, 25.0), (5, 1, b, None),  # partial channel shares
+    ])
+    observed = observed_for(nodes, cells={
+        (0, 0): (0.0, 1.0), (2, 0): (0.0, 1.0), (4, 0): (0.0, 0.6), (4, 1): (0.0, 0.4)})
+    blocks = by_block(oec.block_table(nodes, observed, "mitrearth-flood-gistda"))
+    ranks = ["state", "min_stored_distance_m", "min_stored_distance_all_m"]
+    # Masked water must not re-enter through the declared side: the land sets the primary rank.
+    assert blocks.loc[(0, 0), ranks].tolist() == ["not_mapped_as_flooded", 60.0, 2.0]
+    # In the domain with no evaluable stored point: the primary rank ties at the bottom.
+    assert blocks.loc[(1, 0), ranks].tolist() == ["not_mapped_as_flooded", np.inf, 5.0]
+    assert blocks.loc[(1, 0), "bottom_tie"] and not blocks.loc[(0, 0), "bottom_tie"]
+    # A point counts when at least half its square is evaluable: 40% channel counts, 60% does not.
+    assert blocks.loc[(2, 0), ranks].tolist() == ["not_mapped_as_flooded", 25.0, 3.0]
+
+
+@pytest.mark.parametrize("aoi_frac, channel, counts", [
+    (1.0, 0.5, True), (0.7, 0.2, True),  # exactly half evaluable (0.7 - 0.2 is 0.4999... in floats)
+    (0.3, 0.0, False),  # a square mostly outside the AOI does not set the rank
+])
+def test_rank_threshold_is_half_the_square(aoi_frac, channel, counts):
+    nodes = nodes_frame([(0, 0, "stored", 4.0, aoi_frac), (1, 0, "stored", 90.0), (0, 1, "stored", 95.0),
+                         (2, 0, "evaluated_below_storage", None)])  # block (1, 0): nothing stored
+    observed = observed_for(nodes, cells={(0, 0): (0.0, channel)})
+    blocks = by_block(oec.block_table(nodes, observed, "mitrearth-flood-gistda"))
+    assert blocks.loc[(0, 0), "min_stored_distance_m"] == (4.0 if counts else 90.0)
+    assert blocks.loc[(1, 0), ["min_stored_distance_m", "min_stored_distance_all_m"]].tolist() == [np.inf] * 2
+
+
 # Test 3: per-layer domains; no observation is not dry
 def test_gsw_code_zero_is_never_channel_or_not_mapped():
     assert oec.gsw_channel(np.array([0, 1, 2, 3])).tolist() == [False, False, False, True]
@@ -220,6 +253,8 @@ def test_record_carries_labels_assumptions_and_no_metrics():
     assert set(record["assumption_text"]) == set(record["assumptions"])
     assert record["metrics"] is None and record["protocol_version"] == "oec-v1"
     assert record["declared"]["storage_corridor_m"] == 601
+    assert record["declared"]["block_rank"] == "min_stored_distance_over_evaluable_points"
+    assert record["declared"]["sensitivity_block_rank"] == "min_stored_distance_over_all_stored_points"
     assert record["declared"]["source_role"] == "scenario" and record["observed"]["source_role"] == "mapped"
     assert record["unit"] == {"crs": CRS, "block_m": 100, "lattice_origin_mod50": [10.0, 20.0],
                               "observed_wet_rule": ">=0.5 evaluable area",
