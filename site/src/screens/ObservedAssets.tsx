@@ -92,6 +92,7 @@ import {
   formatCount,
   formatNumber,
   formatPeople,
+  formatObservedShare,
   formatShare,
   formatSigned,
   formatText,
@@ -311,9 +312,10 @@ export function ObservedAssets({ reducedMotion }: { reducedMotion: boolean }) {
           <li>
             <h3>Observation coverage varies</h3>
             <p>
-              Unobserved pixels are not evidence of dry land. Compare classified area
-              alongside water area; a share of classified pixels is not a share
-              of the whole city. The API interpretation notes appear below.
+              Unobserved pixels are not evidence of dry land. The water share
+              divides by the area whose status is known: pixels the year classified
+              plus pixels never detected as water in the JRC Maximum Water Extent.
+              The API interpretation notes appear below.
             </p>
           </li>
           <li>
@@ -938,8 +940,11 @@ function YearTable({
     return [
       value === null ? NOT_COMPUTED : String(value),
       formatNumber(firstNumber(entry, "aoi_water_km2", "water_km2"), 2),
-      formatShare(firstNumber(entry, "aoi_water_share", "water_share")),
-      formatNumber(firstNumber(entry, "aoi_area_km2", "classified_km2"), 1),
+      formatObservedShare(
+        firstNumber(entry, "aoi_water_share", "water_share"),
+        entry.share_status,
+      ),
+      formatNumber(firstNumber(entry, "known_km2"), 1),
       entry.excess_km2_vs_baseline === null ||
       entry.excess_km2_vs_baseline === undefined
         ? NOT_COMPUTED
@@ -973,15 +978,15 @@ function YearTable({
       head={[
         "year",
         "water area (km²)",
-        "share of classified area",
-        "classified area (km²)",
+        "water share of known area",
+        "known area (km²)",
         "excess vs baseline",
         "state",
         "map",
       ]}
       rows={rows}
       empty="The API published no annual water record for this run."
-      note="Water share uses classified pixels only; unobserved pixels are excluded. Annual area is not an event-flood footprint. The baseline year is named."
+      note="Water share = water / (AOI - unknown). Unknown is yearly code 0 inside the JRC Maximum Water Extent; code 0 outside it was never detected as water. Annual area is not an event-flood footprint. The baseline year is named."
     />
   );
 }

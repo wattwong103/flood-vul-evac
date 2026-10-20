@@ -1572,6 +1572,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         warnings: list[ApiWarning] = []
         payload, json_warnings = _read_json_object(artefact_path(run, "observed_water.json"))
         warnings.extend(json_warnings)
+        years = (payload.get("years") or []) if payload is not None else []
+        if any(isinstance(entry, dict) and entry.get("aoi_water_share") is not None
+               and "share_status" not in entry for entry in years):
+            # A legacy share divided by classified pixels only; it is withheld, never served.
+            years = [
+                {**entry, "aoi_water_share": None, "share_status": "superseded"}
+                if isinstance(entry, dict) and "share_status" not in entry else entry
+                for entry in years
+            ]
+            warnings.append(make_warning(
+                "share_superseded",
+                "this run's water_share divided by yearly classified pixels only (BKK-054) and is "
+                "superseded; regenerate the run for water / (AOI - unknown)",
+                "observed_water.json",
+            ))
         if payload is None:
             return {
                 "run_id": run.run_id,
@@ -1596,7 +1611,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "product": payload.get("product"),
             "measures": payload.get("measures"),
             "baseline_year": payload.get("baseline_year"),
-            "years": jsonable(payload.get("years", [])),
+            "years": jsonable(years),
             "unavailable_years": jsonable(payload.get("unavailable_years", [])),
             "interpretation_notes": payload.get("interpretation_notes", []),
             "note": payload.get("note"),
@@ -1651,9 +1666,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         selected_year = year if year is not None else max(years)
         frame = frame[frame["year"] == selected_year]
 
-        filtered = frame[frame["water_share"] >= min_share]
-        if filtered.empty:
+        shares = pd.to_numeric(frame["water_share"], errors="coerce")
+        if "known_px" not in frame.columns and shares.notna().any():
+            # A legacy share divided by classified pixels only; it is withheld, never served.
+            shares = pd.Series(float("nan"), index=frame.index)
+            frame = frame.assign(water_share=shares)
+            warnings.append(make_warning(
+                "share_superseded",
+                "this run's water_share divided by yearly classified pixels only (BKK-054), so it is "
+                "withheld; regenerate the run for water / (AOI - unknown)",
+                "observed_water_cells.parquet",
+            ))
+        elif shares.isna().all():
+            warnings.append(make_warning(
+                "share_not_computed",
+                "water_share is null for this year (no JRC Maximum Water Extent); min_share not applied",
+                "observed_water_cells.parquet",
+            ))
+        if shares.isna().all():
+            # A null share has no basis for min_share; every cell is returned.
             filtered = frame
+        else:
+            filtered = frame[shares >= min_share]
+            if filtered.empty:
+                filtered = frame
 
         matched = len(filtered)
         truncated = matched > limit
@@ -1673,7 +1709,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 {
                     "cell_id": row.cell_id,
                     "year": int(row.year),
-                    "water_share": float(row.water_share),
+                    "water_share": None if pd.isna(row.water_share) else float(row.water_share),
                     "water_km2": float(row.water_km2),
                     "source_role": "observed",
                     "measures": "extent_only",

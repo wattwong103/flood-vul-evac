@@ -74,19 +74,28 @@ externally recorded, not embedded in its manifest.
 ### Observed annual surface water
 
 JRC Global Surface Water v1.4 distinguishes no observations (0), non-water (1),
-seasonal water (2) and permanent water (3). The following replaces the withdrawn
-pre-correction values and the unsupported claim that the 2011 flood was absent.
+seasonal water (2) and permanent water (3). JRC computes the yearly layers only
+inside its Maximum Water Extent, so most code-0 pixels were never detected as
+water at all (BKK-054). The values below are regenerated from the `stats.json` of
+city run `55cc7d9d-d92e-4757-93e7-1f08dae35a4f` (commit `0dc56f3`).
+They supersede the 4 October shares, which divided water by classified pixels only
+and overstated it about six times.
+Water areas are unchanged. No other figure from that run is cited here; the city
+layer still has no admitted result (BKK-040).
 
-| Year | Water area | Classified area | Water share of classified area |
+| Year | Water area | Area with known status | Water share of known area |
 |---|---:|---:|---:|
-| 2010 | 157.8473 km² | 272.0265 km² | 58.03% |
-| 2011 | 170.7147 km² | 284.7396 km² | 59.95% |
-| 2012 | 143.4223 km² | 281.2608 km² | 50.99% |
-| 2020 | 173.7170 km² | 288.0152 km² | 60.32% |
+| 2010 | 157.8473 km² | 1,625.4424 km² | 9.71% |
+| 2011 | 170.7147 km² | 1,638.1555 km² | 10.42% |
+| 2012 | 143.4223 km² | 1,634.6767 km² | 8.77% |
+| 2020 | 173.7170 km² | 1,641.4868 km² | 10.58% |
 
-About 83% of the BMA has no observations in each of these annual classifications.
-It must not be counted as dry land. These are annual surface-water classifications,
-including permanent water, not event-specific flood footprints or depth.
+Known area is the BMA minus unknown pixels. Yearly code 0 covers 82.6–83.6% of the
+BMA, but 97.9–99.0% of it lies outside the Maximum Water Extent: never detected
+as water in 1984–2021, it counts as not water. Only 0.8–1.8% of the BMA is
+unknown each year (code 0 inside the extent, or extent no-data), and it must not be
+counted as dry land. These are annual surface-water classifications, including
+permanent water, not event-specific flood footprints or depth.
 
 ### Conditional connectivity
 

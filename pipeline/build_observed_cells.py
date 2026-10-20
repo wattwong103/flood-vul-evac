@@ -48,6 +48,14 @@ def build(*, out_dir: Path | None = None) -> dict:
 
     records: list[dict] = []
     per_year: dict[int, dict] = {}
+    # One extent tile serves every year. Without it shares are null, not
+    # water / classified (BKK-054).
+    extent_path: Path | None = None
+    extent_name = gsw.extent_tile_name_for(bounds)
+    extent_source: dict = {"status": "not_staged", "tile_name": extent_name}
+    if (gsw.STAGED_DIR / "gsw" / extent_name).is_file():
+        extent_path, provenance = gsw.staged_extent_tile(bounds)
+        extent_source = {"status": "ok", "tile_name": extent_name, **provenance}
 
     for year in YEARS:
         name = gsw.tile_name_for(year, bounds)
@@ -60,7 +68,26 @@ def build(*, out_dir: Path | None = None) -> dict:
             data, transform = rio_mask(
                 dataset, [aoi_wgs84], crop=True, filled=True, nodata=gsw.CODE_NO_OBSERVATIONS
             )
+            yearly_crs = dataset.crs
         array = data[0]
+        extent = None
+        if extent_path is not None:
+            with rasterio.open(extent_path) as dataset_extent:
+                # rio_mask also masks the tile's own nodata tag; a tag of 0 would
+                # turn never-water into unknown, so refuse any tag but 255.
+                if dataset_extent.nodata not in (None, gsw.EXTENT_NODATA):
+                    raise ValueError(f"{extent_path.name} has nodata tag {dataset_extent.nodata}")
+                if dataset_extent.crs != yearly_crs:
+                    raise ValueError(f"{extent_path.name} is not on the yearly tile's grid (CRS)")
+                # Outside the AOI fills as extent no-data, so it is unknown, not dry.
+                extent_data, extent_transform = rio_mask(
+                    dataset_extent, [aoi_wgs84], crop=True, filled=True, nodata=gsw.EXTENT_NODATA
+                )
+            if (not extent_transform.almost_equals(transform, precision=gsw.GRID_TOLERANCE_DEGREES)
+                    or extent_data[0].shape != array.shape):
+                raise ValueError(f"{extent_path.name} is not on the yearly tile's grid")
+            extent = extent_data[0]
+        water, known = gsw.share_support(array, extent)
         rows, cols = array.shape
         # Cell-centre coordinates in the raster CRS, then a projected grid.
         col_index = np.arange(cols)
@@ -77,12 +104,11 @@ def build(*, out_dir: Path | None = None) -> dict:
         gx = (np.floor(px / GRID_M) * GRID_M).astype("int64")
         gy = (np.floor(py / GRID_M) * GRID_M).astype("int64")
 
-        water = gsw.is_water(array).ravel()
-        land = (~np.isin(array.ravel(), gsw.CODE_NODATA)).ravel()
-
-        paired = pd.DataFrame({"gx": gx, "gy": gy, "w": water.astype("int64"), "c": land.astype("int64")})
-        grouped = paired.groupby(["gx", "gy"])[["w", "c"]].sum()
-        grouped = grouped[(grouped["c"] > 0) & (grouped["w"] > 0)]
+        known_flat = known.ravel() if known is not None else np.zeros(water.size, dtype=bool)
+        paired = pd.DataFrame({"gx": gx, "gy": gy, "w": water.ravel().astype("int64"),
+                               "k": known_flat.astype("int64")})
+        grouped = paired.groupby(["gx", "gy"])[["w", "k"]].sum()
+        grouped = grouped[grouped["w"] > 0]
         grouped = grouped.reset_index()
 
         # Pixel footprint in km^2 at this latitude band: 0.00025 deg of
@@ -98,8 +124,8 @@ def build(*, out_dir: Path | None = None) -> dict:
                     "x": row.gx + GRID_M / 2.0,
                     "y": row.gy + GRID_M / 2.0,
                     "water_px": int(row.w),
-                    "classified_px": int(row.c),
-                    "water_share": float(row.w) / float(row.c) if row.c else 0.0,
+                    "known_px": int(row.k) if known is not None else None,
+                    "water_share": float(row.w) / float(row.k) if known is not None else None,
                     "water_km2": float(row.w) * area_per_px,
                     "source_role": "observed",
                     "measures": "extent_only",
@@ -109,11 +135,12 @@ def build(*, out_dir: Path | None = None) -> dict:
             "status": "ok",
             "source": source,
             "cells_with_water": int(len(grouped)),
+            "share_status": "ok" if known is not None else "max_extent_unavailable",
             "water_km2": float(grouped["w"].sum() * area_per_px),
         }
         print(f"  {year}: {len(grouped)} 1 km cells contain observed water")
 
-    columns = ["cell_id", "year", "x", "y", "lon", "lat", "water_px", "classified_px",
+    columns = ["cell_id", "year", "x", "y", "lon", "lat", "water_px", "known_px",
                "water_share", "water_km2", "source_role", "measures"]
     frame = pd.DataFrame.from_records(records, columns=columns)
     if not frame.empty:
@@ -126,8 +153,9 @@ def build(*, out_dir: Path | None = None) -> dict:
         wgs84 = frame.to_crs("OGC:CRS84")
         frame["lon"] = wgs84.geometry.x
         frame["lat"] = wgs84.geometry.y
-        frame = frame[["cell_id", "year", "x", "y", "lon", "lat", "water_px", "classified_px",
-                       "water_share", "water_km2", "source_role", "measures"]]
+        frame = frame[columns]
+    # Typed even when every share is null, so other parquet readers see numbers.
+    frame = frame.astype({"known_px": "Int64", "water_share": "float64"})
     frame.to_parquet(destination, index=False)
 
     return {
@@ -135,6 +163,8 @@ def build(*, out_dir: Path | None = None) -> dict:
         "rows": int(len(frame)),
         "years": sorted(int(year) for year in per_year),
         "per_year": per_year,
+        "max_extent": extent_source,
+        "share_basis": gsw.SHARE_BASIS,
         "grid_size_m": GRID_M,
         "sha256": sha256_file(destination) if destination.is_file() else None,
         "written_at": utc_now_iso(),

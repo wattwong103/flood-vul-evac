@@ -137,7 +137,7 @@ export const LAYER_LABELS: Record<LayerId, { name: string; quantity: string }> =
   observedWater: {
     name: "Observed water extent",
     quantity:
-      "JRC Global Surface Water: share of each cell classified as water in the selected year. Extent, not depth",
+      "JRC Global Surface Water: share of each cell's known area that is water in the selected year. Extent, not depth",
   },
 };
 
@@ -282,30 +282,35 @@ const SOURCES = [
  * ramps above: it carries one observation, not one observation per source role.
  * Depth is separated from it by the wording of the legend, never by a hue.
  */
+/** A null share (no Maximum Water Extent, BKK-054) is grey, never the 0% hue. */
+const HAS_WATER_SHARE = ["==", ["typeof", ["get", "water_share"]], "number"] as unknown[];
+
 const WATER_SHARE_FILL = [
-  "interpolate",
-  ["linear"],
-  NUM("water_share"),
-  0,
-  "#e8f1f4",
-  0.05,
-  "#a9cfe0",
-  0.25,
-  "#4b93b8",
-  0.5,
-  "#1d5f85",
-  1,
-  "#0b3550",
+  "case",
+  HAS_WATER_SHARE,
+  [
+    "interpolate",
+    ["linear"],
+    NUM("water_share"),
+    0,
+    "#e8f1f4",
+    0.05,
+    "#a9cfe0",
+    0.25,
+    "#4b93b8",
+    0.5,
+    "#1d5f85",
+    1,
+    "#0b3550",
+  ],
+  "#9aa0a6",
 ] as unknown[];
 
 const WATER_SHARE_RADIUS = [
-  "interpolate",
-  ["linear"],
-  NUM("water_share"),
-  0,
-  3,
-  1,
-  16,
+  "case",
+  HAS_WATER_SHARE,
+  ["interpolate", ["linear"], NUM("water_share"), 0, 3, 1, 16],
+  6,
 ] as unknown[];
 
 /**
@@ -907,8 +912,9 @@ function MapLegend({ layers }: { layers: LayerState }) {
             <i className="water-1" />
           </p>
           <p>
-            Share of each cell classified as water in the selected year. Marker
-            size rises with the share as well as colour. <b>Extent only:</b> the
+            Share of each cell&apos;s known area that is water in the selected year;
+            grey means the share was not computed. Marker size rises with the
+            share as well as colour. <b>Extent only:</b> the
             classification carries no depth, duration or direction, and no year
             here is a forecast.
           </p>

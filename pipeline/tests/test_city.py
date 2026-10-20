@@ -24,6 +24,7 @@ from bkkflow.city_runner import (  # noqa: E402
     FLOOD_NOT_COMPUTED,
     FLOOD_REASON,
     _observed_source_version,
+    _max_extent_source_version,
     _stage_record,
 )
 from bkkflow.sources import city_osm, terrain  # noqa: E402
@@ -330,6 +331,19 @@ def test_observed_source_version_identifies_every_raw_tile() -> None:
     assert len(version["content_sha256"]) == 64
     assert version["request_parameters"]["years"] == [2010, 2012]
     assert len(version["request_parameters"]["tiles"]) == 2
+
+
+def test_max_extent_tile_is_a_manifest_source_only_when_it_set_the_shares() -> None:
+    extent = {"source_id": "jrc-global-surface-water-max-extent-v1.4", "status": "ok",
+              "tile_name": "extent-0000240000-0001120000.tif", "resource_url": "https://example.test/e.tif",
+              "retrieved_at": "2026-10-20T00:00:00+00:00", "content_sha256": "c" * 64}
+    version = _max_extent_source_version({"status": "ok", "max_extent": extent})
+    assert version["source_id"] == extent["source_id"]
+    assert version["content_sha256"] == "c" * 64
+    assert version["request_parameters"]["tile_name"] == extent["tile_name"]
+    unavailable = {"source_id": extent["source_id"], "status": "unavailable", "reason": "503"}
+    assert _max_extent_source_version({"status": "ok", "max_extent": unavailable}) is None
+    assert _max_extent_source_version({"status": "unavailable", "years": []}) is None
 
 
 def test_city_cache_rejects_old_source_before_reuse(tmp_path):

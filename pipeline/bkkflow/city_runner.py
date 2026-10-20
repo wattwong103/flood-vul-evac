@@ -119,6 +119,22 @@ def _observed_source_version(
     }
 
 
+def _max_extent_source_version(observed: dict[str, Any]) -> dict[str, Any] | None:
+    """Describe the Maximum Water Extent tile that set the share denominators."""
+    extent = observed.get("max_extent") or {}
+    if observed.get("status") != "ok" or extent.get("status") != "ok":
+        return None
+    return {
+        "source_id": str(extent["source_id"]),
+        "retrieved_at": str(extent["retrieved_at"]),
+        "content_sha256": str(extent["content_sha256"]),
+        "licence_snapshot": "CC BY 4.0 (EC JRC/Google, Global Surface Water)",
+        "request_parameters": {"tile_name": extent["tile_name"],
+                               "resource_url": extent["resource_url"],
+                               "role": "share denominator support mask"},
+    }
+
+
 def _agglomerate_cells(
     cells: gpd.GeoDataFrame, *, crs: str, cell_size_m: float
 ) -> gpd.GeoDataFrame:
@@ -286,6 +302,12 @@ def execute_city_run(
             ) + ". It is EXTENT, not depth, and the annual classification does not resolve the "
             "timing or peak extent of a flood event."
         )
+        extent = observed.get("max_extent") or {}
+        if extent.get("status") != "ok":
+            warnings.append(
+                "JRC Maximum Water Extent unavailable, so every observed water share is null: "
+                + str(extent.get("reason", "no reason recorded"))[:200]
+            )
         anomaly = max(observed_years, key=lambda entry: entry["aoi_water_km2"])
         observed_note = (
             f"JRC GSW yearly classification; wettest year {anomaly['year']} at "
@@ -570,6 +592,9 @@ def execute_city_run(
     observed_source = _observed_source_version(observed, aoi_id=aoi_id)
     if observed_source is not None:
         source_versions.append(observed_source)
+    extent_source = _max_extent_source_version(observed)
+    if extent_source is not None:
+        source_versions.append(extent_source)
 
     manifest = manifest_module.build_manifest(
         code_identity=verify_code_identity(code_identity, run_dir),
@@ -733,11 +758,15 @@ def execute_city_run(
                         "year": entry["year"],
                         "water_km2": entry["aoi_water_km2"],
                         "water_share": entry["aoi_water_share"],
-                        "classified_km2": entry["aoi_area_km2"],
+                        "share_status": entry["share_status"],
+                        "classified_km2": entry["classified_km2"],
+                        "known_km2": entry["known_km2"],
                         "excess_km2_vs_baseline": entry["excess_km2_vs_baseline"],
                     }
                     for entry in observed.get("years", [])
                 ],
+                "share_basis": observed.get("share_basis"),
+                "max_extent_status": (observed.get("max_extent") or {}).get("status"),
                 "note": observed.get("note"),
             },
         },
@@ -771,6 +800,11 @@ def execute_city_run(
                 "source_id": "jrc-global-surface-water-v1.4",
                 "licence": "CC BY 4.0",
                 "status": "approved" if observed_source is not None else "unavailable",
+            },
+            {
+                "source_id": gsw.EXTENT_SOURCE_ID,
+                "licence": "CC BY 4.0",
+                "status": "approved" if extent_source is not None else "unavailable",
             },
         ],
         "elapsed_seconds": round(time.time() - started, 1),

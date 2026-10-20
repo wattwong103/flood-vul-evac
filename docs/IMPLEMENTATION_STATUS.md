@@ -177,7 +177,7 @@ configured.
 | Population | 10,891,061.3023; 181,662 source cells | Modelled 2020 residents, not people present during a flood. |
 | Public population grid | 1,693 cells, 1 km | Coarse aggregation, not building occupancy. |
 | Destinations | 1,034 candidates; zero verified | No usable capacity or safe-access guarantee. |
-| Annual water | 157.8473 / 170.7147 / 143.4223 / 173.7170 km² | 2010 / 2011 / 2012 / 2020; about 83% no-observation area. |
+| Annual water | 157.8473 / 170.7147 / 143.4223 / 173.7170 km² | 2010 / 2011 / 2012 / 2020; water share of known area 9.7 / 10.4 / 8.8 / 10.6% (run `55cc7d9d`, BKK-054); 0.8–1.8% of the BMA unknown. |
 | Depth / city evacuation | Not computed, null with reasons | Terrain, forcing and validation gates remain open. |
 
 The [README](../README.md#conditional-connectivity) records all 12 independently

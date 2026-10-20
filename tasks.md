@@ -1,7 +1,7 @@
 # BKK/FLOW — unfinished work
 
 **Live list:** 11 October 2026; updated 20 October 2026 (paper scope,
-BKK-016a, BKK-052, BKK-053)
+BKK-016a, BKK-052, BKK-053, BKK-054)
 
 **Baseline:** `main` at merge commit `959d6f9` (PR #77)
 
@@ -68,6 +68,7 @@ holder before work assigned to that role starts.
 | P2 | BKK-051 — prepare a submission package | BLOCKED | Paper owner | BKK-033, BKK-050, BKK-016a, BKK-052, BKK-053 |
 | P2 | BKK-052 — related work and novelty defence | IN PROGRESS | Paper owner (related-work session) | — |
 | P2 | BKK-053 — observed-extent plausibility check | IN PROGRESS | Paper owner (design note), then North (metric) | — |
+| P1 | BKK-054 — GSW water-share denominator (yearly code 0 is mostly never-water) | IN PROGRESS | Implementer (BKK-054b PR), then paper owner | — |
 
 ## P0 — evidence needed before stronger scientific or citywide claims
 
@@ -330,6 +331,25 @@ under the Dropbox root.
 - Extent-only plausibility check. Observed extent never feeds the depth surface
   and never tunes the flood model.
 - It is not held-out hydraulic validation, which remains BKK-036B and BKK-036C.
+
+### BKK-054 — Fix the GSW water-share denominator
+
+Found on 20 October 2026: about 99% of the BMA's yearly GSW code-0 pixels lie
+outside the JRC Maximum Water Extent, so they were never detected as water.
+Every "share of classified" divided by code ≠ 0 and overstated water 5.7–6.0×;
+water km² were unaffected. BKK-054a (PR #85) registered the extent tile. For
+BKK-054b, North chose recoding with the extent: share = water ÷ (AOI − unknown).
+
+- A failing regression test lands first: code 0 outside the max extent stays in
+  the denominator, and water km² are unchanged.
+- One decoder serves `measure_year` and `build_observed_cells`. `aoi_area_km2`
+  is renamed `classified_km2` through the city run, report, API and site.
+- Without the extent tile the share is null with a reason, never water ÷
+  classified.
+- README and `docs/IMPLEMENTATION_STATUS.md` figures come from a fresh BMA city
+  run, not hand edits. Nothing under `bkkflow-release-archives/` is touched.
+- Paper owner, outside this repository: `bkkflow-paper.tex:267,274` and
+  `CLAIMS.md:49` need rewording.
 
 ## Invariants for every next pass
 

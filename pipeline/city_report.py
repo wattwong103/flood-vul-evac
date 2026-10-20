@@ -198,19 +198,21 @@ def write_city_summary(run_id: str, report_dir: Path, figure: Path) -> Path:
         f"- Source: {stats['flood']['observed_extent']['source_id']}, "
         f"{stats['flood']['observed_extent']['measures']}",
         "",
-        "| year | water km2 | share of classified | excess vs baseline km2 |",
+        "| year | water km2 | share of known area | excess vs baseline km2 |",
         "|---|---:|---:|---:|",
     ]
     for entry in stats["flood"]["observed_extent"]["years"]:
-        share = "unobserved" if entry["water_share"] is None else f"{100 * entry['water_share']:.2f}%"
+        share = (f"not computed ({entry.get('share_status') or 'unknown'})"
+                 if entry["water_share"] is None else f"{100 * entry['water_share']:.2f}%")
         lines.append(
             f"| {entry['year']} | {entry['water_km2']:.1f} | "
             f"{share} | {entry['excess_km2_vs_baseline']:+.1f} |"
         )
     lines += [
         "",
-        "Annual classifications do not resolve event timing or peak flood extent. No observations",
-        "is not dry land. Shares refer to classified pixels, not the entire city area.",
+        "Annual classifications do not resolve event timing or peak flood extent. The share is",
+        "water / (AOI - unknown): yearly code 0 outside the JRC Maximum Water Extent was never",
+        "detected as water and counts as not water; code 0 inside it is unobserved and excluded.",
         "",
         "## Flood depth and evacuation",
         "",
@@ -302,7 +304,8 @@ def _plot_observed_water(axis, aoi, stats) -> None:
     to_analysis = Transformer.from_crs(dataset.crs, aoi.crs, always_xy=True)
     px, py = to_analysis.transform(xs[water], ys[water])
     axis.scatter(px, py, s=0.6, c="#1d4ed8", marker="s", linewidths=0)
-    share = "unobserved" if wettest["water_share"] is None else f"{100 * wettest['water_share']:.1f}% of classified area"
+    share = ("share not computed" if wettest["water_share"] is None
+             else f"{100 * wettest['water_share']:.1f}% of known area")
     axis.text(
         0.02, 0.02,
         f"{wettest['year']}: {wettest['water_km2']:.0f} km2 ({share})",
