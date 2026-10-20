@@ -8,6 +8,7 @@ is BKK-053b, after the oec-v1 protocol lock (bkkflow observed-extent design note
 
 from __future__ import annotations
 
+import copy
 import math
 from typing import Any
 
@@ -28,9 +29,13 @@ BLOCK_NODES = 2  # a 100 m block is an exact 2 x 2 group of lattice points (D4, 
 STORAGE_FLOOR_M = 0.01  # the scenario stores only points deeper than this
 OBSERVED_WET_RULE = 0.5  # observed-wet share of a block's evaluable area (D4)
 MIN_EVALUABLE = 0.5  # share evaluable on both sides: a block to enter the domain (D4), a point to set its rank
+SECONDARY_DEPTH_M = 0.15  # M1's declared-wet depth: the release's flooded_area_basis (s4, s6)
 _LATTICE_TOL_M = 1e-3
 _TOL = 1e-9
 _FRACTIONS = ["observed_wet_frac", "channel_frac"]
+PILOT_AOIS = ("din-daeng-district", "khlong-san-district", "min-buri-district", "sai-mai-district")
+# D1 as amended on 20 Oct 2026: explicit years, never is_largest_mapped_event; 2011 inside the pilots only.
+OBSERVED_YEARS = {"mitrearth-flood-gistda": (2006, 2011)}
 
 LAYERS: dict[str, dict[str, str]] = {
     "mitrearth-flood-gistda": {
@@ -223,6 +228,7 @@ def block_table(nodes: pd.DataFrame, observed: pd.DataFrame, layer: str) -> pd.D
     so masked water cannot re-enter through the declared side (North, 20 Oct 2026, #4).
     ``min_stored_distance_all_m`` keeps the literal rank over every stored point for the
     pre-declared sensitivity row. Either rank is ``inf`` (a bottom tie) with no qualifying point.
+    ``evaluable_points`` and ``wet_points_0_15m`` (those at or above 0.15 m) feed the M1 row.
     """
     spec = _comparison_spec(layer)
     _require_role(observed, spec["source_role"], "observed")
@@ -235,15 +241,18 @@ def block_table(nodes: pd.DataFrame, observed: pd.DataFrame, layer: str) -> pd.D
     if ((wet < -_TOL) | (channel < -_TOL) | (wet + channel > frame["aoi_frac"] + _TOL)).any():
         raise ValueError("observed fractions must be disjoint shares of each square's AOI part")
     open_area = (frame["aoi_frac"] - channel).where(evaluated, 0.0)
+    point_evaluable = open_area >= MIN_EVALUABLE - _TOL
     frame = frame.assign(
         bi=frame["i"] // BLOCK_NODES, bj=frame["j"] // BLOCK_NODES, wet=wet, channel=channel, open=open_area,
         not_evaluated=frame["aoi_frac"].where(~evaluated, 0.0),
-        rank_distance=frame["distance_to_water_m"].where(open_area >= MIN_EVALUABLE - _TOL),
+        rank_distance=frame["distance_to_water_m"].where(point_evaluable), evaluable_point=point_evaluable,
+        deep_point=point_evaluable & (frame["peak_depth_m"] >= SECONDARY_DEPTH_M),
     )
     blocks = frame.groupby(["bi", "bj"], as_index=False).agg(
         points=("i", "size"), in_aoi=("aoi_frac", "sum"), open=("open", "sum"), wet=("wet", "sum"),
         channel=("channel", "sum"), not_evaluated=("not_evaluated", "sum"),
         min_stored_distance_m=("rank_distance", "min"), min_stored_distance_all_m=("distance_to_water_m", "min"),
+        evaluable_points=("evaluable_point", "sum"), wet_points_0_15m=("deep_point", "sum"),
     )
     cells = BLOCK_NODES ** 2
     in_domain = blocks["open"] >= MIN_EVALUABLE * cells - _TOL
@@ -282,12 +291,26 @@ def build_record(
     *, run_id: str, aoi_id: str, flood_scenario: dict[str, Any], declared_sha256: str, layer: str,
     year: int, observed_sha256: str, nodes: pd.DataFrame, origin: tuple[float, float],
     blocks: pd.DataFrame, row: str = "primary", code_identity: dict[str, Any] | None = None,
+    metrics: dict[str, Any] | None = None, protocol: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The design note section 8 record. ``metrics`` stays empty until BKK-053b, after the lock."""
+    """The design note section 8 record; ``metrics`` and ``protocol`` come from observed_extent_stats, after the lock.
+
+    The locked protocol adds what the authors have seen and what is reserved for BKK-036C.
+    """
     params = flood_scenario["parameters"]
     if params.get("source_role") != "scenario":
         raise ValueError("the declared flood scenario must carry source_role 'scenario'")
     spec = _comparison_spec(layer)
+    if aoi_id not in PILOT_AOIS or type(year) is not int or year not in OBSERVED_YEARS.get(layer, ()):
+        raise ValueError(f"{aoi_id} {layer} {year} is not an oec-v1 pilot layer-year; 2011 outside them is reserved")
+    if metrics is not None and protocol is None:
+        raise ValueError("metrics can only fill a record under the locked protocol")
+    locked = {(case["aoi_id"], case["layer"], case["year"]) for case in protocol["cases"]} if protocol else set()
+    if protocol is not None and (protocol.get("protocol_version") != PROTOCOL_VERSION
+                                 or (aoi_id, layer, year) not in locked):
+        raise ValueError(f"{aoi_id} {layer} {year} is not a locked case of the {PROTOCOL_VERSION} protocol")
+    if metrics is not None and metrics.get("row") != row:
+        raise ValueError(f"metrics for row {metrics.get('row')!r} cannot fill a {row!r} record")
     if not params["peak_depth_m"] > STORAGE_FLOOR_M:
         raise ValueError("a declared peak at or below the storage floor stores no extent")
     corridor = params["decay_length_m"] * math.log(params["peak_depth_m"] / STORAGE_FLOOR_M)
@@ -316,7 +339,9 @@ def build_record(
             "min_evaluable_rule": f">={MIN_EVALUABLE} block area",
         },
         "domain": {**domain_summary(blocks), "row": row},
-        "metrics": None,
+        "metrics": metrics,
+        "seen_by_authors": copy.deepcopy(protocol["seen_by_authors"]) if protocol else None,
+        "reserved": copy.deepcopy(protocol["reserved"]) if protocol else None,
         "assumptions": list(ASSUMPTIONS),
         "assumption_text": dict(ASSUMPTIONS),
         "labels": dict(LABELS),
