@@ -42,7 +42,8 @@ def declared_slices(decay_m=20.0):
 
 def nodes_frame(rows):  # (i, j, state, distance[, aoi_frac]); squares lie wholly in the AOI by default
     rows = [row if len(row) == 5 else (*row, 1.0) for row in rows]
-    return pd.DataFrame(rows, columns=["i", "j", "state", "distance_to_water_m", "aoi_frac"])
+    frame = pd.DataFrame(rows, columns=["i", "j", "state", "distance_to_water_m", "aoi_frac"])
+    return frame.assign(peak_depth_m=np.nan)  # only the M1 secondary row (BKK-053b) reads depth
 
 
 def observed_for(nodes, role="mapped", **fractions):
@@ -223,8 +224,9 @@ def test_roles_are_guarded_on_both_sides():
             oec.block_table(nodes, observed_for(nodes, role=role), "mitrearth-flood-gistda")
 
 
-def test_module_never_imports_the_depth_builders():
-    tree = ast.parse(Path(oec.__file__).read_text(encoding="utf-8"))
+@pytest.mark.parametrize("module", ["observed_extent.py", "observed_extent_stats.py"])
+def test_module_never_imports_the_depth_builders(module):
+    tree = ast.parse((Path(oec.__file__).parent / module).read_text(encoding="utf-8"))
     forbidden = {"build_depth_surface", "build_flood_slices", "flood"}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -242,7 +244,7 @@ def test_record_carries_labels_assumptions_and_no_metrics():
     blocks = oec.block_table(nodes, observed_for(nodes), "mitrearth-flood-gistda")
     scenario = {"model_name": "bkk-scenario-depth-decay", "model_version": "0.1.0", "parameters": {
         "severity": "moderate", "source_role": "scenario", "peak_depth_m": 0.55, "decay_length_m": 150.0}}
-    kwargs = dict(run_id="r", aoi_id="a", flood_scenario=scenario, declared_sha256="d",
+    kwargs = dict(run_id="r", aoi_id="sai-mai-district", flood_scenario=scenario, declared_sha256="d",
                   layer="mitrearth-flood-gistda", year=2006, observed_sha256="o",
                   nodes=nodes, origin=origin, blocks=blocks)
     record = oec.build_record(**kwargs)
