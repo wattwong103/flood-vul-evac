@@ -204,7 +204,7 @@ function Shell() {
 }
 
 /** Live reachability of the API, so a blank screen is never ambiguous. */
-function ApiStatus() {
+export function ApiStatus() {
   const { runs, stats, activeRunId } = useRuns();
   const activeRun = runs.data?.find((run) => run?.run_id === activeRunId);
   const status = resolveValidationStatus(
