@@ -12,9 +12,12 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, TypeVar
+
+_T = TypeVar("_T")
 
 LOGGER_NAME = "bkkflow"
 
@@ -101,6 +104,31 @@ def ensure_dir(path: str | Path) -> Path:
     target = Path(path)
     target.mkdir(parents=True, exist_ok=True)
     return target
+
+
+def retry_while_held(
+    publish: Callable[[], _T], *, what: str, held: str, attempts: int = 8, delay_s: float = 3.0
+) -> _T:
+    """Re-attempt one atomic publish step while a transient file handle refuses it.
+
+    Never copies or moves piecemeal; it only waits. Measured on a Dropbox-synced
+    tree: renaming a freshly written directory is refused immediately and
+    succeeds after roughly 15 seconds, once the sync client lets go. Both
+    ERROR_ACCESS_DENIED and ERROR_SHARING_VIOLATION surface as ``PermissionError``
+    on Windows; every other error, ``FileExistsError`` included, is not retried.
+    """
+    last: PermissionError | None = None
+    for attempt in range(attempts):
+        try:
+            return publish()
+        except PermissionError as exc:
+            last = exc
+            if attempt + 1 < attempts:
+                time.sleep(delay_s)
+    raise RuntimeError(
+        f"{what} could not be published after {attempts} attempts; "
+        f"a file handle on {held} never released: {last}"
+    ) from last
 
 
 def licence_snapshot_text(licence: str, licence_url: str | None = None) -> str:
