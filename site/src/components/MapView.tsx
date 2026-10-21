@@ -224,10 +224,14 @@ const CLOSED = [
   ["==", ["to-string", ["get", "closed"]], "true"],
 ] as unknown[];
 
+/**
+ * Any speed reduction counts as slowed, the same rule the flood-summary
+ * readings use (North, 22 October 2026), so the map and the tiles agree.
+ */
 const SLOWED = [
   "all",
   ["!", CLOSED],
-  ["<=", ["to-number", ["coalesce", ["get", "speed_multiplier"], 1]], 0.95],
+  ["<", ["to-number", ["coalesce", ["get", "speed_multiplier"], 1]], 1],
 ] as unknown[];
 
 const OPEN = ["all", ["!", CLOSED], ["!", SLOWED]] as unknown[];
@@ -996,7 +1000,10 @@ function linkRows(features: Array<Feature<LinkProperties>>): Row[] {
   return features.map((feature, index) => {
     const p = feature.properties ?? {};
     const closed = propBoolean(p, "closed");
-    const state = closed === null ? "not reported" : closed ? "closed" : "open";
+    const speed = propNumber(p, "speed_multiplier");
+    // Same rule as the map's SLOWED layer: any speed reduction is slowed.
+    const state =
+      closed === null ? "not reported" : closed ? "closed" : speed !== null && speed < 1 ? "slowed" : "open";
     return {
       id: featureId(feature, index),
       cells: [

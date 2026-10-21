@@ -551,6 +551,63 @@ export type FloodResult = FeatureCollection<FloodProperties> & {
   sample_is_spatial_subset?: boolean | null;
   warnings?: unknown[] | null;
 };
+/* ------------------------------------------------------------------ *
+ * Flood summary (`/v1/runs/{id}/flood-summary`, BKK-055b)
+ *
+ * Every number is nullable: a null means the run cannot answer, and the
+ * matching `reason` says why. Zero is only ever a measured or declared value.
+ * ------------------------------------------------------------------ */
+
+export type FloodSize = {
+  flooded_area_km2: number | null;
+  share_of_aoi: number | null;
+  aoi_area_km2: number | null;
+  cell_size_m: number | null;
+  reason: string | null;
+};
+export type ModeStopArea = {
+  mode: number;
+  mode_name: string;
+  closed_depth_m: number | null;
+  area_km2: number | null;
+};
+export type FloodDepth = {
+  max_depth_m: number | null;
+  at_or_above_closing_depth: ModeStopArea[];
+  reason: string | null;
+};
+export type ModeMovement = {
+  mode: number;
+  mode_name: string;
+  closed_depth_m: number | null;
+  total_km: number | null;
+  open_km: number | null;
+  slowed_km: number | null;
+  closed_km: number | null;
+  unknown_km: number | null;
+  open_share: number | null;
+  slowed_share: number | null;
+  closed_share: number | null;
+  unknown_share: number | null;
+  reason: string | null;
+};
+export type FloodSummary = {
+  run_id: string;
+  validation_status: string | null;
+  available: boolean;
+  time_s: number | null;
+  time_defaulted: boolean;
+  available_times: number[];
+  peak_time_s: number | null;
+  source_role: string | null;
+  flood_area_threshold_m: number;
+  threshold_set_version: string | null;
+  how_big: FloodSize;
+  how_deep: FloodDepth;
+  movement: { modes: ModeMovement[]; reason: string | null };
+  warnings: unknown[];
+};
+
 export type LinkResult = FeatureCollection<LinkProperties> | null;
 export type BuildingResult = FeatureCollection<BuildingProperties> | null;
 export type RouteResult = FeatureCollection<EvacuationProperties> | null;

@@ -15,11 +15,13 @@ import {
   Satellite,
   ShieldAlert,
   Users,
+  Waves,
   X,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScenarioLab } from "@/screens/ScenarioLab";
+import { TheFlood } from "@/screens/TheFlood";
 import { Population } from "@/screens/Population";
 import { DataRegistry } from "@/screens/DataRegistry";
 import { Method } from "@/screens/Method";
@@ -40,7 +42,7 @@ function prefersReducedMotion(): boolean {
 }
 
 function Shell() {
-  const [view, setView] = useState("scenario");
+  const [view, setView] = useState("flood");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion);
 
@@ -77,7 +79,7 @@ function Shell() {
       </a>
 
       <header className="topbar">
-        <button className="brand" onClick={() => select("scenario")}>
+        <button className="brand" onClick={() => select("flood")}>
           <span className="brand-mark" aria-hidden="true">
             <i />
             <i />
@@ -92,6 +94,13 @@ function Shell() {
         </button>
 
         <nav className={mobileOpen ? "open" : ""} aria-label="Primary">
+          <button
+            className={view === "flood" ? "active" : ""}
+            aria-current={view === "flood" ? "page" : undefined}
+            onClick={() => select("flood")}
+          >
+            <Waves size={15} aria-hidden="true" /> The flood
+          </button>
           <button
             className={view === "scenario" ? "active" : ""}
             aria-current={view === "scenario" ? "page" : undefined}
@@ -168,6 +177,7 @@ function Shell() {
 
       <Tabs value={view} onValueChange={select} className="view-tabs">
         <TabsList className="sr-only" aria-label="Screens">
+          <TabsTrigger value="flood">The flood</TabsTrigger>
           <TabsTrigger value="scenario">Scenario lab</TabsTrigger>
           <TabsTrigger value="population">Population</TabsTrigger>
           <TabsTrigger value="data">Data registry</TabsTrigger>
@@ -177,6 +187,9 @@ function Shell() {
         </TabsList>
 
         <main id="main">
+          <TabsContent value="flood">
+            <TheFlood reducedMotion={reducedMotion} />
+          </TabsContent>
           <TabsContent value="scenario">
             <ScenarioLab reducedMotion={reducedMotion} />
           </TabsContent>

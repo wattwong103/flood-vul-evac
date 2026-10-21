@@ -249,6 +249,12 @@ export const floodPath = (
   return `/v1/runs/${encodeURIComponent(runId)}/flood${query ? `?${query}` : ""}`;
 };
 
+/** How big, how deep and whether roads are usable at one model time (BKK-055b). */
+export const floodSummaryPath = (runId: string, time: number | null = null) =>
+  `/v1/runs/${encodeURIComponent(runId)}/flood-summary${
+    time !== null ? `?time=${encodeURIComponent(String(time))}` : ""
+  }`;
+
 export const routesPath = (runId: string) =>
   `/v1/runs/${encodeURIComponent(runId)}/routes`;
 
