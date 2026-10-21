@@ -50,21 +50,30 @@ before(async () => {
   // No websocket: client.test.ts runs in parallel and binds the default port.
   server = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
   ({ RunProvider, API_BASE_URL: apiBaseUrl } = await server.ssrLoadModule("/src/lib/run-context.tsx"));
-  ({ ApiStatus } = await server.ssrLoadModule("/src/App.tsx"));
+  // The component alone, not App.tsx, which would pull every screen and maplibre into happy-dom.
+  ({ ApiStatus } = await server.ssrLoadModule("/src/components/ApiStatus.tsx"));
 });
 
 after(async () => {
-  await server?.close();
+  try {
+    await server?.close();
+  } finally {
+    await win.happyDOM.close();
+  }
 });
 
 const originalFetch = globalThis.fetch;
 let unmount: (() => Promise<void>) | null = null;
 
 afterEach(async () => {
-  await unmount?.();
-  unmount = null;
-  globalThis.fetch = originalFetch;
-  win.localStorage.clear();
+  // A failed unmount must not leak the stubbed fetch or a stored run into the next test.
+  try {
+    await unmount?.();
+  } finally {
+    unmount = null;
+    globalThis.fetch = originalFetch;
+    win.localStorage.clear();
+  }
 });
 
 /** Serve the run list; every other path is a 404, as for a run with no stats yet. */
