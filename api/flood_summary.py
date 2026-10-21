@@ -5,10 +5,11 @@ Everything here is derived from artefacts a run already holds
 pipeline stage is involved (docs/SITE_FLOOD_VIEWS_DESIGN.md, section 5.1).
 
 Missing evidence stays visible. A run without a flood layer returns nulls with
-the reason it gives; a time the run never modelled returns nulls, not zeros;
-an edge with no state is counted as unknown, never as open. Zero is reported
-only when it was measured or declared: no flooded cell at a modelled time, or a
-dry scenario.
+the reason it gives; an unreadable or malformed artefact returns nulls with a
+warning, never a 500; a time the run never modelled, or depth that was never
+recorded, returns nulls, not zeros; an edge with no state is counted as
+unknown, never as open. Zero is reported only when it was measured or declared:
+no flooded cell at a modelled time, or a dry scenario.
 """
 
 from __future__ import annotations
@@ -40,26 +41,32 @@ FLOOD_AREA_THRESHOLD_M = 0.15
 MODE_NAMES: dict[int, str] = {0: "walk", 3: "car"}
 MODE_ACCESS_COLUMNS: dict[int, str] = {0: "walk_allowed", 3: "vehicle_allowed"}
 
+#: Decimal places for reported areas, lengths and shares; enough for a 50 m cell
+#: or a 1 m road segment, without float noise such as 5.147500000000001.
+REPORT_DECIMALS = 6
+#: A flooded share of the AOI above 1 by more than this is a data inconsistency.
+SHARE_TOLERANCE = 1e-6
+
+FLOOD_COLUMNS = ["cell_id", "x", "y", "time_s", "depth_m", "source_role"]
+STATE_COLUMNS = frozenset({"edge_id", "mode", "speed_multiplier", "closed"})
+EDGE_COLUMNS = frozenset({"edge_id", "length_m"})
+
 DRY_REASON = "declared dry scenario"
 NO_STATES_REASON = "this run has no road states (edge_states.parquet is absent)"
 NO_NETWORK_REASON = "this run has no road network (network_edges.parquet is absent)"
-STATE_COLUMNS = frozenset({"edge_id", "mode", "speed_multiplier", "closed"})
+UNMEASURED_REASON = "no flood cell at this time has a recorded depth"
+NO_CELL_SIZE_REASON = "the flood grid's cell size could not be inferred from its coordinates"
 
 
 def build_flood_summary(run: RunRef, time: int | None) -> FloodSummaryResponse:
     """Assemble the summary for ``time``, defaulting to the flood peak."""
     warnings: list[ApiWarning] = []
-    stats, _ = load_stats_file(run)
-    stats = stats or {}
+    stats = load_stats_file(run)[0] or {}
     slices, no_flood_reason = _read_slices(run, stats, warnings)
-    state_times = _state_times(run)
+    state_times, no_states_reason = _read_state_times(run, warnings)
     available_times = sorted(set(_times(slices)) | set(state_times or []))
     peak_time_s = _peak_time(slices)
-    # Default to the peak: the moment a reader most needs. A run with no flood
-    # cells (dry, or no layer) falls back to its first modelled time.
-    time_s = time if time is not None else (
-        peak_time_s if peak_time_s is not None else min(available_times, default=None)
-    )
+    time_s = time if time is not None else _default_time(run, peak_time_s, available_times)
     summary = FloodSummaryResponse(
         run_id=run.run_id,
         validation_status=run.validation_status,
@@ -70,8 +77,7 @@ def build_flood_summary(run: RunRef, time: int | None) -> FloodSummaryResponse:
         peak_time_s=peak_time_s,
         flood_area_threshold_m=FLOOD_AREA_THRESHOLD_M,
     )
-
-    if time_s is not None and available_times and time_s not in available_times:
+    if time_s is not None and summary.available and time_s not in available_times:
         return _unmodelled_time(summary, time_s, warnings)
 
     states = _states_at(run, time_s, warnings) if state_times is not None else None
@@ -80,16 +86,19 @@ def build_flood_summary(run: RunRef, time: int | None) -> FloodSummaryResponse:
     closing = _closing_depths(version, warnings)
 
     at_time = _slice_at(slices, time_s)
-    summary.source_role = _single_value(at_time, "source_role")
+    summary.source_role = _single_value(at_time, "source_role") or _declared(run, "source_role")
+    missing_reason = no_flood_reason or _unmeasured_depth(at_time, warnings)
+    if missing_reason is not None:
+        at_time = None
     dry = _is_dry(run)
     cell_size_m = _cell_size(slices)
     summary.how_big = _how_big(
-        at_time, cell_size_m, _aoi_area(stats), dry=dry, missing_reason=no_flood_reason
+        at_time, cell_size_m, _aoi_area(stats), warnings, dry=dry, missing_reason=missing_reason
     )
     summary.how_deep = _how_deep(
-        at_time, cell_size_m, closing, dry=dry, missing_reason=no_flood_reason
+        at_time, cell_size_m, closing, version, dry=dry, missing_reason=missing_reason
     )
-    summary.movement = _movement(run, states, closing, warnings)
+    summary.movement = _movement(run, states, no_states_reason, closing, warnings)
     # Pydantic copies lists on construction, so warnings are attached last.
     summary.warnings = warnings
     return summary
@@ -108,24 +117,67 @@ def _unmodelled_time(
     return summary
 
 
+def _default_time(run: RunRef, peak_time_s: int | None, available: list[int]) -> int | None:
+    """The flood peak, else the declared peak, else the first modelled time.
+
+    A dry run has no flood cells, so its declared peak keeps the default on the
+    same clock time as its moderate pair.
+    """
+    if peak_time_s is not None:
+        return peak_time_s
+    declared = _declared(run, "peak_time_s")
+    if isinstance(declared, (int, float)) and int(declared) in available:
+        return int(declared)
+    return min(available, default=None)
+
+
 # ------------------------------------------------------------------ reading
+
+
+def _was_absent(read_warnings: list[ApiWarning]) -> bool:
+    return any(warning.code == "missing_artefact" for warning in read_warnings)
+
+
+def _read_failure(
+    name: str, read_warnings: list[ApiWarning], warnings: list[ApiWarning]
+) -> str:
+    """Report a present-but-unusable artefact; its own message becomes the reason."""
+    warnings.extend(read_warnings)
+    return read_warnings[0].message if read_warnings else f"{name} could not be read"
 
 
 def _read_slices(
     run: RunRef, stats: dict[str, Any], warnings: list[ApiWarning]
 ) -> tuple[pd.DataFrame | None, str | None]:
-    """The flood cells, or None and the reason the run has none."""
-    slices, _ = read_parquet(
-        artefact_path(run, "flood_slices.parquet"),
-        columns=["cell_id", "x", "y", "time_s", "depth_m", "source_role"],
-    )
+    """The flood cells, or None and the reason they cannot be used."""
+    name = "flood_slices.parquet"
+    slices, read_warnings = read_parquet(artefact_path(run, name), columns=FLOOD_COLUMNS)
     if slices is None:
-        return None, _no_flood_reason(stats)
-    if "depth_m" not in slices.columns:
-        reason = "flood_slices.parquet has no depth_m column"
-        warnings.append(make_warning("schema_mismatch", reason, "flood_slices.parquet"))
+        if _was_absent(read_warnings):
+            return None, _no_flood_reason(stats)
+        return None, _read_failure(name, read_warnings, warnings)
+    columns = set(slices.columns)
+    missing = [column for column in ("depth_m", "time_s") if column not in columns]
+    if "cell_id" not in columns and not {"x", "y"} <= columns:
+        missing.append("cell_id or x/y")
+    if missing:
+        reason = f"{name} lacks {', '.join(missing)}"
+        warnings.append(make_warning("schema_mismatch", reason, name))
         return None, reason
     return slices, None
+
+
+def _read_state_times(
+    run: RunRef, warnings: list[ApiWarning]
+) -> tuple[list[int] | None, str | None]:
+    """Modelled road-state times, or None and the reason there are none."""
+    name = "edge_states.parquet"
+    frame, read_warnings = read_parquet(artefact_path(run, name), columns=["time_s"])
+    if frame is not None:
+        return _times(frame), None
+    if _was_absent(read_warnings):
+        return None, NO_STATES_REASON
+    return None, _read_failure(name, read_warnings, warnings)
 
 
 def _times(frame: pd.DataFrame | None) -> list[int]:
@@ -133,12 +185,6 @@ def _times(frame: pd.DataFrame | None) -> list[int]:
         return []
     values = pd.to_numeric(frame["time_s"], errors="coerce").dropna().unique()
     return [int(value) for value in values]
-
-
-def _state_times(run: RunRef) -> list[int] | None:
-    """Modelled road-state times, or None when the run has no road states."""
-    frame, _ = read_parquet(artefact_path(run, "edge_states.parquet"), columns=["time_s"])
-    return None if frame is None else _times(frame)
 
 
 def _states_at(
@@ -152,26 +198,50 @@ def _states_at(
         filters=[("time_s", "==", int(time_s))],
     )
     warnings.extend(read_warnings)
-    if frame is None:
-        return None
+    if frame is None or "time_s" not in frame.columns:
+        return frame
     return frame.loc[pd.to_numeric(frame["time_s"], errors="coerce") == time_s]
 
 
 def _slice_at(slices: pd.DataFrame | None, time_s: int | None) -> pd.DataFrame | None:
     if slices is None:
         return None
-    if time_s is None or "time_s" not in slices.columns:
+    if time_s is None:
         return slices.iloc[0:0]
     return slices.loc[pd.to_numeric(slices["time_s"], errors="coerce") == time_s]
 
 
 def _peak_time(slices: pd.DataFrame | None) -> int | None:
-    if slices is None or slices.empty or not {"time_s", "depth_m"} <= set(slices.columns):
+    """The earliest time at which the deepest recorded cell occurs."""
+    if slices is None or slices.empty:
         return None
     depth = pd.to_numeric(slices["depth_m"], errors="coerce")
-    if depth.notna().sum() == 0:
+    times = pd.to_numeric(slices["time_s"], errors="coerce")
+    valid = depth.notna() & times.notna()
+    if not valid.any():
         return None
-    return int(slices.loc[depth.idxmax(), "time_s"])
+    deepest = depth[valid].max()
+    return int(times[valid & (depth == deepest)].min())
+
+
+def _unmeasured_depth(at_time: pd.DataFrame | None, warnings: list[ApiWarning]) -> str | None:
+    """A reason when cells exist at this time but none records a depth."""
+    if at_time is None or at_time.empty:
+        return None
+    unrecorded = int(pd.to_numeric(at_time["depth_m"], errors="coerce").isna().sum())
+    if unrecorded == 0:
+        return None
+    if unrecorded == len(at_time):
+        warnings.append(make_warning("null_depth", UNMEASURED_REASON, "flood_slices.parquet"))
+        return UNMEASURED_REASON
+    warnings.append(
+        make_warning(
+            "null_depth",
+            f"{unrecorded} flood cells at this time have no recorded depth and are not counted",
+            "flood_slices.parquet",
+        )
+    )
+    return None
 
 
 def _single_value(frame: pd.DataFrame | None, column: str) -> str | None:
@@ -184,15 +254,16 @@ def _single_value(frame: pd.DataFrame | None, column: str) -> str | None:
     return values[0] if len(values) == 1 else "mixed:" + ",".join(values)
 
 
-def _flood_parameters(run: RunRef) -> dict[str, Any]:
+def _declared(run: RunRef, key: str) -> Any:
+    """A value the run's manifest declares for its flood scenario."""
     scenario = run.manifest.get("flood_scenario")
     parameters = scenario.get("parameters") if isinstance(scenario, dict) else None
-    return parameters if isinstance(parameters, dict) else {}
+    return parameters.get(key) if isinstance(parameters, dict) else None
 
 
 def _is_dry(run: RunRef) -> bool:
     """A dry run declares a zero peak depth; it is a scenario, not missing data."""
-    peak = _flood_parameters(run).get("peak_depth_m")
+    peak = _declared(run, "peak_depth_m")
     return isinstance(peak, (int, float)) and float(peak) == 0.0
 
 
@@ -256,11 +327,6 @@ def _closing_depths(
 # ---------------------------------------------------------------- readings
 
 
-#: Decimal places for reported areas, lengths and shares; enough for a 50 m cell
-#: or a 1 m road segment, without float noise such as 5.147500000000001.
-REPORT_DECIMALS = 6
-
-
 def _rounded(value: float | None) -> float | None:
     return None if value is None else round(float(value), REPORT_DECIMALS)
 
@@ -276,34 +342,45 @@ def _wet_cells(at_time: pd.DataFrame, min_depth_m: float) -> int:
     return int(wet.drop_duplicates(subset=key).shape[0])
 
 
+def _area_km2(at_time: pd.DataFrame, min_depth_m: float, cell_size_m: float | None) -> float | None:
+    """Area at or above a depth; zero needs no cell size, a positive area does."""
+    cells = _wet_cells(at_time, min_depth_m) if not at_time.empty else 0
+    if cells == 0:
+        return 0.0
+    return None if cell_size_m is None else cells * _cell_area_km2(cell_size_m)
+
+
 def _how_big(
     at_time: pd.DataFrame | None,
     cell_size_m: float | None,
     aoi_area_km2: float | None,
+    warnings: list[ApiWarning],
     *,
     dry: bool,
     missing_reason: str | None,
 ) -> FloodSize:
     if at_time is None:
         return FloodSize(aoi_area_km2=aoi_area_km2, reason=missing_reason)
-    cells = _wet_cells(at_time, FLOOD_AREA_THRESHOLD_M) if not at_time.empty else 0
-    reason = DRY_REASON if dry else None
-    if cells == 0:
-        area = 0.0
-    elif cell_size_m is None:
-        return FloodSize(
-            aoi_area_km2=aoi_area_km2,
-            reason="the flood grid's cell size could not be inferred from its coordinates",
-        )
-    else:
-        area = cells * _cell_area_km2(cell_size_m)
+    area = _area_km2(at_time, FLOOD_AREA_THRESHOLD_M, cell_size_m)
+    if area is None:
+        return FloodSize(aoi_area_km2=aoi_area_km2, reason=NO_CELL_SIZE_REASON)
     share = area / aoi_area_km2 if aoi_area_km2 else None
+    if share is not None and share > 1.0 + SHARE_TOLERANCE:
+        warnings.append(
+            make_warning(
+                "inconsistent_aoi",
+                f"flooded area {area:.4f} km2 exceeds the AOI area {aoi_area_km2:.4f} km2; "
+                "the flood grid extends beyond the AOI, so its share is withheld",
+                "flood_slices.parquet",
+            )
+        )
+        share = None
     return FloodSize(
         flooded_area_km2=_rounded(area),
         share_of_aoi=_rounded(share),
         aoi_area_km2=aoi_area_km2,
         cell_size_m=cell_size_m,
-        reason=reason,
+        reason=DRY_REASON if dry else None,
     )
 
 
@@ -311,61 +388,97 @@ def _how_deep(
     at_time: pd.DataFrame | None,
     cell_size_m: float | None,
     closing: dict[int, float | None],
+    version: str | None,
     *,
     dry: bool,
     missing_reason: str | None,
 ) -> FloodDepth:
     if at_time is None:
         return FloodDepth(reason=missing_reason)
-    depth = pd.to_numeric(at_time["depth_m"], errors="coerce").dropna() if not at_time.empty else None
-    max_depth = float(depth.max()) if depth is not None and not depth.empty else 0.0
-    stops: list[ModeStopArea] = []
-    for mode, name in MODE_NAMES.items():
-        closed_depth = closing.get(mode)
-        area: float | None = None
-        if closed_depth is not None:
-            cells = _wet_cells(at_time, closed_depth) if not at_time.empty else 0
-            if cells == 0:
-                area = 0.0
-            elif cell_size_m is not None:
-                area = cells * _cell_area_km2(cell_size_m)
-        stops.append(
-            ModeStopArea(
-                mode=mode, mode_name=name, closed_depth_m=closed_depth, area_km2=_rounded(area)
-            )
+    depth = pd.to_numeric(at_time["depth_m"], errors="coerce").dropna()
+    stops = [
+        ModeStopArea(
+            mode=mode,
+            mode_name=name,
+            closed_depth_m=closing.get(mode),
+            area_km2=_rounded(
+                None if closing.get(mode) is None
+                else _area_km2(at_time, closing[mode], cell_size_m)
+            ),
         )
+        for mode, name in MODE_NAMES.items()
+    ]
+    reason = DRY_REASON if dry else None
+    if any(stop.closed_depth_m is None for stop in stops):
+        reason = f"closing depths are unknown for threshold set {version!r}"
+    elif any(stop.area_km2 is None for stop in stops):
+        reason = NO_CELL_SIZE_REASON
     return FloodDepth(
-        max_depth_m=max_depth,
+        max_depth_m=float(depth.max()) if not depth.empty else 0.0,
         at_or_above_closing_depth=stops,
-        reason=DRY_REASON if dry else None,
+        reason=reason,
     )
 
 
 def _movement(
     run: RunRef,
     states: pd.DataFrame | None,
+    no_states_reason: str | None,
     closing: dict[int, float | None],
     warnings: list[ApiWarning],
 ) -> FloodMovement:
     if states is None:
-        return FloodMovement(reason=NO_STATES_REASON)
+        return FloodMovement(reason=no_states_reason or "edge_states.parquet could not be read")
     missing = STATE_COLUMNS - set(states.columns)
     if missing:
         reason = f"edge_states.parquet lacks {sorted(missing)}"
         warnings.append(make_warning("schema_mismatch", reason, "edge_states.parquet"))
         return FloodMovement(reason=reason)
-    edges, edge_warnings = read_parquet(
-        artefact_path(run, "network_edges.parquet"),
-        columns=["edge_id", "length_m", *MODE_ACCESS_COLUMNS.values()],
-    )
-    warnings.extend(edge_warnings)
-    if edges is None or "length_m" not in edges.columns:
-        return FloodMovement(reason=NO_NETWORK_REASON)
+    edges, reason = _usable_network(run, warnings)
+    if edges is None:
+        return FloodMovement(reason=reason)
+    states = states.assign(edge_id=states["edge_id"].astype(str))
     modes = [
         _mode_movement(mode, name, edges, states, closing.get(mode), warnings)
         for mode, name in MODE_NAMES.items()
     ]
     return FloodMovement(modes=modes)
+
+
+def _usable_network(
+    run: RunRef, warnings: list[ApiWarning]
+) -> tuple[pd.DataFrame | None, str | None]:
+    """Network edges keyed by text id, deduplicated, with known lengths only."""
+    name = "network_edges.parquet"
+    edges, read_warnings = read_parquet(
+        artefact_path(run, name), columns=["edge_id", "length_m", *MODE_ACCESS_COLUMNS.values()]
+    )
+    if edges is None:
+        if _was_absent(read_warnings):
+            return None, NO_NETWORK_REASON
+        return None, _read_failure(name, read_warnings, warnings)
+    missing = EDGE_COLUMNS - set(edges.columns)
+    if missing:
+        reason = f"{name} lacks {sorted(missing)}"
+        warnings.append(make_warning("schema_mismatch", reason, name))
+        return None, reason
+    edges = edges.assign(edge_id=edges["edge_id"].astype(str))
+    duplicated = int(edges["edge_id"].duplicated().sum())
+    if duplicated:
+        warnings.append(
+            make_warning("duplicate_rows", f"{duplicated} duplicate edge ids were counted once", name)
+        )
+        edges = edges.drop_duplicates(subset=["edge_id"], keep="first")
+    lengths = pd.to_numeric(edges["length_m"], errors="coerce")
+    if lengths.isna().any():
+        warnings.append(
+            make_warning(
+                "missing_length",
+                f"{int(lengths.isna().sum())} edges have no length and are not counted",
+                name,
+            )
+        )
+    return edges.loc[lengths.notna()].assign(length_m=lengths[lengths.notna()]), None
 
 
 def _mode_movement(
@@ -377,46 +490,60 @@ def _mode_movement(
     warnings: list[ApiWarning],
 ) -> ModeMovement:
     access = MODE_ACCESS_COLUMNS[mode]
-    if access in edges.columns:
-        usable = edges.loc[edges[access].fillna(False).astype(bool)]
-    else:
-        usable = edges
+    if access not in edges.columns:
+        reason = f"network_edges.parquet has no {access} column, so the roads {name} may use are unknown"
+        warnings.append(make_warning("schema_mismatch", reason, "network_edges.parquet"))
+        return ModeMovement(mode=mode, mode_name=name, closed_depth_m=closed_depth_m, reason=reason)
+    flags = edges[access].astype("boolean")
+    if flags.isna().any():
         warnings.append(
             make_warning(
-                "schema_mismatch",
-                f"network_edges.parquet has no {access} column; every edge is counted for {name}",
+                "missing_access_flag",
+                f"{int(flags.isna().sum())} edges have no {access} value and are not counted for {name}",
                 "network_edges.parquet",
             )
         )
+    usable = edges.loc[flags.fillna(False).astype(bool), ["edge_id", "length_m"]]
     mode_states = states.loc[pd.to_numeric(states["mode"], errors="coerce") == mode]
     mode_states = mode_states.drop_duplicates(subset=["edge_id"], keep="last")
-    joined = usable[["edge_id", "length_m"]].merge(
+    joined = usable.merge(
         mode_states[["edge_id", "speed_multiplier", "closed"]], on="edge_id", how="left"
     )
-    length_km = pd.to_numeric(joined["length_m"], errors="coerce").fillna(0.0) / 1000.0
+    return _classify(mode, name, closed_depth_m, joined)
+
+
+def _classify(
+    mode: int, name: str, closed_depth_m: float | None, joined: pd.DataFrame
+) -> ModeMovement:
+    """Road length by state; shares are null when no usable edge has a state."""
+    length_km = joined["length_m"] / 1000.0
     closed = joined["closed"].astype("boolean").fillna(False).astype(bool)
     speed = pd.to_numeric(joined["speed_multiplier"], errors="coerce")
-    slowed = ~closed & (speed < 1.0)
-    opened = ~closed & (speed >= 1.0)
-    unknown = ~closed & speed.isna()
+    masks = {
+        "open": ~closed & (speed >= 1.0),
+        "slowed": ~closed & (speed < 1.0),
+        "closed": closed,
+        "unknown": ~closed & speed.isna(),
+    }
+    km = {state: float(length_km[mask].sum()) for state, mask in masks.items()}
     total = float(length_km.sum())
-
-    def km(mask: pd.Series) -> float:
-        return round(float(length_km[mask].sum()), REPORT_DECIMALS)
-
-    def share(mask: pd.Series) -> float | None:
-        return _rounded(float(length_km[mask].sum()) / total) if total > 0 else None
-
+    no_states = total > 0 and km["unknown"] >= total - 1e-9
+    shares = {
+        state: None if total <= 0 or no_states else _rounded(value / total)
+        for state, value in km.items()
+    }
     return ModeMovement(
         mode=mode,
         mode_name=name,
         closed_depth_m=closed_depth_m,
-        total_km=round(total, REPORT_DECIMALS),
-        open_km=km(opened),
-        slowed_km=km(slowed),
-        closed_km=km(closed),
-        unknown_km=km(unknown),
-        open_share=share(opened),
-        slowed_share=share(slowed),
-        closed_share=share(closed),
+        total_km=_rounded(total),
+        open_km=_rounded(km["open"]),
+        slowed_km=_rounded(km["slowed"]),
+        closed_km=_rounded(km["closed"]),
+        unknown_km=_rounded(km["unknown"]),
+        open_share=shares["open"],
+        slowed_share=shares["slowed"],
+        closed_share=shares["closed"],
+        unknown_share=shares["unknown"],
+        reason=f"no road state for {name} at this time" if no_states else None,
     )

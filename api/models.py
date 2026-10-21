@@ -277,19 +277,25 @@ class FloodDepth(BaseModel):
 
 
 class ModeMovement(BaseModel):
-    """Road length a mode may use, by state, at one model time."""
+    """Road length a mode may use, by state, at one model time.
+
+    Lengths are null when the mode's usable network cannot be determined;
+    shares are null when no usable edge has a state at this time.
+    """
 
     mode: int
     mode_name: str
     closed_depth_m: float | None = None
-    total_km: float = 0.0
-    open_km: float = 0.0
-    slowed_km: float = 0.0
-    closed_km: float = 0.0
-    unknown_km: float = 0.0
+    total_km: float | None = None
+    open_km: float | None = None
+    slowed_km: float | None = None
+    closed_km: float | None = None
+    unknown_km: float | None = None
     open_share: float | None = None
     slowed_share: float | None = None
     closed_share: float | None = None
+    unknown_share: float | None = None
+    reason: str | None = None
 
 
 class FloodMovement(BaseModel):
