@@ -135,8 +135,12 @@ show the same three readings as tiles above a map.
 | How deep | deepest water; area deeper than 0.30 m (cars stop) | **Unknown** — shown as a dashed tile, never zero |
 | Can people move | share of road length open / slowed / closed, separately for walking and car/motorcycle; roads coloured the same way on the map | **Not yet** — needs an admitted citywide run |
 
-- What-if depth uses a hatched purple family; observed water is solid blue;
-  "no usable observation" is hatched grey.
+- What-if depth uses the site's existing scenario ramp (orange) and observed
+  water its observed ramp (blue), as on every other screen (§10, decision 4;
+  the mockups' hatched purple was dropped). "No usable observation" is hatched
+  grey.
+- A road is **slowed** at any speed reduction (speed multiplier below 1.0), on
+  the tiles, the map and the map's table alike (§10, decision 3).
 - A **depth ruler** beside the what-if map draws the declared thresholds for
   both modes and the scenario peak, so a reader sees why a road closes.
 - Past years: 2010, 2011, 2012, 2020 and the 1984–2021 ever-water extent. The
@@ -398,3 +402,16 @@ These were not discussed with North and a builder may revisit them:
    permitted-purpose terms (social benefit, teaching and disaster response).
 2. **Runs: option 1 (§6).** New demonstration runs from the new code, labelled
    on every screen as separate from the paper's 11 October release.
+
+Added 22 October 2026, while building BKK-055c:
+
+3. **"Slowed" means any speed reduction (< 1.0).** The shared map used
+   `speed_multiplier <= 0.95`; it now matches the flood-summary readings, so a
+   reader never sees the tiles and the map disagree. This also changes the
+   Scenario lab map.
+4. **Keep the site's flood colours.** Scenario orange, modelled navy, observed
+   blue, the same on every screen, rather than a new purple ramp.
+5. **BKK-055c ships in two PRs.** First the what-if view (tiles, depth ruler,
+   time scrubber, map, table) using the existing run picker; then the Past tab
+   with the JRC ever-water endpoint. An area × dry/moderate picker waits until
+   `/v1/runs` reports each run's area.
