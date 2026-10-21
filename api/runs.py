@@ -121,6 +121,13 @@ class RunRef:
         return self.state
 
     @property
+    def aoi_id(self) -> str | None:
+        """The area the run covers, e.g. ``bangkok-bma`` or ``sai-mai-district``."""
+        geography = self.manifest.get("geography")
+        value = geography.get("aoi_id") if isinstance(geography, dict) else None
+        return value if isinstance(value, str) and value else None
+
+    @property
     def population_version(self) -> str | None:
         population_model = self.manifest.get("population_model")
         if isinstance(population_model, dict):

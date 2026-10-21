@@ -38,6 +38,7 @@ from typing import Any, Iterable
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import rasterio
 from rasterio.mask import mask as rio_mask
 
@@ -298,6 +299,94 @@ def measure_year(
         aoi_permanent_pixels=int((array == CODE_PERMANENT).sum()),
         aoi_no_observation_pixels=int((array == CODE_NO_OBSERVATIONS).sum()),
     )
+
+
+EXTENT_WATER = 1
+#: Public aggregation grid, the same as the yearly observed-water cells.
+EXTENT_GRID_M = 1000
+
+
+def measure_extent(path: Path, aoi_geometry: Any) -> dict[str, Any]:
+    """Summarise the 1984-2021 Maximum Water Extent inside an AOI.
+
+    Code 1 was detected as water at least once, 0 never, and 255 has no data,
+    which stays unknown and out of the share. Areas use the same pixel area as
+    ``measure_year`` so the total is comparable with the yearly water areas;
+    the 1 km cells use the yearly cells' grid and ids. Read-only: nothing is
+    written beside the tile.
+    """
+    from rasterio.mask import raster_geometry_mask
+
+    geometry = aoi_geometry
+    if hasattr(geometry, "geometry"):
+        series = geometry.geometry
+        geometry = series.union_all() if hasattr(series, "union_all") else series.unary_union
+    with rasterio.open(path) as dataset:
+        if dataset.nodata not in (None, EXTENT_NODATA):
+            raise ValueError(f"{Path(path).name} has nodata tag {dataset.nodata}, not {EXTENT_NODATA}")
+        outside, transform, window = raster_geometry_mask(dataset, [geometry], crop=True)
+        data = dataset.read(1, window=window, masked=False)
+        crs = dataset.crs
+    inside = ~outside
+    water = (data == EXTENT_WATER) & inside
+    observed = inside & (data != EXTENT_NODATA)
+    bounds = geometry.bounds
+    pixel_area_km2 = float((PIXEL_DEGREES * 111.32) ** 2 * np.cos(np.radians((bounds[1] + bounds[3]) / 2)))
+    aoi_pixels, water_pixels = int(inside.sum()), int(water.sum())
+    observed_pixels = int(observed.sum())
+    no_data_pixels = aoi_pixels - observed_pixels
+
+    cells = _extent_cells(water, observed, transform, crs, pixel_area_km2) if water_pixels else []
+
+    return {
+        "aoi_pixels": aoi_pixels,
+        "ever_water_pixels": water_pixels,
+        "no_data_pixels": no_data_pixels,
+        "pixel_area_km2": pixel_area_km2,
+        "aoi_km2": aoi_pixels * pixel_area_km2,
+        "ever_water_km2": water_pixels * pixel_area_km2,
+        "no_data_km2": no_data_pixels * pixel_area_km2,
+        "ever_water_share_of_observed": water_pixels / observed_pixels if observed_pixels else None,
+        "cells": cells,
+    }
+
+
+def _extent_cells(
+    water: np.ndarray, observed: np.ndarray, transform: Any, crs: Any, pixel_area_km2: float
+) -> list[dict[str, Any]]:
+    """Bin observed extent pixels into the public 1 km grid (yearly cells' ids)."""
+    from pyproj import Transformer
+
+    rows, cols = np.nonzero(observed)
+    lons = transform.c + transform.a * (cols + 0.5)
+    lats = transform.f + transform.e * (rows + 0.5)
+    x, y = Transformer.from_crs(crs, "EPSG:32647", always_xy=True).transform(lons, lats)
+    grid = pd.DataFrame({
+        "gx": (np.floor(np.asarray(x) / EXTENT_GRID_M) * EXTENT_GRID_M).astype("int64"),
+        "gy": (np.floor(np.asarray(y) / EXTENT_GRID_M) * EXTENT_GRID_M).astype("int64"),
+        "w": water[rows, cols].astype("int64"),
+        "v": 1,
+    }).groupby(["gx", "gy"])[["w", "v"]].sum().reset_index()
+    grid = grid[grid["w"] > 0]
+    centres_x = grid["gx"] + EXTENT_GRID_M / 2.0
+    centres_y = grid["gy"] + EXTENT_GRID_M / 2.0
+    lon_c, lat_c = Transformer.from_crs("EPSG:32647", "OGC:CRS84", always_xy=True).transform(
+        centres_x.to_numpy(), centres_y.to_numpy()
+    )
+    return [
+        {
+            "cell_id": f"ow_{int(row.gx)}_{int(row.gy)}",
+            "x": float(x_c),
+            "y": float(y_c),
+            "lon": float(lon),
+            "lat": float(lat),
+            "water_px": int(row.w),
+            "valid_px": int(row.v),
+            "water_share": float(row.w) / float(row.v),
+            "water_km2": float(row.w) * pixel_area_km2,
+        }
+        for row, x_c, y_c, lon, lat in zip(grid.itertuples(), centres_x, centres_y, lon_c, lat_c)
+    ]
 
 
 def observed_water_mask(path: Path, aoi_geometry: Any) -> np.ndarray:

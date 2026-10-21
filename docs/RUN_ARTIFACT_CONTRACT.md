@@ -171,7 +171,7 @@ Rules the API must not break:
 |---|---|
 | `GET /v1/health` | liveness and version |
 | `GET /v1/sources` | registry with licence status |
-| `GET /v1/runs` | list runs, newest first |
+| `GET /v1/runs` | list runs, newest first, each with its `aoi_id` (the area it covers) |
 | `GET /v1/runs/{id}` | stage, progress, warnings, manifest |
 | `GET /v1/runs/{id}/stats` | the `stats.json` payload above |
 | `GET /v1/runs/{id}/mesh?time=` | mesh time slice |
@@ -185,6 +185,7 @@ Rules the API must not break:
 | `GET /v1/runs/{id}/export` | manifest and artefact bundle |
 | `GET /v1/config` | pilot area, CRS, and declared scenario status |
 | `GET /v1/areas/bangkok` | full BMA administrative boundary used as the map frame, independent of run scope |
+| `GET /v1/runs/{id}/observed-water/ever?min_share=&limit=` | everywhere ever detected as water in 1984–2021 (JRC Maximum Water Extent) inside the run's area: totals and 1 km cells. Served only when the staged tile hashes to the SHA-256 the run recorded in `observed_water.json`; otherwise null with a reason. Extent only: not one flood, not depth |
 
 CORS must allow the Vite dev origin. No endpoint may return a full person-level
 trajectory set; a single trip lookup is the finest granularity allowed.
