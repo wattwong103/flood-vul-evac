@@ -169,18 +169,55 @@ def test_bootstrap_block_length_comes_from_the_correlogram_and_the_protocol(monk
     squares = np.add.outer(np.arange(12) // 3, np.arange(12) // 3) % 2  # 300 m squares, alternating
     assert oes.correlation_range_m(grid_blocks(squares, np.zeros((12, 12)))) == 200
     assert oes.correlation_range_m(grid_blocks(np.indices((12, 12)).sum(0) % 2, np.zeros((12, 12)))) == 100
-    half_plane = np.repeat((np.arange(20) < 10)[:, None], 40, axis=1).astype(int)
-    with pytest.raises(ValueError, match="correlation range"):
-        oes.correlation_range_m(grid_blocks(half_plane, np.zeros((20, 40))))
     blocks = grid_blocks(squares, np.add.outer(np.arange(12.0), np.arange(12.0)))
     with pytest.raises(ValueError, match="not locked"):  # a defined case locked without a length
         oes.evaluate(blocks, fast_protocol(block_m=None), CASE)
-    for bad in (150, 0, 200.0, True):
+    for bad in (150, 0, 200.0, True, "capped"):
         with pytest.raises(ValueError, match="multiple of 100"):
             oes.lock_protocol({CASE: bad})
     assert oes.PROTOCOL["cases"] == []  # locking copies the template
     interval = oes.evaluate(blocks, fast_protocol(block_m=200), CASE)["interval"]
     assert interval["block_m"] == 200 and interval["n_tiles"] == 36 and interval["ci95"][0] <= interval["ci95"][1]
+    assert set(interval) == {"method", "seed", "block_m", "n_tiles", "n", "n_undefined", "ci95"}  # no fallback keys
+
+
+def test_a_correlation_range_beyond_half_the_grid_gives_no_interval_and_keeps_the_null():
+    # North, 22 Oct 2026, fallback (c): no interval, never a capped or guessed block length.
+    assert oes.PROTOCOL["interval"]["fallback"]["status"] == oes.NOT_ESTIMABLE  # locked before any run
+    half_plane = np.repeat((np.arange(20) < 10)[:, None], 40, axis=1).astype(int)  # r stays near 0.4 to lag 10
+    blocks = grid_blocks(half_plane, np.add.outer(np.arange(20.0), np.arange(40.0)) * 10)
+    assert oes.correlation_range_m(blocks) == oes.NOT_ESTIMABLE == "interval_not_estimable"
+    result = oes.evaluate(blocks, fast_protocol(block_m=oes.correlation_range_m(blocks)), CASE)
+    interval = result["interval"]
+    assert {key: interval[key] for key in ("method", "status", "reason", "ci95")} == {
+        "method": "block_bootstrap", "status": "interval_not_estimable",
+        "reason": "correlation_range_exceeds_half_grid", "ci95": None}
+    assert interval["lags_m"] == list(range(100, 1100, 100)) and len(interval["r"]) == 10
+    assert all(r > 0.05 for r in interval["r"]) and "block_m" not in interval
+    assert result["status"] == "ok" and 0 < result["null"]["p_ge_observed"] <= 1 and result["null"]["n"] == 49
+    assert result["auc"] is not None and result["toc"] and result["median_distance_m"]["observed_wet"] is not None
+    json.dumps(result, allow_nan=False)
+
+
+def test_the_fallback_is_read_from_the_lock_and_checked_against_the_mask(monkeypatch):
+    squares = np.add.outer(np.arange(12) // 3, np.arange(12) // 3) % 2  # its range is 200 m
+    with pytest.raises(ValueError, match="fallback"):  # a sentinel locked by hand on a mask with a range
+        oes.evaluate(grid_blocks(squares, np.zeros((12, 12))), fast_protocol(block_m=oes.NOT_ESTIMABLE), CASE)
+    half_plane = grid_blocks(np.repeat((np.arange(20) < 10)[:, None], 40, axis=1).astype(int), np.zeros((20, 40)))
+    for change in (lambda f: f.update(status="other"), lambda f: f.update(reason="other_policy"),
+                   lambda f: f.update(reason=float("nan")), lambda f: f.pop("reason"), lambda f: f.clear()):
+        altered = fast_protocol(block_m=oes.NOT_ESTIMABLE)
+        change(altered["interval"]["fallback"])
+        with pytest.raises(ValueError, match="fallback"):  # the record must hold oec-v1's fallback exactly
+            oes.evaluate(half_plane, altered, CASE)
+    del altered["interval"]["fallback"]
+    with pytest.raises(ValueError, match="fallback"):
+        oes.evaluate(half_plane, altered, CASE)
+    for nothing in ([], [None, None]):  # no lag examined: neither a length nor the fallback is established
+        with monkeypatch.context() as patch:
+            patch.setattr(oes, "correlogram", lambda blocks, r=nothing: r)
+            with pytest.raises(ValueError, match="no correlogram lag"):
+                oes.correlation_range_m(None)
 
 
 # Test 8: undefined states
