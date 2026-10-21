@@ -64,7 +64,8 @@ def build_flood_summary(run: RunRef, time: int | None) -> FloodSummaryResponse:
     stats = load_stats_file(run)[0] or {}
     slices, no_flood_reason = _read_slices(run, stats, warnings)
     state_times, no_states_reason = _read_state_times(run, warnings)
-    available_times = sorted(set(_times(slices)) | set(state_times or []))
+    slice_times = _times(slices, warnings, "flood_slices.parquet")
+    available_times = sorted(set(slice_times) | set(state_times or []))
     peak_time_s = _peak_time(slices)
     time_s = time if time is not None else _default_time(run, peak_time_s, available_times)
     summary = FloodSummaryResponse(
@@ -174,16 +175,36 @@ def _read_state_times(
     name = "edge_states.parquet"
     frame, read_warnings = read_parquet(artefact_path(run, name), columns=["time_s"])
     if frame is not None:
-        return _times(frame), None
+        return _times(frame, warnings, name), None
     if _was_absent(read_warnings):
         return None, NO_STATES_REASON
     return None, _read_failure(name, read_warnings, warnings)
 
 
-def _times(frame: pd.DataFrame | None) -> list[int]:
+def _valid_times(values: pd.Series) -> pd.Series:
+    """True where a stored time is a finite whole number of seconds."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    finite = pd.Series(np.isfinite(numeric.to_numpy(dtype="float64")), index=values.index)
+    return finite & (numeric == np.floor(numeric))
+
+
+def _times(
+    frame: pd.DataFrame | None, warnings: list[ApiWarning], name: str
+) -> list[int]:
     if frame is None or frame.empty or "time_s" not in frame.columns:
         return []
-    values = pd.to_numeric(frame["time_s"], errors="coerce").dropna().unique()
+    raw = frame["time_s"]
+    valid = _valid_times(raw)
+    invalid = int((raw.notna() & ~valid).sum())
+    if invalid:
+        warnings.append(
+            make_warning(
+                "invalid_time",
+                f"{invalid} rows have a time_s that is not a finite whole number and are ignored",
+                name,
+            )
+        )
+    values = pd.to_numeric(raw[valid], errors="coerce").unique()
     return [int(value) for value in values]
 
 
@@ -217,7 +238,7 @@ def _peak_time(slices: pd.DataFrame | None) -> int | None:
         return None
     depth = pd.to_numeric(slices["depth_m"], errors="coerce")
     times = pd.to_numeric(slices["time_s"], errors="coerce")
-    valid = depth.notna() & times.notna()
+    valid = depth.notna() & _valid_times(slices["time_s"])
     if not valid.any():
         return None
     deepest = depth[valid].max()
@@ -225,23 +246,23 @@ def _peak_time(slices: pd.DataFrame | None) -> int | None:
 
 
 def _unmeasured_depth(at_time: pd.DataFrame | None, warnings: list[ApiWarning]) -> str | None:
-    """A reason when cells exist at this time but none records a depth."""
+    """A reason when any cell at this time has no recorded depth.
+
+    One unrecorded cell could be the deepest or the only flooded one, so every
+    total at that time is withheld rather than reported as a false zero.
+    """
     if at_time is None or at_time.empty:
         return None
     unrecorded = int(pd.to_numeric(at_time["depth_m"], errors="coerce").isna().sum())
     if unrecorded == 0:
         return None
-    if unrecorded == len(at_time):
-        warnings.append(make_warning("null_depth", UNMEASURED_REASON, "flood_slices.parquet"))
-        return UNMEASURED_REASON
-    warnings.append(
-        make_warning(
-            "null_depth",
-            f"{unrecorded} flood cells at this time have no recorded depth and are not counted",
-            "flood_slices.parquet",
-        )
+    reason = (
+        UNMEASURED_REASON
+        if unrecorded == len(at_time)
+        else f"{unrecorded} of {len(at_time)} flood cells at this time have no recorded depth"
     )
-    return None
+    warnings.append(make_warning("null_depth", reason, "flood_slices.parquet"))
+    return reason
 
 
 def _single_value(frame: pd.DataFrame | None, column: str) -> str | None:
@@ -494,36 +515,92 @@ def _mode_movement(
         reason = f"network_edges.parquet has no {access} column, so the roads {name} may use are unknown"
         warnings.append(make_warning("schema_mismatch", reason, "network_edges.parquet"))
         return ModeMovement(mode=mode, mode_name=name, closed_depth_m=closed_depth_m, reason=reason)
-    flags = edges[access].astype("boolean")
-    if flags.isna().any():
+    flags, invalid = _as_flag(edges[access])
+    _warn_flags(warnings, invalid, "network_edges.parquet", f"{access} (not counted for {name})")
+    nulls = int(flags.isna().sum()) - invalid
+    if nulls:
         warnings.append(
             make_warning(
                 "missing_access_flag",
-                f"{int(flags.isna().sum())} edges have no {access} value and are not counted for {name}",
+                f"{nulls} edges have no {access} value and are not counted for {name}",
                 "network_edges.parquet",
             )
         )
     usable = edges.loc[flags.fillna(False).astype(bool), ["edge_id", "length_m"]]
     mode_states = states.loc[pd.to_numeric(states["mode"], errors="coerce") == mode]
     mode_states = mode_states.drop_duplicates(subset=["edge_id"], keep="last")
+    closed, invalid = _as_flag(mode_states["closed"])
+    _warn_flags(warnings, invalid, "edge_states.parquet", f"closed (unknown for {name})")
+    mode_states = mode_states.assign(closed=closed)
     joined = usable.merge(
         mode_states[["edge_id", "speed_multiplier", "closed"]], on="edge_id", how="left"
     )
     return _classify(mode, name, closed_depth_m, joined)
 
 
+_NOT_A_FLAG = object()
+
+
+def _as_flag(values: pd.Series) -> tuple[pd.Series, int]:
+    """Read a stored true/false column strictly.
+
+    True/False, 0/1 and the strings "true"/"false" are accepted; nulls stay
+    null; anything else (2, "yes", "unknown") becomes null and is counted, so a
+    malformed artefact yields a warning rather than a 500.
+    """
+    if pd.api.types.is_bool_dtype(values):
+        return values.astype("boolean"), 0
+    if pd.api.types.is_numeric_dtype(values):
+        numeric = pd.to_numeric(values, errors="coerce")
+        valid = numeric.isin([0, 1])
+        invalid = int((numeric.notna() & ~valid).sum())
+        return numeric.where(valid).map({0: False, 1: True}).astype("boolean"), invalid
+
+    def parse(value: Any) -> Any:
+        if isinstance(value, (bool, np.bool_)):
+            return bool(value)
+        if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+            return value.strip().lower() == "true"
+        if value is None or pd.isna(value):
+            return pd.NA
+        return _NOT_A_FLAG
+
+    parsed = values.map(parse)
+    rejected = parsed.map(lambda value: value is _NOT_A_FLAG)
+    return parsed.mask(rejected, pd.NA).astype("boolean"), int(rejected.sum())
+
+
+def _warn_flags(warnings: list[ApiWarning], invalid: int, artefact: str, column: str) -> None:
+    if invalid:
+        warnings.append(
+            make_warning(
+                "invalid_flag",
+                f"{invalid} values of {column} are not true or false and are treated as unknown",
+                artefact,
+            )
+        )
+
+
 def _classify(
     mode: int, name: str, closed_depth_m: float | None, joined: pd.DataFrame
 ) -> ModeMovement:
-    """Road length by state; shares are null when no usable edge has a state."""
+    """Road length by state; shares are null when no usable edge has a state.
+
+    A road counts as closed only on a stored true flag, and as open or slowed
+    only on a stored false flag with a speed. Anything less is unknown.
+    """
     length_km = joined["length_m"] / 1000.0
-    closed = joined["closed"].astype("boolean").fillna(False).astype(bool)
+    flag = joined["closed"].astype("boolean")
+    is_closed = flag.fillna(False).astype(bool)
+    is_passable = (~flag).fillna(False).astype(bool)
     speed = pd.to_numeric(joined["speed_multiplier"], errors="coerce")
+    opened = is_passable & (speed >= 1.0)
+    slowed = is_passable & (speed < 1.0)
     masks = {
-        "open": ~closed & (speed >= 1.0),
-        "slowed": ~closed & (speed < 1.0),
-        "closed": closed,
-        "unknown": ~closed & speed.isna(),
+        "open": opened,
+        "slowed": slowed,
+        "closed": is_closed,
+        "unknown": ~(is_closed | opened | slowed),
     }
     km = {state: float(length_km[mask].sum()) for state, mask in masks.items()}
     total = float(length_km.sum())
