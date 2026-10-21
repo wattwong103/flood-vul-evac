@@ -11,6 +11,7 @@ import {
   depthRulerMarks,
   displayedTime,
   floodSourceNote,
+  formatDepth,
   formatReadingShare,
   howBigReading,
   howDeepReading,
@@ -229,4 +230,14 @@ test("a map layer is drawn only for the run, time and mode it was asked for", ()
   assert.equal(layerMatches(links, "a", 300, "3"), true);
   assert.equal(layerMatches(links, "a", 300, "0"), false);
   assert.equal(layerMatches(null, "a", 300), false);
+});
+
+
+test("a real but tiny depth never reads as dry", () => {
+  assert.equal(formatDepth(0.004), "< 0.01");
+  assert.equal(formatDepth(0.3), "0.30");
+  assert.equal(formatDepth(0), "0.00");
+  const summary = moderate();
+  summary.how_deep.max_depth_m = 0.004;
+  assert.equal(howDeepReading(summary).value, "< 0.01");
 });

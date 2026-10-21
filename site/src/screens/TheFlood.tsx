@@ -27,6 +27,7 @@ import {
   depthRulerMarks,
   displayedTime,
   floodSourceNote,
+  formatDepth,
   layerMatches,
   summaryForRun,
   type RulerMark,
@@ -215,7 +216,7 @@ function DepthRuler({ marks }: { marks: RulerMark[] }) {
       <ol className="depth-marks">
         {marks.map((mark) => (
           <li key={mark.label}>
-            <b>{mark.depthM.toFixed(2)} m</b> {mark.label}
+            <b>{formatDepth(mark.depthM)} m</b> {mark.label}
           </li>
         ))}
       </ol>

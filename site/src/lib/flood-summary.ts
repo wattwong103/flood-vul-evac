@@ -40,11 +40,16 @@ const MODE_STOP_LABELS: Record<string, string> = {
 const twoDecimals = (value: number) => value.toFixed(2);
 
 /** A real value that would round to 0 at two decimals reads "< 0.01", never "0". */
-const SMALLEST_AREA = 0.005;
+const SMALLEST_AT_TWO_DECIMALS = 0.005;
 const SMALLEST_SHARE = 0.0005;
 
-function areaText(km2: number): string {
-  return km2 > 0 && km2 < SMALLEST_AREA ? "< 0.01" : formatNumber(km2);
+function twoPlaceText(value: number): string {
+  return value > 0 && value < SMALLEST_AT_TWO_DECIMALS ? "< 0.01" : formatNumber(value);
+}
+
+/** A depth in metres at two decimals; a real but tiny depth reads "< 0.01", never dry. */
+export function formatDepth(metres: number): string {
+  return metres > 0 && metres < SMALLEST_AT_TWO_DECIMALS ? "< 0.01" : twoDecimals(metres);
 }
 
 /** A share for a reading: "< 0.1%" for a real but tiny share, never "0.0%". */
@@ -118,14 +123,14 @@ export function howBigReading(summary: FloodSummary): Reading {
   } else {
     detail = `Area with ${threshold} of water or more; the district's area is not recorded`;
   }
-  return { value: areaText(area), unit: "km²", detail, reason };
+  return { value: twoPlaceText(area), unit: "km²", detail, reason };
 }
 
 function stopPhrase(stop: ModeStopArea | undefined, name: string, lead: string): string {
   const who = name === "car" ? "cars and motorcycles" : "walkers";
   if (!stop || stop.closed_depth_m === null) return `${who}: closing depth unknown`;
   if (stop.area_km2 === null) return `${who}: area unknown`;
-  return `${lead} ${stop.area_km2 > 0 && stop.area_km2 < SMALLEST_AREA ? "< 0.01" : twoDecimals(stop.area_km2)} km² (${twoDecimals(stop.closed_depth_m)} m or deeper)`;
+  return `${lead} ${stop.area_km2 > 0 && stop.area_km2 < SMALLEST_AT_TWO_DECIMALS ? "< 0.01" : twoDecimals(stop.area_km2)} km² (${formatDepth(stop.closed_depth_m)} m or deeper)`;
 }
 
 export function howDeepReading(summary: FloodSummary): Reading {
@@ -139,7 +144,7 @@ export function howDeepReading(summary: FloodSummary): Reading {
     stopPhrase(byMode.get("walk"), "walk", "walkers on"),
   ].join("; ");
   const detail = `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`;
-  return { value: formatNumber(deepest), unit: "m", detail, reason };
+  return { value: twoPlaceText(deepest), unit: "m", detail, reason };
 }
 
 export function movementRows(summary: FloodSummary): MovementRow[] {
