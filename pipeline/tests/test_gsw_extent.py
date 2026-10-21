@@ -1,0 +1,101 @@
+"""Tests for the JRC Maximum Water Extent summary (BKK-055c).
+
+The extent marks every pixel ever detected as water in 1984-2021 (code 1),
+never-water (0) and no-data (255). No-data is unknown, never dry, and only
+pixels inside the AOI count.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from bkkflow.sources import gsw  # noqa: E402
+
+WEST, NORTH = 100.5, 13.7
+
+
+def extent_fixture(tmp_path, rows, *, nodata=None):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    path = tmp_path / "extent.tif"
+    array = np.array(rows, dtype="uint8")
+    with rasterio.open(path, "w", driver="GTiff", width=array.shape[1], height=array.shape[0],
+                       count=1, dtype="uint8", crs="EPSG:4326", nodata=nodata,
+                       transform=from_origin(WEST, NORTH, 0.00025, 0.00025)) as dst:
+        dst.write(array, 1)
+    bounds = (WEST, NORTH - array.shape[0] * 0.00025, WEST + array.shape[1] * 0.00025, NORTH)
+    return path, bounds
+
+
+def pixel_area_km2(bounds):
+    return (gsw.PIXEL_DEGREES * 111.32) ** 2 * np.cos(np.radians((bounds[1] + bounds[3]) / 2))
+
+
+def test_extent_counts_water_and_keeps_no_data_unknown(tmp_path):
+    from shapely.geometry import box
+
+    path, bounds = extent_fixture(tmp_path, [[1, 1, 0, 255], [0, 1, 0, 0]])
+    result = gsw.measure_extent(path, box(*bounds))
+
+    assert result["aoi_pixels"] == 8
+    assert result["ever_water_pixels"] == 3
+    assert result["no_data_pixels"] == 1
+    assert result["ever_water_km2"] == pytest.approx(3 * pixel_area_km2(bounds))
+    assert result["no_data_km2"] == pytest.approx(1 * pixel_area_km2(bounds))
+    # No-data is unknown, so the share is over the 7 observed pixels.
+    assert result["ever_water_share_of_observed"] == pytest.approx(3 / 7)
+
+
+def test_extent_counts_only_pixels_inside_the_aoi(tmp_path):
+    from shapely.geometry import box
+
+    path, bounds = extent_fixture(tmp_path, [[1, 1, 0, 255], [0, 1, 0, 0]])
+    left_half = box(bounds[0], bounds[1], bounds[0] + 2 * 0.00025, bounds[3])
+    result = gsw.measure_extent(path, left_half)
+
+    assert result["aoi_pixels"] == 4
+    assert result["ever_water_pixels"] == 3
+    assert result["no_data_pixels"] == 0
+
+
+def test_extent_cells_add_up_to_the_total(tmp_path):
+    from shapely.geometry import box
+
+    path, bounds = extent_fixture(tmp_path, [[1, 1, 0, 255], [0, 1, 0, 0]])
+    result = gsw.measure_extent(path, box(*bounds))
+    cells = result["cells"]
+
+    assert cells, "water inside the AOI must produce at least one 1 km cell"
+    assert sum(cell["water_px"] for cell in cells) == result["ever_water_pixels"]
+    assert sum(cell["water_km2"] for cell in cells) == pytest.approx(result["ever_water_km2"])
+    for cell in cells:
+        assert cell["cell_id"].startswith("ow_")
+        assert 0 < cell["water_share"] <= 1
+        assert 99 < cell["lon"] < 102 and 12 < cell["lat"] < 15
+
+
+def test_extent_with_no_observed_pixels_has_no_share(tmp_path):
+    from shapely.geometry import box
+
+    path, bounds = extent_fixture(tmp_path, [[255, 255]])
+    result = gsw.measure_extent(path, box(*bounds))
+
+    assert result["ever_water_pixels"] == 0
+    assert result["ever_water_share_of_observed"] is None
+    assert result["cells"] == []
+
+
+def test_extent_with_an_unexpected_nodata_tag_is_refused(tmp_path):
+    from shapely.geometry import box
+
+    # A nodata tag of 0 would turn never-water into unknown.
+    path, bounds = extent_fixture(tmp_path, [[1, 0]], nodata=0)
+    with pytest.raises(ValueError, match="nodata"):
+        gsw.measure_extent(path, box(*bounds))
