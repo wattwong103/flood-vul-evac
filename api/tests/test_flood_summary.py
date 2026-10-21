@@ -563,3 +563,81 @@ def test_missing_access_column_gives_that_mode_a_reason(client, runs_dir) -> Non
     assert car["total_km"] is None
     assert "vehicle_allowed" in car["reason"]
     assert _mode(body, "walk")["total_km"] == pytest.approx(0.6)
+
+
+# ---------------------------------------------------------------------------
+# Cross-harness (Codex) regressions.
+# ---------------------------------------------------------------------------
+
+
+def test_null_closed_flag_is_unknown_not_open(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    states = _edge_states().astype({"closed": "object"})
+    states.loc[6, "closed"] = None  # e1, t=300, walk, speed 1.0
+    tables["edge_states"] = states
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    walk = _mode(client.get("/v1/runs/wi/flood-summary?time=300").json(), "walk")
+
+    assert walk["open_km"] == pytest.approx(0.0)
+    assert walk["unknown_km"] == pytest.approx(0.1)
+
+
+def test_invalid_access_flags_are_warned_not_a_500(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    edges = _network_edges().astype({"walk_allowed": "int64"})
+    edges.loc[0, "walk_allowed"] = 2  # neither 0 nor 1
+    tables["network_edges"] = edges
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    response = client.get("/v1/runs/wi/flood-summary?time=300")
+
+    assert response.status_code == 200
+    assert _mode(response.json(), "walk")["total_km"] == pytest.approx(0.5)
+    assert "invalid_flag" in _codes(response.json())
+
+
+def test_invalid_closed_values_are_unknown_not_a_500(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    states = _edge_states().astype({"closed": "int64"})
+    states.loc[7, "closed"] = 2  # e2, t=300, walk: neither 0 nor 1
+    tables["edge_states"] = states
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    response = client.get("/v1/runs/wi/flood-summary?time=300")
+
+    assert response.status_code == 200
+    walk = _mode(response.json(), "walk")
+    assert walk["unknown_km"] == pytest.approx(0.2)
+    assert walk["slowed_km"] == pytest.approx(0.0)
+    assert "invalid_flag" in _codes(response.json())
+
+
+def test_partially_missing_depth_withholds_the_totals(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    tables["flood_slices"] = _flood_slices().assign(
+        depth_m=[0.05, 0.10, 0.20, 0.30, 0.10, None, None, None]
+    )
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    body = client.get("/v1/runs/wi/flood-summary?time=300").json()
+
+    assert body["how_big"]["flooded_area_km2"] is None
+    assert body["how_deep"]["max_depth_m"] is None
+    assert "null_depth" in _codes(body)
+
+
+def test_infinite_times_are_dropped_with_a_warning(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    slices = _flood_slices().astype({"time_s": "float"})
+    slices.loc[0, "time_s"] = float("inf")
+    states = _edge_states().astype({"time_s": "float"})
+    states.loc[0, "time_s"] = float("inf")
+    tables["flood_slices"], tables["edge_states"] = slices, states
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    response = client.get("/v1/runs/wi/flood-summary")
+
+    assert response.status_code == 200
+    assert response.json()["available_times"] == [0, 300]
+    assert "invalid_time" in _codes(response.json())
