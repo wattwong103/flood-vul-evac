@@ -51,22 +51,15 @@ def build_flood_summary(run: RunRef, time: int | None) -> FloodSummaryResponse:
     warnings: list[ApiWarning] = []
     stats, _ = load_stats_file(run)
     stats = stats or {}
-    slices, _ = read_parquet(
-        artefact_path(run, "flood_slices.parquet"),
-        columns=["cell_id", "x", "y", "time_s", "depth_m", "source_role"],
-    )
-    no_flood_reason = None if slices is not None else _no_flood_reason(stats)
-    if slices is not None and "depth_m" not in slices.columns:
-        no_flood_reason = "flood_slices.parquet has no depth_m column"
-        warnings.append(make_warning("schema_mismatch", no_flood_reason, "flood_slices.parquet"))
-        slices = None
+    slices, no_flood_reason = _read_slices(run, stats, warnings)
     state_times = _state_times(run)
     available_times = sorted(set(_times(slices)) | set(state_times or []))
     peak_time_s = _peak_time(slices)
-
-    time_s = time
-    if time_s is None:
-        time_s = peak_time_s if peak_time_s is not None else min(available_times, default=None)
+    # Default to the peak: the moment a reader most needs. A run with no flood
+    # cells (dry, or no layer) falls back to its first modelled time.
+    time_s = time if time is not None else (
+        peak_time_s if peak_time_s is not None else min(available_times, default=None)
+    )
     summary = FloodSummaryResponse(
         run_id=run.run_id,
         validation_status=run.validation_status,
@@ -79,14 +72,7 @@ def build_flood_summary(run: RunRef, time: int | None) -> FloodSummaryResponse:
     )
 
     if time_s is not None and available_times and time_s not in available_times:
-        reason = f"this run has no model state at time {time_s} s"
-        warnings.append(make_warning("time_not_available", reason))
-        summary.how_big = FloodSize(reason=reason)
-        summary.how_deep = FloodDepth(reason=reason)
-        summary.movement = FloodMovement(reason=reason)
-        # Pydantic copies lists on construction, so warnings are attached last.
-        summary.warnings = warnings
-        return summary
+        return _unmodelled_time(summary, time_s, warnings)
 
     states = _states_at(run, time_s, warnings) if state_times is not None else None
     version = _single_value(states, "threshold_set_version")
@@ -104,11 +90,42 @@ def build_flood_summary(run: RunRef, time: int | None) -> FloodSummaryResponse:
         at_time, cell_size_m, closing, dry=dry, missing_reason=no_flood_reason
     )
     summary.movement = _movement(run, states, closing, warnings)
+    # Pydantic copies lists on construction, so warnings are attached last.
+    summary.warnings = warnings
+    return summary
+
+
+def _unmodelled_time(
+    summary: FloodSummaryResponse, time_s: int, warnings: list[ApiWarning]
+) -> FloodSummaryResponse:
+    """A time the run never modelled is unknown, not dry: every reading is null."""
+    reason = f"this run has no model state at time {time_s} s"
+    warnings.append(make_warning("time_not_available", reason))
+    summary.how_big = FloodSize(reason=reason)
+    summary.how_deep = FloodDepth(reason=reason)
+    summary.movement = FloodMovement(reason=reason)
     summary.warnings = warnings
     return summary
 
 
 # ------------------------------------------------------------------ reading
+
+
+def _read_slices(
+    run: RunRef, stats: dict[str, Any], warnings: list[ApiWarning]
+) -> tuple[pd.DataFrame | None, str | None]:
+    """The flood cells, or None and the reason the run has none."""
+    slices, _ = read_parquet(
+        artefact_path(run, "flood_slices.parquet"),
+        columns=["cell_id", "x", "y", "time_s", "depth_m", "source_role"],
+    )
+    if slices is None:
+        return None, _no_flood_reason(stats)
+    if "depth_m" not in slices.columns:
+        reason = "flood_slices.parquet has no depth_m column"
+        warnings.append(make_warning("schema_mismatch", reason, "flood_slices.parquet"))
+        return None, reason
+    return slices, None
 
 
 def _times(frame: pd.DataFrame | None) -> list[int]:
