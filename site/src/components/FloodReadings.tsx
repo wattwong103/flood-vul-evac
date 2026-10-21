@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MetricCard, ValidationStamp } from "@/components/primitives";
 import type { FloodSummary } from "@/lib/api";
 import {
+  formatReadingShare,
   howBigReading,
   howDeepReading,
   movementReason,
@@ -18,7 +19,7 @@ import {
   type MovementRow,
   type Reading,
 } from "@/lib/flood-summary";
-import { formatNumber, formatShare } from "@/lib/format";
+import { formatNumber } from "@/lib/format";
 
 /** The same open / slowed / closed colours the map uses for roads. */
 const SEGMENTS: Array<{ key: "open" | "slowed" | "closed" | "unknown"; label: string; colour: string }> = [
@@ -59,9 +60,17 @@ const READING_ORDER = ["closed", "slowed", "open", "unknown"] as const;
 
 function describe(row: MovementRow): string {
   const shares = READING_ORDER.filter((key) => key !== "unknown" || (row.unknown ?? 0) > 0).map(
-    (key) => `${formatShare(row[key])} ${SEGMENTS.find((segment) => segment.key === key)?.label}`,
+    (key) => `${formatReadingShare(row[key])} ${SEGMENTS.find((segment) => segment.key === key)?.label}`,
   );
   return `${shares.join(" · ")} of ${formatNumber(row.totalKm, 1)} km`;
+}
+
+/** The API's warnings, in its own words: why a value is withheld or partial. */
+function warningMessages(warnings: unknown[]): string[] {
+  return warnings.flatMap((warning) => {
+    const message = (warning as { message?: unknown } | null)?.message;
+    return typeof message === "string" && message ? [message] : [];
+  });
 }
 
 export function FloodReadings({
@@ -77,8 +86,10 @@ export function FloodReadings({
   const deep = howDeepReading(summary);
   const rows = movementRows(summary);
   const noMovement = movementReason(summary);
+  const notes = warningMessages(summary.warnings ?? []);
 
   return (
+    <>
     <section className="metric-grid flood-readings" aria-label="How big, how deep, can people move">
       <MetricCard
         label="How big"
@@ -123,5 +134,13 @@ export function FloodReadings({
         </CardContent>
       </Card>
     </section>
+    {notes.length > 0 ? (
+      <ul className="reading-notes" aria-label="Notes from the data">
+        {notes.map((note) => (
+          <li key={note}>{note}</li>
+        ))}
+      </ul>
+    ) : null}
+    </>
   );
 }

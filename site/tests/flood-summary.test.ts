@@ -14,6 +14,7 @@ import {
   formatReadingShare,
   howBigReading,
   howDeepReading,
+  layerMatches,
   movementReason,
   movementRows,
   summaryForRun,
@@ -216,4 +217,16 @@ test("road states follow the readings' rule, and an unrecorded state is unknown"
   assert.equal(roadState(false, 1), "open");
   assert.equal(roadState(null, 0.5), "unknown");
   assert.equal(roadState(false, null), "unknown");
+});
+
+
+test("a map layer is drawn only for the run, time and mode it was asked for", () => {
+  const flood = { type: "FeatureCollection", features: [], run_id: "a", time_s: 300 };
+  const links = { type: "FeatureCollection", features: [], meta: { run_id: "a", time_s: 300, mode: "3" } };
+  assert.equal(layerMatches(flood, "a", 300), true);
+  assert.equal(layerMatches(flood, "b", 300), false);
+  assert.equal(layerMatches(flood, "a", 600), false);
+  assert.equal(layerMatches(links, "a", 300, "3"), true);
+  assert.equal(layerMatches(links, "a", 300, "0"), false);
+  assert.equal(layerMatches(null, "a", 300), false);
 });

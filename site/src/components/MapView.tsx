@@ -61,6 +61,7 @@ import { useViewportLayers } from "@/hooks/useViewportLayers";
 import { updateMapSources } from "@/lib/map-sources";
 import { isRefugeRecord } from "@/lib/map-refuges";
 import { MapPanel } from "@/components/MapPanel";
+import { ROAD_FILTERS, roadState } from "@/lib/road-state";
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -218,23 +219,15 @@ function depthExpression(stops: [number, string][]): unknown[] {
 const NUM = (key: string) => ["coalesce", ["to-number", ["get", key]], 0] as unknown[];
 const STR = stringPropertyExpression;
 
-const CLOSED = [
-  "any",
-  ["==", ["get", "closed"], true],
-  ["==", ["to-string", ["get", "closed"]], "true"],
-] as unknown[];
-
 /**
- * Any speed reduction counts as slowed, the same rule the flood-summary
- * readings use (North, 22 October 2026), so the map and the tiles agree.
+ * Road states come from one shared rule (lib/road-state.ts), so the map, its
+ * table and the flood readings never disagree; an unrecorded state is drawn
+ * as unknown, never as open.
  */
-const SLOWED = [
-  "all",
-  ["!", CLOSED],
-  ["<", ["to-number", ["coalesce", ["get", "speed_multiplier"], 1]], 1],
-] as unknown[];
-
-const OPEN = ["all", ["!", CLOSED], ["!", SLOWED]] as unknown[];
+const CLOSED = ROAD_FILTERS.closed;
+const SLOWED = ROAD_FILTERS.slowed;
+const OPEN = ROAD_FILTERS.open;
+const ROAD_UNKNOWN = ROAD_FILTERS.unknown;
 
 const VERIFIED = [
   "any",
@@ -569,6 +562,14 @@ export function MapView({
 
       // --- Network state ---------------------------------------------
       instance.addLayer({
+        id: "network-unknown",
+        type: "line",
+        source: "links",
+        filter: ROAD_UNKNOWN as never,
+        layout: { visibility: "visible" },
+        paint: { "line-color": "#aab5b0", "line-width": 1, "line-dasharray": [1, 2] },
+      });
+      instance.addLayer({
         id: "network-open",
         type: "line",
         source: "links",
@@ -735,6 +736,7 @@ export function MapView({
     set("flood-scenario-line", layers.flood);
     set("flood-scenario-circle", layers.flood);
     set("buildings-fill", layers.buildings);
+    set("network-unknown", layers.network);
     set("network-open", layers.network);
     set("network-slowed", layers.network);
     set("network-closed", layers.network);
@@ -892,6 +894,10 @@ function MapLegend({ layers }: { layers: LayerState }) {
               <span className="swatch net-closed" aria-hidden="true" /> Closed (heavy
               solid)
             </li>
+            <li>
+              <span className="swatch net-unknown" aria-hidden="true" /> No state recorded
+              (dotted)
+            </li>
           </ul>
         </div>
       ) : null}
@@ -999,11 +1005,7 @@ function floodRows(features: Array<Feature<FloodProperties>>): Row[] {
 function linkRows(features: Array<Feature<LinkProperties>>): Row[] {
   return features.map((feature, index) => {
     const p = feature.properties ?? {};
-    const closed = propBoolean(p, "closed");
-    const speed = propNumber(p, "speed_multiplier");
-    // Same rule as the map's SLOWED layer: any speed reduction is slowed.
-    const state =
-      closed === null ? "not reported" : closed ? "closed" : speed !== null && speed < 1 ? "slowed" : "open";
+    const state = roadState(propBoolean(p, "closed"), propNumber(p, "speed_multiplier"));
     return {
       id: featureId(feature, index),
       cells: [
