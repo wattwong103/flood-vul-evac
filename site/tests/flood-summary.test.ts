@@ -9,11 +9,16 @@ import test from "node:test";
 import { floodSummaryPath } from "../src/lib/client.ts";
 import {
   depthRulerMarks,
+  displayedTime,
+  floodSourceNote,
+  formatReadingShare,
   howBigReading,
   howDeepReading,
   movementReason,
   movementRows,
+  summaryForRun,
 } from "../src/lib/flood-summary.ts";
+import { roadState, SLOWED_BELOW } from "../src/lib/road-state.ts";
 import { NOT_AVAILABLE } from "../src/lib/format.ts";
 import type { FloodSummary } from "../src/lib/api.ts";
 
@@ -147,11 +152,11 @@ test("with no road states the movement reason is shown", () => {
   assert.match(movementReason(summary) ?? "", /no road states/);
 });
 
-test("the depth ruler marks each closing depth and the deepest water", () => {
+test("the depth ruler marks each closing depth and the deepest water at its time", () => {
   assert.deepEqual(depthRulerMarks(moderate()), [
-    { depthM: 0.3, label: "Cars and motorcycles stop" },
-    { depthM: 0.5, label: "Walkers stop" },
-    { depthM: 0.5499, label: "Deepest water now" },
+    { depthM: 0.3, label: "Cars and motorcycles stop", deepest: false },
+    { depthM: 0.5, label: "Walkers stop", deepest: false },
+    { depthM: 0.5499, label: "Deepest water at 19:00", deepest: true },
   ]);
 });
 
@@ -159,4 +164,56 @@ test("the depth ruler leaves out what it does not know", () => {
   const summary = moderate();
   summary.how_deep = { max_depth_m: null, at_or_above_closing_depth: [], reason: "no layer" };
   assert.deepEqual(depthRulerMarks(summary), []);
+});
+
+
+// ---------------------------------------------------------------------------
+// Code-review regressions.
+// ---------------------------------------------------------------------------
+
+test("a summary for another run is not shown under the selected run", () => {
+  assert.equal(summaryForRun(moderate(), "another-run"), null);
+  assert.equal(summaryForRun(moderate(), "daa9a8dc")?.run_id, "daa9a8dc");
+  assert.equal(summaryForRun(null, "daa9a8dc"), null);
+});
+
+test("the slider shows the picked time before the server answers", () => {
+  assert.equal(displayedTime(65100, 68400), 65100);
+  assert.equal(displayedTime(null, 68400), 68400);
+  assert.equal(displayedTime(null, null), null);
+});
+
+test("a real but tiny area never reads as zero", () => {
+  const summary = moderate();
+  summary.how_big.flooded_area_km2 = 0.0025; // one 50 m cell
+  summary.how_big.share_of_aoi = 0.0004;
+  const reading = howBigReading(summary);
+  assert.equal(reading.value, "< 0.01");
+  assert.match(reading.detail, /< 0\.1% of the district/);
+  summary.how_deep.at_or_above_closing_depth[1].area_km2 = 0.0025;
+  assert.match(howDeepReading(summary).detail, /stop on < 0\.01 km²/);
+});
+
+test("a real but tiny share never reads as 0.0%", () => {
+  assert.equal(formatReadingShare(0.0004), "< 0.1%");
+  assert.equal(formatReadingShare(0), "0.0%");
+  assert.equal(formatReadingShare(0.143529), "14.4%");
+  assert.equal(formatReadingShare(null), NOT_AVAILABLE);
+});
+
+test("the flood source is named, not assumed to be a scenario", () => {
+  assert.match(floodSourceNote("scenario"), /declared scenario/);
+  assert.match(floodSourceNote("modelled"), /modelled/);
+  assert.doesNotMatch(floodSourceNote("modelled"), /scenario/);
+  assert.match(floodSourceNote("mixed:modelled,scenario"), /mixes/);
+  assert.match(floodSourceNote(null), /not recorded/);
+});
+
+test("road states follow the readings' rule, and an unrecorded state is unknown", () => {
+  assert.equal(SLOWED_BELOW, 1);
+  assert.equal(roadState(true, null), "closed");
+  assert.equal(roadState(false, 0.97), "slowed");
+  assert.equal(roadState(false, 1), "open");
+  assert.equal(roadState(null, 0.5), "unknown");
+  assert.equal(roadState(false, null), "unknown");
 });

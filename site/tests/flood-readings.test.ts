@@ -113,3 +113,17 @@ test("a run without a flood layer shows reasons, not zeros", async () => {
   assert.doesNotMatch(text, /\b0 km²/);
   assert.doesNotMatch(text, /0\.0% closed/);
 });
+
+
+test("a tiny closed share and the API's warnings reach the reader", async () => {
+  const walk = { ...moderate.movement.modes[0], closed_share: 0.0004, closed_km: 0.07 };
+  const text = await render({
+    ...moderate,
+    movement: { modes: [walk, moderate.movement.modes[1]], reason: null },
+    warnings: [{ code: "inconsistent_aoi", message: "flooded area exceeds the AOI area; its share is withheld", artefact: null }],
+  });
+
+  assert.match(text, /< 0\.1% closed/);
+  assert.doesNotMatch(text, /0\.0% closed/);
+  assert.match(text, /its share is withheld/);
+});
