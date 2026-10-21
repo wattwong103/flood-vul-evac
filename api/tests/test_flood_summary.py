@@ -20,7 +20,9 @@ THRESHOLDS = "bkk-demo-thresholds-v0.1"
 CELL_KM2 = 0.05 * 0.05  # one 50 m flood cell
 
 
-def _manifest(run_id: str, *, peak_depth_m: float | None = 0.55) -> dict:
+def _manifest(
+    run_id: str, *, peak_depth_m: float | None = 0.55, peak_time_s: int | None = None
+) -> dict:
     flood_scenario: dict = {
         "model_name": "bkk-scenario-depth-decay",
         "model_version": "0.1.0",
@@ -32,6 +34,8 @@ def _manifest(run_id: str, *, peak_depth_m: float | None = 0.55) -> dict:
             "source_role": "scenario",
             "peak_depth_m": peak_depth_m,
         }
+        if peak_time_s is not None:
+            flood_scenario["parameters"]["peak_time_s"] = peak_time_s
     return {
         "run_id": run_id,
         "created_at": "2026-01-01T00:00:00+00:00",
@@ -471,3 +475,91 @@ def test_shares_include_the_unknown_road_length(client, runs_dir) -> None:
     assert walk["unknown_share"] == pytest.approx(0.0)
     total = walk["open_share"] + walk["slowed_share"] + walk["closed_share"] + walk["unknown_share"]
     assert total == pytest.approx(1.0)
+
+
+def test_slices_without_a_time_column_are_a_reason_not_dry(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    tables["flood_slices"] = _flood_slices().drop(columns=["time_s"])
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    body = client.get("/v1/runs/wi/flood-summary?time=300").json()
+
+    assert body["how_big"]["flooded_area_km2"] is None
+    assert body["how_deep"]["max_depth_m"] is None
+    assert "schema_mismatch" in _codes(body)
+
+
+def test_mode_without_states_has_null_shares_and_a_reason(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    states = _edge_states()
+    tables["edge_states"] = states.loc[states["mode"] == 0]
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    car = _mode(client.get("/v1/runs/wi/flood-summary?time=300").json(), "car")
+
+    assert car["unknown_km"] == pytest.approx(0.3)
+    assert car["open_share"] is None and car["closed_share"] is None
+    assert car["reason"]
+
+
+def test_share_above_one_is_null_with_a_warning(client, runs_dir) -> None:
+    _write_run(runs_dir, "wi", tables=_what_if_tables(), stats={"geography": {"area_km2": 0.001}})
+
+    body = client.get("/v1/runs/wi/flood-summary?time=300").json()
+
+    assert body["how_big"]["share_of_aoi"] is None
+    assert "inconsistent_aoi" in _codes(body)
+
+
+def test_dry_run_defaults_to_the_declared_peak_and_role(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    tables["flood_slices"] = _flood_slices().iloc[0:0]
+    _write_run(
+        runs_dir,
+        "dry",
+        manifest=_manifest("dry", peak_depth_m=0.0, peak_time_s=300),
+        tables=tables,
+        stats=AOI_STATS,
+    )
+
+    body = client.get("/v1/runs/dry/flood-summary").json()
+
+    assert body["time_s"] == 300
+    assert body["source_role"] == "scenario"
+
+
+def test_modelled_time_without_flood_cells_is_a_measured_zero(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    slices = _flood_slices()
+    tables["flood_slices"] = slices.loc[slices["time_s"] == 300]
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    body = client.get("/v1/runs/wi/flood-summary?time=0").json()
+
+    assert body["how_big"]["flooded_area_km2"] == 0.0
+    assert body["how_big"]["reason"] is None
+    assert body["how_deep"]["max_depth_m"] == 0.0
+
+
+def test_missing_road_length_is_warned_not_counted_as_zero(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    tables["network_edges"] = _network_edges().assign(length_m=[100.0, None, 300.0])
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    body = client.get("/v1/runs/wi/flood-summary?time=300").json()
+
+    assert _mode(body, "walk")["total_km"] == pytest.approx(0.4)
+    assert "missing_length" in _codes(body)
+
+
+def test_missing_access_column_gives_that_mode_a_reason(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    tables["network_edges"] = _network_edges().drop(columns=["vehicle_allowed"])
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    body = client.get("/v1/runs/wi/flood-summary?time=300").json()
+
+    car = _mode(body, "car")
+    assert car["total_km"] is None
+    assert "vehicle_allowed" in car["reason"]
+    assert _mode(body, "walk")["total_km"] == pytest.approx(0.6)
