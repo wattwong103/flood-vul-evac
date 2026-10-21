@@ -315,3 +315,159 @@ def test_unknown_run_is_404(client, runs_dir) -> None:
 
     assert response.status_code == 404
     assert response.json()["run_id"] == "nope"
+
+
+# ---------------------------------------------------------------------------
+# Review regressions: a malformed artefact is reported, never a 500 or a zero.
+# ---------------------------------------------------------------------------
+
+
+def _corrupt(runs_dir: Path, run_id: str, table: str) -> None:
+    (runs_dir / run_id / f"{table}.parquet").write_bytes(b"PAR1 not really parquet")
+
+
+def _codes(body: dict) -> set[str]:
+    return {warning["code"] for warning in body["warnings"]}
+
+
+def test_corrupt_flood_slices_are_reported_not_called_absent(client, runs_dir) -> None:
+    _write_run(runs_dir, "wi", tables=_what_if_tables(), stats=AOI_STATS)
+    _corrupt(runs_dir, "wi", "flood_slices")
+
+    body = client.get("/v1/runs/wi/flood-summary?time=300").json()
+
+    assert body["how_big"]["flooded_area_km2"] is None
+    assert "absent" not in body["how_big"]["reason"]
+    assert "unreadable_artefact" in _codes(body)
+
+
+def test_corrupt_edge_states_are_reported_not_called_absent(client, runs_dir) -> None:
+    _write_run(runs_dir, "wi", tables=_what_if_tables(), stats=AOI_STATS)
+    _corrupt(runs_dir, "wi", "edge_states")
+
+    body = client.get("/v1/runs/wi/flood-summary?time=300").json()
+
+    assert body["movement"]["modes"] == []
+    assert "absent" not in body["movement"]["reason"]
+    assert "unreadable_artefact" in _codes(body)
+
+
+def test_network_without_edge_id_gives_a_reason_not_a_500(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    tables["network_edges"] = _network_edges().drop(columns=["edge_id"])
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    response = client.get("/v1/runs/wi/flood-summary?time=300")
+
+    assert response.status_code == 200
+    assert response.json()["movement"]["modes"] == []
+    assert "schema_mismatch" in _codes(response.json())
+
+
+def test_edge_ids_of_different_types_still_join(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    tables["network_edges"] = _network_edges().assign(edge_id=[1, 2, 3])
+    tables["edge_states"] = _edge_states().assign(
+        edge_id=lambda frame: frame["edge_id"].str[1:]
+    )
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    response = client.get("/v1/runs/wi/flood-summary?time=300")
+
+    assert response.status_code == 200
+    assert _mode(response.json(), "walk")["closed_km"] == pytest.approx(0.3)
+
+
+def test_null_time_on_the_deepest_row_does_not_crash(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    slices = _flood_slices()
+    slices["time_s"] = slices["time_s"].astype("float")
+    slices.loc[7, "time_s"] = None
+    tables["flood_slices"] = slices
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    response = client.get("/v1/runs/wi/flood-summary")
+
+    assert response.status_code == 200
+    assert response.json()["peak_time_s"] == 300
+
+
+def test_slices_without_cell_identity_give_a_reason(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    tables["flood_slices"] = _flood_slices()[["time_s", "depth_m"]]
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    response = client.get("/v1/runs/wi/flood-summary?time=300")
+
+    assert response.status_code == 200
+    assert response.json()["how_big"]["flooded_area_km2"] is None
+    assert "schema_mismatch" in _codes(response.json())
+
+
+def test_unmeasured_depth_is_null_not_zero(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    tables["flood_slices"] = _flood_slices().assign(depth_m=float("nan"))
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    body = client.get("/v1/runs/wi/flood-summary?time=300").json()
+
+    assert body["how_big"]["flooded_area_km2"] is None
+    assert body["how_deep"]["max_depth_m"] is None
+    assert body["how_big"]["reason"]
+
+
+def test_requested_time_is_null_when_the_run_modelled_no_times(client, runs_dir) -> None:
+    _write_run(
+        runs_dir,
+        "wi",
+        tables={"flood_slices": _flood_slices().iloc[0:0], "network_edges": _network_edges()},
+        stats=AOI_STATS,
+    )
+
+    big = client.get("/v1/runs/wi/flood-summary?time=99999").json()["how_big"]
+
+    assert big["flooded_area_km2"] is None
+    assert "99999" in big["reason"]
+
+
+def test_null_access_flag_is_warned_not_silently_dropped(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    tables["network_edges"] = _network_edges().astype({"walk_allowed": "object"})
+    tables["network_edges"].loc[1, "walk_allowed"] = None
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    body = client.get("/v1/runs/wi/flood-summary?time=300").json()
+
+    assert _mode(body, "walk")["total_km"] == pytest.approx(0.4)
+    assert "missing_access_flag" in _codes(body)
+
+
+def test_duplicate_network_edges_are_counted_once(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    tables["network_edges"] = pd.concat([_network_edges()] * 2, ignore_index=True)
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    body = client.get("/v1/runs/wi/flood-summary?time=300").json()
+
+    assert _mode(body, "walk")["total_km"] == pytest.approx(0.6)
+    assert "duplicate_rows" in _codes(body)
+
+
+def test_peak_time_is_the_earliest_of_equal_maxima(client, runs_dir) -> None:
+    tables = _what_if_tables()
+    slices = _flood_slices()
+    slices.loc[3, "depth_m"] = 0.60  # t=0 now ties the t=300 maximum
+    tables["flood_slices"] = slices.iloc[::-1]
+    _write_run(runs_dir, "wi", tables=tables, stats=AOI_STATS)
+
+    assert client.get("/v1/runs/wi/flood-summary").json()["peak_time_s"] == 0
+
+
+def test_shares_include_the_unknown_road_length(client, runs_dir) -> None:
+    _write_run(runs_dir, "wi", tables=_what_if_tables(), stats=AOI_STATS)
+
+    walk = _mode(client.get("/v1/runs/wi/flood-summary?time=300").json(), "walk")
+
+    assert walk["unknown_share"] == pytest.approx(0.0)
+    total = walk["open_share"] + walk["slowed_share"] + walk["closed_share"] + walk["unknown_share"]
+    assert total == pytest.approx(1.0)
