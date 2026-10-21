@@ -176,6 +176,7 @@ Rules the API must not break:
 | `GET /v1/runs/{id}/stats` | the `stats.json` payload above |
 | `GET /v1/runs/{id}/mesh?time=` | mesh time slice |
 | `GET /v1/runs/{id}/flood?time=&limit=` | positive-depth flood cells for one model time, with source role and coverage-sampling metadata |
+| `GET /v1/runs/{id}/flood-summary?time=` | for one model time (default: the flood peak): flooded area at or above 0.15 m and its share of the AOI; maximum depth and the area at or above each mode's closing depth; per mode (walk, car) the usable road length open, slowed, closed and without a state. Missing evidence is null with a reason; a dry run's zero is labelled a declared scenario value |
 | `GET /v1/runs/{id}/links?time=&mode=` | edge states and volume |
 | `GET /v1/runs/{id}/buildings` | aggregated exposure |
 | `GET /v1/runs/{id}/evacuation` | clearance distribution and states |
