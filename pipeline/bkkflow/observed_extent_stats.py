@@ -3,7 +3,7 @@
 Primary (M2 under N2): ROC AUC on the declared block rank, Mann-Whitney with ties
 counted 1/2, reported with the TOC curve and median distances, a toroidal-shift null,
 and a spatial block bootstrap whose block length the observed mask's correlogram fixes
-before the run. M1 at 0.15 m beside CSI_random is a labelled secondary row. A pilot
+before the run (no interval when that range exceeds half the grid: fallback (c), locked). M1 at 0.15 m beside CSI_random is a labelled secondary row. A pilot
 without both observed classes is undefined, never 0 or 0.5 (design note s5-s7).
 Tested on synthetic fixtures only: the one locked real run happens on the paper side.
 """
@@ -25,6 +25,7 @@ COMPARISON = "mitrearth-flood-gistda"
 BEYOND_CORRIDOR = "beyond_storage_corridor"  # the bottom tie (rank inf), which strict JSON cannot hold
 BLOCK_M = int(oe.LATTICE_M * oe.BLOCK_NODES)
 RANGE_THRESHOLD = 0.05  # correlogram level taken as the practical correlation range
+NOT_ESTIMABLE = "interval_not_estimable"  # fallback (c): the range is not reached within half the grid
 _WET, _NOT_MAPPED, _UNKNOWN = 1, 0, -1
 _UNDEFINED = ("auc", "toc", "median_distance_m", "null", "interval", "secondary_at_0_15m")
 
@@ -39,7 +40,11 @@ PROTOCOL: dict[str, Any] = {
              "p": "(1 + k) / (1 + n) over defined shifts, k with AUC >= observed; k / n kept as the share"},
     "interval": {"method": "block_bootstrap", "n": 999, "seed": 20261021, "ci": "percentile 95%",
                  "block_length_rule": f"first lag, in {BLOCK_M} m steps up to half the shorter grid side, "
-                                      f"at which the observed-wet correlogram is <= {RANGE_THRESHOLD}"},
+                                      f"at which the observed-wet correlogram is <= {RANGE_THRESHOLD}",
+                 # North, 22 Oct 2026: option (c); a block length is never capped or guessed.
+                 "fallback": {"if": "the correlogram stays above the threshold up to half the shorter grid side",
+                              "status": NOT_ESTIMABLE, "reason": "correlation_range_exceeds_half_grid",
+                              "then": "no interval; report the lags and r examined; N2 and M2 are unaffected"}},
     "definition": {"min_observed_wet_blocks": 30, "min_not_mapped_blocks": 30},  # below either: undefined
     "unit": {"crs": oe.ANALYSIS_CRS, "block_m": BLOCK_M, "observed_wet_rule": oe.OBSERVED_WET_RULE,
              "min_evaluable": oe.MIN_EVALUABLE},
@@ -193,26 +198,46 @@ def correlogram(blocks: pd.DataFrame) -> list[float | None]:
     return out
 
 
-def correlation_range_m(blocks: pd.DataFrame) -> int:
-    """oec-v1's bootstrap block length: the first lag at which the correlogram is at or below 0.05."""
-    for h, r in enumerate(correlogram(blocks), start=1):
-        if r is not None and r <= RANGE_THRESHOLD:
+def correlation_range_m(blocks: pd.DataFrame) -> int | str:
+    """oec-v1's bootstrap block length: the first lag at which the correlogram is at or below 0.05.
+
+    NOT_ESTIMABLE when no lag up to half the shorter grid side qualifies (the locked fallback):
+    the case then gets no interval, never a capped or guessed length.
+    """
+    r = correlogram(blocks)
+    for h, value in enumerate(r, start=1):
+        if value is not None and value <= RANGE_THRESHOLD:
             return h * BLOCK_M
-    raise ValueError("the observed mask's correlation range is not reached within half the block grid; "
-                     "North must set the block length")
+    if all(value is None for value in r):
+        raise ValueError("no correlogram lag could be computed, so neither a block length nor the fallback "
+                         "is established; a case without both classes is locked with None")
+    return NOT_ESTIMABLE
 
 
-def lock_protocol(block_lengths_m: Mapping[tuple[str, str, int], int | None]) -> dict[str, Any]:
+def _not_estimable(blocks: pd.DataFrame, fallback: Mapping[str, Any]) -> dict[str, Any]:
+    """Fallback (c) as locked: no interval, with every lag and r the rule examined.
+
+    The record's fallback must be oec-v1's exactly, and the mask must really have no range.
+    """
+    if fallback != PROTOCOL["interval"]["fallback"] or correlation_range_m(blocks) != NOT_ESTIMABLE:
+        raise ValueError("an interval_not_estimable case needs the locked fallback and a mask whose "
+                         "correlation range exceeds half the grid")
+    r = correlogram(blocks)
+    return {"method": "block_bootstrap", "status": NOT_ESTIMABLE, "reason": fallback["reason"],
+            "lags_m": [h * BLOCK_M for h in range(1, len(r) + 1)], "r": r, "ci95": None}
+
+
+def lock_protocol(block_lengths_m: Mapping[tuple[str, str, int], int | str | None]) -> dict[str, Any]:
     """oec-v1 with its cases, (aoi_id, layer, year) -> bootstrap block length, fixed before any overlap.
 
-    Each length comes from correlation_range_m on the observed mask. None is allowed only for a
-    case the minimum counts leave undefined; evaluate refuses it if the case turns out defined.
+    Each length comes from correlation_range_m on the observed mask, NOT_ESTIMABLE included. None
+    is allowed only for a case the minimum counts leave undefined; evaluate refuses it if defined.
     """
     cases = []
     for (aoi_id, layer, year), block_m in sorted(block_lengths_m.items()):
         if aoi_id not in PROTOCOL["areas"] or type(year) is not int or year not in PROTOCOL["layers"].get(layer, []):
             raise ValueError(f"{aoi_id} {layer} {year} is not an {oe.PROTOCOL_VERSION} pilot layer-year")
-        if block_m is not None:
+        if block_m is not None and block_m != NOT_ESTIMABLE:
             _tile_side(block_m)
         cases.append({"aoi_id": aoi_id, "layer": layer, "year": year, "block_m": block_m})
     return {**copy.deepcopy(PROTOCOL), "cases": cases}
@@ -231,7 +256,10 @@ def _status(n_wet: int, n_not_mapped: int, definition: Mapping[str, int]) -> str
 def evaluate(
     blocks: pd.DataFrame, protocol: Mapping[str, Any], case: tuple[str, str, int], row: str = "primary"
 ) -> dict[str, Any]:
-    """The section 8 metrics for one locked case (aoi_id, layer, year) and one row."""
+    """The section 8 metrics for one locked case (aoi_id, layer, year) and one row.
+
+    Every metric is None for an undefined case. ``interval`` carries ``status`` only under the fallback.
+    """
     if protocol.get("protocol_version") != oe.PROTOCOL_VERSION or row not in ROWS:
         raise ValueError(f"metrics need the {oe.PROTOCOL_VERSION} protocol and one of the rows {sorted(ROWS)}")
     locked = {(c["aoi_id"], c["layer"], c["year"]): c["block_m"] for c in protocol["cases"]}
@@ -248,10 +276,11 @@ def evaluate(
     block_m = locked[tuple(case)]
     if block_m is None:
         raise ValueError(f"the bootstrap block length for {case} is not locked in the protocol")
-    distance, null = domain[ROWS[row]].to_numpy(dtype=float), protocol["null"]
+    distance, null, settings = domain[ROWS[row]].to_numpy(dtype=float), protocol["null"], protocol["interval"]
+    interval = (_not_estimable(blocks, settings.get("fallback", {})) if block_m == NOT_ESTIMABLE
+                else block_bootstrap(blocks, row, block_m, settings["n"], settings["seed"]))
     return {**result, "auc": auc(distance, wet), "toc": toc(distance, wet),
             "median_distance_m": {"observed_wet": _metres(np.median(distance[wet])),
                                   "not_mapped": _metres(np.median(distance[~wet]))},
-            "null": toroidal_null(blocks, row, null["n"], null["seed"]),
-            "interval": block_bootstrap(blocks, row, block_m, protocol["interval"]["n"], protocol["interval"]["seed"]),
+            "null": toroidal_null(blocks, row, null["n"], null["seed"]), "interval": interval,
             "secondary_at_0_15m": contingency(declared_wet(domain), wet)}
