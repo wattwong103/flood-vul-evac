@@ -262,7 +262,8 @@ def test_each_flooded_graph_is_built_once_and_released_before_the_next(monkeypat
 
 @pytest.mark.parametrize(
     ("column", "value", "message"),
-    [("closed", None, "closed flag"), ("speed_multiplier", float("nan"), "speed")],
+    [("closed", None, "closed flag"), ("closed", "false", "closed flag"),
+     ("speed_multiplier", float("nan"), "speed")],
 )
 def test_an_unknown_road_state_is_refused_not_read_as_open(column: str, value: object, message: str) -> None:
     states = _states().astype({"closed": object})
@@ -286,3 +287,21 @@ def test_a_routed_trip_without_waypoints_is_refused() -> None:
 
     with pytest.raises(ValueError, match="waypoints"):
         _classify(trips, _states(), waypoints=waypoints[waypoints["trip_id"] == "t1"])
+
+
+def test_each_mode_uses_its_own_latest_state_time() -> None:
+    # Walking was last stated at START; driving also at START + 300.
+    states = _states({(START, WALK, "e23"): (0.0, True)})
+    states = states[~((states["mode"] == WALK) & (states["time_s"] == START + 300))]
+    row = _classify([_trip("t1", WALK, START + 400)], states).loc["t1"]
+
+    assert row["state_time_s"] == START
+    assert row["outcome"] == "detour"
+
+
+def test_a_waypoint_chain_without_its_last_point_is_refused() -> None:
+    trips = [_trip("t1", WALK, START + 100)]
+    waypoints = _waypoints(pd.DataFrame(trips))
+
+    with pytest.raises(ValueError, match="waypoint chain"):
+        _classify(trips, _states(), waypoints=waypoints[waypoints["seq"] < 2])
