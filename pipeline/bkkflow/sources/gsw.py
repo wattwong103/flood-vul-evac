@@ -306,14 +306,30 @@ EXTENT_WATER = 1
 EXTENT_GRID_M = 1000
 
 
+#: A window larger than this is refused before it is read (a whole province
+#: would need gigabytes); Bangkok's is about 3.5 million pixels.
+EXTENT_MAX_WINDOW_PIXELS = 50_000_000
+
+
 def measure_extent(path: Path, aoi_geometry: Any) -> dict[str, Any]:
-    """Summarise the 1984-2021 Maximum Water Extent inside an AOI.
+    """Summarise the 1984-2021 Maximum Water Extent tile at ``path`` inside an AOI."""
+    with rasterio.open(path, driver="GTiff") as dataset:
+        return measure_extent_dataset(dataset, aoi_geometry)
+
+
+def measure_extent_dataset(dataset: Any, aoi_geometry: Any) -> dict[str, Any]:
+    """Summarise an open Maximum Water Extent raster inside an AOI.
 
     Code 1 was detected as water at least once, 0 never, and 255 has no data,
-    which stays unknown and out of the share. Areas use the same pixel area as
-    ``measure_year`` so the total is comparable with the yearly water areas;
-    the 1 km cells use the yearly cells' grid and ids. Read-only: nothing is
-    written beside the tile.
+    which stays unknown and out of the share. The raster must be the JRC
+    product on its 0.00025 degree EPSG:4326 grid, hold only those codes, and
+    cover the whole AOI; anything else raises ``ValueError`` rather than being
+    measured wrongly or truncated.
+
+    Areas use ``measure_year``'s pixel area, so the total is comparable with
+    the yearly water areas; the yearly 1 km cells use a slightly different
+    footprint (about 0.7 percent). A cell's share is over its pixels inside
+    the AOI, so a sliver at the boundary can be wholly wet. Read-only.
     """
     from rasterio.mask import raster_geometry_mask
 
@@ -321,13 +337,14 @@ def measure_extent(path: Path, aoi_geometry: Any) -> dict[str, Any]:
     if hasattr(geometry, "geometry"):
         series = geometry.geometry
         geometry = series.union_all() if hasattr(series, "union_all") else series.unary_union
-    with rasterio.open(path) as dataset:
-        if dataset.nodata not in (None, EXTENT_NODATA):
-            raise ValueError(f"{Path(path).name} has nodata tag {dataset.nodata}, not {EXTENT_NODATA}")
-        outside, transform, window = raster_geometry_mask(dataset, [geometry], crop=True)
-        data = dataset.read(1, window=window, masked=False)
-        crs = dataset.crs
+    _check_extent_grid(dataset, geometry)
+    outside, transform, window = raster_geometry_mask(dataset, [geometry], crop=True)
+    if window.width * window.height > EXTENT_MAX_WINDOW_PIXELS:
+        raise ValueError(f"the AOI window of {window.width} x {window.height} pixels exceeds the cap")
+    data = dataset.read(1, window=window, masked=False)
     inside = ~outside
+    if not np.isin(data[inside], list(EXTENT_CODES)).all():
+        raise ValueError("the extent holds codes other than 0, 1 and 255")
     water = (data == EXTENT_WATER) & inside
     observed = inside & (data != EXTENT_NODATA)
     bounds = geometry.bounds
@@ -335,9 +352,7 @@ def measure_extent(path: Path, aoi_geometry: Any) -> dict[str, Any]:
     aoi_pixels, water_pixels = int(inside.sum()), int(water.sum())
     observed_pixels = int(observed.sum())
     no_data_pixels = aoi_pixels - observed_pixels
-
-    cells = _extent_cells(water, observed, transform, crs, pixel_area_km2) if water_pixels else []
-
+    cells = _extent_cells(water, observed, transform, dataset.crs, pixel_area_km2) if water_pixels else []
     return {
         "aoi_pixels": aoi_pixels,
         "ever_water_pixels": water_pixels,
@@ -351,6 +366,35 @@ def measure_extent(path: Path, aoi_geometry: Any) -> dict[str, Any]:
     }
 
 
+def _check_extent_grid(dataset: Any, geometry: Any) -> None:
+    """The JRC grid, a 255 nodata tag (or none), and an AOI inside the tile."""
+    if dataset.nodata not in (None, EXTENT_NODATA):
+        raise ValueError(f"the extent has nodata tag {dataset.nodata}, not {EXTENT_NODATA}")
+    x_res, y_res = (abs(value) for value in dataset.res)
+    on_grid = (
+        dataset.crs is not None
+        and dataset.crs.to_epsg() == 4326
+        and abs(x_res - PIXEL_DEGREES) <= GRID_TOLERANCE_DEGREES
+        and abs(y_res - PIXEL_DEGREES) <= GRID_TOLERANCE_DEGREES
+    )
+    if not on_grid:
+        raise ValueError("the extent is not on the JRC 0.00025 degree EPSG:4326 grid")
+    left, bottom, right, top = dataset.bounds
+    west, south, east, north = geometry.bounds
+    slack = PIXEL_DEGREES / 2
+    if west < left - slack or east > right + slack or south < bottom - slack or north > top + slack:
+        raise ValueError("the AOI reaches beyond the extent tile, so it would be truncated")
+
+
+def _transform(transformer: Any, xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Transform arrays of any length; pyproj's single-point path is deprecated for arrays."""
+    if np.size(xs) == 1:
+        x, y = transformer.transform(float(np.ravel(xs)[0]), float(np.ravel(ys)[0]))
+        return np.array([x]), np.array([y])
+    x, y = transformer.transform(xs, ys)
+    return np.asarray(x), np.asarray(y)
+
+
 def _extent_cells(
     water: np.ndarray, observed: np.ndarray, transform: Any, crs: Any, pixel_area_km2: float
 ) -> list[dict[str, Any]]:
@@ -360,7 +404,7 @@ def _extent_cells(
     rows, cols = np.nonzero(observed)
     lons = transform.c + transform.a * (cols + 0.5)
     lats = transform.f + transform.e * (rows + 0.5)
-    x, y = Transformer.from_crs(crs, "EPSG:32647", always_xy=True).transform(lons, lats)
+    x, y = _transform(Transformer.from_crs(crs, "EPSG:32647", always_xy=True), lons, lats)
     grid = pd.DataFrame({
         "gx": (np.floor(np.asarray(x) / EXTENT_GRID_M) * EXTENT_GRID_M).astype("int64"),
         "gy": (np.floor(np.asarray(y) / EXTENT_GRID_M) * EXTENT_GRID_M).astype("int64"),
@@ -370,8 +414,10 @@ def _extent_cells(
     grid = grid[grid["w"] > 0]
     centres_x = grid["gx"] + EXTENT_GRID_M / 2.0
     centres_y = grid["gy"] + EXTENT_GRID_M / 2.0
-    lon_c, lat_c = Transformer.from_crs("EPSG:32647", "OGC:CRS84", always_xy=True).transform(
-        centres_x.to_numpy(), centres_y.to_numpy()
+    lon_c, lat_c = _transform(
+        Transformer.from_crs("EPSG:32647", "OGC:CRS84", always_xy=True),
+        centres_x.to_numpy(),
+        centres_y.to_numpy(),
     )
     return [
         {

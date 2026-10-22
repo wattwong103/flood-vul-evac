@@ -1,22 +1,27 @@
 """The 1984-2021 JRC Maximum Water Extent for a run's area (BKK-055c).
 
 No run stores the ever-water area or cells, but a city run records the exact
-extent tile it used (``observed_water.json`` -> ``max_extent``). This module
-serves the extent only for that tile: the staged bytes must hash to the
-recorded SHA-256. A missing, different or unrecorded tile is reported with a
-reason, never as zero water. Nothing is written; results are cached by the
-tile's identity.
+extent tile it used (``observed_water.json`` -> ``max_extent``) and its own
+AOI pixel count for every year. This module serves the extent only when:
 
-The extent marks everywhere ever detected as water in 1984-2021. It is not one
-flood and carries no depth.
+- the staged tile's bytes hash to the recorded SHA-256 (the bytes hashed are
+  the bytes measured, read once per request);
+- the area id agrees with the run's manifest; and
+- the boundary yields the same AOI pixel count the run recorded.
+
+Anything else is reported with a reason, never as zero water and never as a
+500. Reasons are fixed text; exception details go to the log, not the client.
+Nothing is written. The extent marks everywhere ever detected as water in
+1984-2021: not one flood, and no depth.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import re
-from functools import lru_cache
-from pathlib import Path
+import threading
 from typing import Any
 
 from api.models import ApiWarning
@@ -24,23 +29,69 @@ from api.runs import RunRef
 from api.settings import Settings
 from api.tables import artefact_path, feature, make_warning
 from pipeline.bkkflow.sources import gsw
-from pipeline.bkkflow.util import sha256_file
+
+LOGGER = logging.getLogger("bkkflow.api.ever_water")
 
 MEASURES = (
     "everywhere ever detected as water in 1984-2021 (JRC Maximum Water Extent); "
     "not one flood, not depth"
 )
 #: Names taken from run artefacts must be plain file names, never paths.
-SAFE_TILE = re.compile(r"^[A-Za-z0-9._-]+\.tif$")
-SAFE_AOI = re.compile(r"^[a-z0-9-]+$")
+SAFE_TILE = re.compile(r"[A-Za-z0-9._-]+\.tif")
+SAFE_AOI = re.compile(r"[a-z0-9-]+")
+
+#: Measurements by (tile SHA-256, boundary SHA-256). One lock serialises cold
+#: measurements, so concurrent first requests compute once.
+_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+_CACHE_LOCK = threading.Lock()
+_CACHE_SIZE = 4
 
 
 def build_ever_water(
     run: RunRef, settings: Settings, *, min_share: float, limit: int
 ) -> dict[str, Any]:
     """The ever-water summary and 1 km cells, or nulls with the reason."""
-    warnings: list[ApiWarning] = []
-    base: dict[str, Any] = {
+    base = _empty_response(run, min_share)
+    record, reason = _recorded_extent(run)
+    if record is None:
+        return _unavailable(base, reason, "max_extent_unavailable")
+    tile_name, sha, aoi_id, recorded_pixels = record
+    base.update(tile_name=tile_name, content_sha256=sha, aoi_id=aoi_id)
+
+    tile = settings.data_dir / "staged" / "gsw" / tile_name
+    aoi_path = settings.data_dir / "curated" / "aoi" / f"{aoi_id}.geojson"
+    if not tile.is_file():
+        return _unavailable(base, f"the recorded extent tile {tile_name} is not staged", "source_not_staged")
+    if not aoi_path.is_file():
+        return _unavailable(base, f"the run's area {aoi_id} has no boundary file", "aoi_unavailable")
+    try:
+        tile_bytes, aoi_bytes = tile.read_bytes(), aoi_path.read_bytes()
+    except OSError:
+        LOGGER.warning("ever-water: could not read inputs for run %s", run.run_id, exc_info=True)
+        return _unavailable(base, "the extent tile or the area boundary could not be read", "unreadable_artefact")
+    if hashlib.sha256(tile_bytes).hexdigest() != sha:
+        return _unavailable(
+            base, f"the staged {tile_name} does not match the SHA-256 this run recorded", "source_mismatch"
+        )
+    try:
+        summary = _measure(sha, tile_bytes, aoi_bytes)
+    except Exception:  # noqa: BLE001 - any reader or geometry error is reported, never a 500
+        LOGGER.warning("ever-water: measurement failed for run %s", run.run_id, exc_info=True)
+        return _unavailable(
+            base, "the extent tile or the area boundary could not be measured", "unreadable_artefact"
+        )
+    if summary["aoi_pixels"] not in recorded_pixels:
+        return _unavailable(
+            base,
+            f"the {aoi_id} boundary covers {summary['aoi_pixels']} pixels, not the "
+            f"{sorted(recorded_pixels)} this run recorded",
+            "aoi_mismatch",
+        )
+    return _available(base, summary, min_share=min_share, limit=limit)
+
+
+def _empty_response(run: RunRef, min_share: float) -> dict[str, Any]:
+    return {
         "type": "FeatureCollection",
         "features": [],
         "run_id": run.run_id,
@@ -61,33 +112,14 @@ def build_ever_water(
         "returned": 0,
         "truncated": False,
         "reason": None,
-        "warnings": warnings,
+        "warnings": [],
     }
 
-    record, reason = _recorded_extent(run)
-    if record is None:
-        return _unavailable(base, reason, "max_extent_unavailable")
-    tile_name, sha, aoi_id = record
-    base.update(tile_name=tile_name, content_sha256=sha, aoi_id=aoi_id)
 
-    tile = settings.data_dir / "staged" / "gsw" / tile_name
-    aoi_path = settings.data_dir / "curated" / "aoi" / f"{aoi_id}.geojson"
-    if not tile.is_file():
-        return _unavailable(base, f"the recorded extent tile {tile_name} is not staged", "source_not_staged")
-    if not aoi_path.is_file():
-        return _unavailable(base, f"the run's area {aoi_id} has no boundary file", "aoi_unavailable")
-    stat = tile.stat()
-    if _sha256(str(tile), stat.st_size, stat.st_mtime_ns) != sha:
-        return _unavailable(
-            base,
-            f"the staged {tile_name} does not match the SHA-256 this run recorded",
-            "source_mismatch",
-        )
-    try:
-        summary = _measure(str(tile), sha, str(aoi_path), aoi_path.stat().st_mtime_ns)
-    except (OSError, ValueError) as exc:
-        return _unavailable(base, f"the extent tile could not be measured: {exc}", "unreadable_artefact")
-
+def _available(
+    base: dict[str, Any], summary: dict[str, Any], *, min_share: float, limit: int
+) -> dict[str, Any]:
+    warnings: list[ApiWarning] = base["warnings"]
     cells = [cell for cell in summary["cells"] if cell["water_share"] >= min_share]
     matched = len(cells)
     truncated = matched > limit
@@ -111,27 +143,41 @@ def build_ever_water(
     return base
 
 
-def _recorded_extent(run: RunRef) -> tuple[tuple[str, str, str] | None, str]:
-    """(tile name, SHA-256, AOI id) the run recorded, or None and why."""
+def _recorded_extent(
+    run: RunRef,
+) -> tuple[tuple[str, str, str, frozenset[int]] | None, str]:
+    """(tile name, SHA-256, area id, recorded AOI pixel counts), or None and why."""
     path = artefact_path(run, "observed_water.json")
     if not path.is_file():
         return None, "this run has no observed_water.json, so it records no extent tile"
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return None, f"observed_water.json could not be read: {exc}"
-    extent = payload.get("max_extent") if isinstance(payload, dict) else None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None, "observed_water.json could not be read"
+    if not isinstance(payload, dict):
+        return None, "observed_water.json is not a record"
+    extent = payload.get("max_extent")
     if not isinstance(extent, dict) or extent.get("status") != "ok":
         return None, "this run records no usable JRC Maximum Water Extent tile"
     tile_name, sha = extent.get("tile_name"), extent.get("content_sha256")
-    aoi_id = payload.get("aoi_id") or run.aoi_id
-    if not (isinstance(tile_name, str) and SAFE_TILE.match(tile_name)):
+    if not (isinstance(tile_name, str) and SAFE_TILE.fullmatch(tile_name)):
         return None, "the recorded extent tile name is not a plain file name"
     if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
         return None, "the recorded extent tile has no SHA-256"
-    if not (isinstance(aoi_id, str) and SAFE_AOI.match(aoi_id)):
-        return None, "the run's area id is missing or not a plain id"
-    return (tile_name, sha, aoi_id), ""
+    aoi_id = run.aoi_id
+    if not (isinstance(aoi_id, str) and SAFE_AOI.fullmatch(aoi_id)):
+        return None, "the run's manifest has no plain area id"
+    recorded_area = payload.get("aoi_id")
+    if recorded_area is not None and recorded_area != aoi_id:
+        return None, f"the observed-water record's area {recorded_area!r} disagrees with the manifest's {aoi_id!r}"
+    years = payload.get("years") if isinstance(payload.get("years"), list) else []
+    pixels = frozenset(
+        entry["aoi_pixels"] for entry in years
+        if isinstance(entry, dict) and isinstance(entry.get("aoi_pixels"), int)
+    )
+    if not pixels:
+        return None, "the run records no AOI pixel count, so the boundary cannot be checked"
+    return (tile_name, sha, aoi_id, pixels), ""
 
 
 def _unavailable(base: dict[str, Any], reason: str, code: str) -> dict[str, Any]:
@@ -140,19 +186,44 @@ def _unavailable(base: dict[str, Any], reason: str, code: str) -> dict[str, Any]
     return base
 
 
-@lru_cache(maxsize=8)
-def _sha256(path: str, size: int, mtime_ns: int) -> str:
-    """Hash once per file version; size and mtime key the cache."""
-    return sha256_file(Path(path))
+def _measure(sha: str, tile_bytes: bytes, aoi_bytes: bytes) -> dict[str, Any]:
+    """Measure once per (tile, boundary) content; the bytes are the ones hashed."""
+    key = (sha, hashlib.sha256(aoi_bytes).hexdigest())
+    with _CACHE_LOCK:
+        cached = _CACHE.get(key)
+        if cached is not None:
+            return cached
+        summary = _measure_bytes(tile_bytes, aoi_bytes)
+        if len(_CACHE) >= _CACHE_SIZE:
+            _CACHE.pop(next(iter(_CACHE)))
+        _CACHE[key] = summary
+        return summary
 
 
-@lru_cache(maxsize=4)
-def _measure(tile: str, sha: str, aoi_path: str, aoi_mtime_ns: int) -> dict[str, Any]:
-    """Measure once per verified tile and boundary version."""
-    import geopandas as gpd
+def _measure_bytes(tile_bytes: bytes, aoi_bytes: bytes) -> dict[str, Any]:
+    from rasterio.io import MemoryFile
 
-    aoi = gpd.read_file(aoi_path)
-    return gsw.measure_extent(Path(tile), aoi.to_crs("EPSG:4326").geometry.union_all())
+    geometry = _boundary(aoi_bytes)
+    with MemoryFile(tile_bytes) as memory, memory.open(driver="GTiff") as dataset:
+        return gsw.measure_extent_dataset(dataset, geometry)
+
+
+def _boundary(aoi_bytes: bytes) -> Any:
+    """The boundary as one geometry, parsed as plain GeoJSON (CRS84) without OGR."""
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+
+    payload = json.loads(aoi_bytes.decode("utf-8"))
+    if payload.get("type") == "FeatureCollection":
+        geometries = [item.get("geometry") for item in payload.get("features", [])]
+    elif payload.get("type") == "Feature":
+        geometries = [payload.get("geometry")]
+    else:
+        geometries = [payload]
+    shapes = [shape(geometry) for geometry in geometries if geometry]
+    if not shapes:
+        raise ValueError("the boundary has no geometry")
+    return unary_union(shapes)
 
 
 def _cell_feature(cell: dict[str, Any]) -> dict[str, Any]:
