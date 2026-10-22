@@ -136,6 +136,7 @@
 .swatch.net-open { height: 3px; background: #7f8f89; border: 0; margin-top: 6px; }
 .swatch.net-slowed { height: 3px; background: repeating-linear-gradient(90deg, #c98a2e 0 5px, transparent 5px 8px); border: 0; margin-top: 6px; }
 .swatch.net-closed { height: 5px; background: #b03a2b; border: 0; margin-top: 5px; }
+.swatch.net-unknown { height: 2px; background: repeating-linear-gradient(90deg, #aab5b0 0 2px, transparent 2px 5px); border: 0; margin-top: 6px; }
 .swatch.refuge-verified { background: #2f7d5c; border-radius: 50%; width: 13px; height: 13px; }
 .swatch.refuge-unverified { background: transparent; border: 2px dashed #e7654d; border-radius: 50%; width: 13px; height: 13px; }
 
@@ -335,3 +336,24 @@
   .lab-rail { padding: 20px 16px 30px; }
   .lab-main { padding: 16px 14px 34px; }
 }
+
+/* The flood (BKK-055c): readings, road-state bars and the depth ruler. */
+.flood-controls { display: flex; flex-wrap: wrap; gap: 18px; align-items: end; }
+.flood-controls .run-picker { min-width: min(100%, 320px); }
+.flood-mode { display: flex; gap: 6px; flex-wrap: wrap; }
+.flood-mode button { border: 1px solid #b9c6c0; background: #f8f5ec; color: #33443f; padding: 7px 11px; font-size: 11px; font-weight: 700; cursor: pointer; }
+.flood-mode button.active { background: #173f3f; border-color: #173f3f; color: #eaf1e6; }
+.reading-reason { display: block; margin-top: 5px; color: #8a4b20; font-size: 10px; line-height: 1.5; }
+.move-row { margin: 8px 0 10px; }
+.move-label { margin: 0 0 4px; font-size: 11px; font-weight: 700; color: #33443f; }
+.move-bar { display: flex; height: 10px; overflow: hidden; background: #e7ece9; }
+.move-bar span { display: block; height: 100%; }
+.move-text { margin: 4px 0 0; font-size: 10px; color: #55655f; }
+.depth-ruler { display: grid; gap: 10px; }
+.depth-track { position: relative; height: 12px; background: linear-gradient(90deg, #f7e2c6, #dc8443 50%, #a3511d); }
+.depth-tick { position: absolute; top: -4px; width: 2px; height: 20px; background: #173f3f; transform: translateX(-1px); }
+.depth-tick.now { background: #b03a2b; width: 3px; }
+.depth-marks { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 11px; color: #33443f; }
+.reading-notes { margin: 0; padding: 10px 14px 10px 28px; background: #f6efe1; border-left: 3px solid #c98a2e; font-size: 11px; color: #5a4a33; display: grid; gap: 4px; }
+.flood-view { display: grid; gap: 26px; }
+.flood-source { margin: 0; color: #5f716d; font-size: 13px; line-height: 1.6; max-width: 80ch; }

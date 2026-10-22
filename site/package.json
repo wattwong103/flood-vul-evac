@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint src/App.tsx src/main.tsx src/components/ApiStatus.tsx src/components/MapView.tsx src/components/primitives.tsx src/screens src/lib src/hooks/useApi.ts",
-    "test": "node --test tests/client.test.ts tests/run-wiring.test.ts",
+    "lint": "oxlint src/App.tsx src/main.tsx src/components/ApiStatus.tsx src/components/MapView.tsx src/components/primitives.tsx src/components/FloodReadings.tsx src/components/PastReadings.tsx src/screens src/lib src/hooks/useApi.ts",
+    "test": "node --test tests/client.test.ts tests/run-wiring.test.ts tests/flood-summary.test.ts tests/flood-readings.test.ts tests/past-flood.test.ts tests/past-readings.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

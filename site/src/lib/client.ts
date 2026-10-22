@@ -249,11 +249,23 @@ export const floodPath = (
   return `/v1/runs/${encodeURIComponent(runId)}/flood${query ? `?${query}` : ""}`;
 };
 
+/** How big, how deep and whether roads are usable at one model time (BKK-055b). */
+export const floodSummaryPath = (runId: string, time: number | null = null) =>
+  `/v1/runs/${encodeURIComponent(runId)}/flood-summary${
+    time !== null ? `?time=${encodeURIComponent(String(time))}` : ""
+  }`;
+
 export const routesPath = (runId: string) =>
   `/v1/runs/${encodeURIComponent(runId)}/routes`;
 
 export const observedWaterPath = (runId: string) =>
   `/v1/runs/${encodeURIComponent(runId)}/observed-water`;
+
+/** Everywhere ever detected as water in 1984-2021, for a city run (BKK-055c). */
+export const everWaterPath = (runId: string, minShare: number | null = null) =>
+  `/v1/runs/${encodeURIComponent(runId)}/observed-water/ever${
+    minShare !== null ? `?min_share=${encodeURIComponent(String(minShare))}` : ""
+  }`;
 
 export const observedWaterCellsPath = (
   runId: string,

@@ -280,6 +280,8 @@ export type RunSummary = {
   progress?: number | null;
   /** Null for runs older than the field; `case_id` is null for ordinary runs. */
   active_scenario?: { state?: string | null; case_id?: string | null } | null;
+  /** The area the run covers, e.g. `bangkok-bma` or `sai-mai-district`. */
+  aoi_id?: string | null;
   [key: string]: unknown;
 };
 
@@ -551,6 +553,63 @@ export type FloodResult = FeatureCollection<FloodProperties> & {
   sample_is_spatial_subset?: boolean | null;
   warnings?: unknown[] | null;
 };
+/* ------------------------------------------------------------------ *
+ * Flood summary (`/v1/runs/{id}/flood-summary`, BKK-055b)
+ *
+ * Every number is nullable: a null means the run cannot answer, and the
+ * matching `reason` says why. Zero is only ever a measured or declared value.
+ * ------------------------------------------------------------------ */
+
+export type FloodSize = {
+  flooded_area_km2: number | null;
+  share_of_aoi: number | null;
+  aoi_area_km2: number | null;
+  cell_size_m: number | null;
+  reason: string | null;
+};
+export type ModeStopArea = {
+  mode: number;
+  mode_name: string;
+  closed_depth_m: number | null;
+  area_km2: number | null;
+};
+export type FloodDepth = {
+  max_depth_m: number | null;
+  at_or_above_closing_depth: ModeStopArea[];
+  reason: string | null;
+};
+export type ModeMovement = {
+  mode: number;
+  mode_name: string;
+  closed_depth_m: number | null;
+  total_km: number | null;
+  open_km: number | null;
+  slowed_km: number | null;
+  closed_km: number | null;
+  unknown_km: number | null;
+  open_share: number | null;
+  slowed_share: number | null;
+  closed_share: number | null;
+  unknown_share: number | null;
+  reason: string | null;
+};
+export type FloodSummary = {
+  run_id: string;
+  validation_status: string | null;
+  available: boolean;
+  time_s: number | null;
+  time_defaulted: boolean;
+  available_times: number[];
+  peak_time_s: number | null;
+  source_role: string | null;
+  flood_area_threshold_m: number;
+  threshold_set_version: string | null;
+  how_big: FloodSize;
+  how_deep: FloodDepth;
+  movement: { modes: ModeMovement[]; reason: string | null };
+  warnings: unknown[];
+};
+
 export type LinkResult = FeatureCollection<LinkProperties> | null;
 export type BuildingResult = FeatureCollection<BuildingProperties> | null;
 export type RouteResult = FeatureCollection<EvacuationProperties> | null;
@@ -626,6 +685,9 @@ export type ObservedWaterYear = {
   known_km2?: number | null;
   excess_km2_vs_baseline?: number | null;
   baseline_year?: number | null;
+  /** Pixels of seasonal (code 2) and permanent (code 3) water inside the AOI. */
+  aoi_seasonal_pixels?: number | null;
+  aoi_permanent_pixels?: number | null;
   [key: string]: unknown;
 };
 
@@ -648,6 +710,25 @@ export type ObservedWaterResponse = {
   note?: string | null;
   warnings?: string[] | null;
   [key: string]: unknown;
+};
+
+/**
+ * `GET /v1/runs/{id}/observed-water/ever` (BKK-055c): everywhere ever detected
+ * as water in 1984-2021, served only for the tile the run recorded. Null
+ * figures carry `reason`. Extent only: not one flood, not depth.
+ */
+export type EverWater = FeatureCollection<ObservedWaterCellProperties> & {
+  run_id?: string | null;
+  available: boolean;
+  verified?: boolean | null;
+  is_observation?: boolean | null;
+  measures?: string | null;
+  aoi_km2?: number | null;
+  ever_water_km2: number | null;
+  no_data_km2?: number | null;
+  ever_water_share_of_observed?: number | null;
+  reason: string | null;
+  warnings?: unknown[] | null;
 };
 
 /** `observed-water/cells` feature properties. Extent per cell, never depth. */

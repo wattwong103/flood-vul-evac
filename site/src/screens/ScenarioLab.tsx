@@ -716,7 +716,7 @@ export function ScenarioLab({ reducedMotion }: { reducedMotion: boolean }) {
  * Pieces
  * ------------------------------------------------------------------ */
 
-function RunPicker() {
+export function RunPicker() {
   const { runs, activeRunId, setActiveRunId } = useRuns();
   const list = Array.isArray(runs.data) ? runs.data : [];
 
@@ -790,7 +790,7 @@ function SliderField({
   );
 }
 
-function Timeline({
+export function Timeline({
   times,
   activeTime,
   onChange,
