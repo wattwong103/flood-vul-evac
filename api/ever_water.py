@@ -169,7 +169,7 @@ def _recorded_extent(
         return None, "the run's manifest has no plain area id"
     recorded_area = payload.get("aoi_id")
     if recorded_area is not None and recorded_area != aoi_id:
-        return None, f"the observed-water record's area {recorded_area!r} disagrees with the manifest's {aoi_id!r}"
+        return None, "the observed-water record's area disagrees with the run's manifest"
     years = payload.get("years") if isinstance(payload.get("years"), list) else []
     pixels = frozenset(
         entry["aoi_pixels"] for entry in years

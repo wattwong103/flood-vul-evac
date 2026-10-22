@@ -331,16 +331,20 @@ def measure_extent_dataset(dataset: Any, aoi_geometry: Any) -> dict[str, Any]:
     footprint (about 0.7 percent). A cell's share is over its pixels inside
     the AOI, so a sliver at the boundary can be wholly wet. Read-only.
     """
-    from rasterio.mask import raster_geometry_mask
+    from rasterio import mask as rasterio_mask
+    from rasterio.features import geometry_window
 
+    raster_geometry_mask = rasterio_mask.raster_geometry_mask
     geometry = aoi_geometry
     if hasattr(geometry, "geometry"):
         series = geometry.geometry
         geometry = series.union_all() if hasattr(series, "union_all") else series.unary_union
     _check_extent_grid(dataset, geometry)
-    outside, transform, window = raster_geometry_mask(dataset, [geometry], crop=True)
+    # Size the window before anything is allocated for it.
+    window = geometry_window(dataset, [geometry])
     if window.width * window.height > EXTENT_MAX_WINDOW_PIXELS:
         raise ValueError(f"the AOI window of {window.width} x {window.height} pixels exceeds the cap")
+    outside, transform, window = raster_geometry_mask(dataset, [geometry], crop=True)
     data = dataset.read(1, window=window, masked=False)
     inside = ~outside
     if not np.isin(data[inside], list(EXTENT_CODES)).all():
@@ -370,12 +374,13 @@ def _check_extent_grid(dataset: Any, geometry: Any) -> None:
     """The JRC grid, a 255 nodata tag (or none), and an AOI inside the tile."""
     if dataset.nodata not in (None, EXTENT_NODATA):
         raise ValueError(f"the extent has nodata tag {dataset.nodata}, not {EXTENT_NODATA}")
-    x_res, y_res = (abs(value) for value in dataset.res)
+    a, b, _, d, e, _ = tuple(dataset.transform)[:6]
+    north_up = b == 0 and d == 0 and a > 0 and e < 0
     on_grid = (
-        dataset.crs is not None
-        and dataset.crs.to_epsg() == 4326
-        and abs(x_res - PIXEL_DEGREES) <= GRID_TOLERANCE_DEGREES
-        and abs(y_res - PIXEL_DEGREES) <= GRID_TOLERANCE_DEGREES
+        _is_wgs84(dataset.crs)
+        and north_up
+        and abs(a - PIXEL_DEGREES) <= GRID_TOLERANCE_DEGREES
+        and abs(-e - PIXEL_DEGREES) <= GRID_TOLERANCE_DEGREES
     )
     if not on_grid:
         raise ValueError("the extent is not on the JRC 0.00025 degree EPSG:4326 grid")
@@ -384,6 +389,24 @@ def _check_extent_grid(dataset: Any, geometry: Any) -> None:
     slack = PIXEL_DEGREES / 2
     if west < left - slack or east > right + slack or south < bottom - slack or north > top + slack:
         raise ValueError("the AOI reaches beyond the extent tile, so it would be truncated")
+
+
+def _is_wgs84(crs: Any) -> bool:
+    """EPSG:4326 by comparing the stored WKT with pyproj's own database.
+
+    rasterio's EPSG lookup returns None where PROJ_LIB points at an older
+    proj.db, although the tile's WKT is intact; pyproj ships its own.
+    """
+    import pyproj
+
+    if crs is None:
+        return False
+    try:
+        return pyproj.CRS.from_user_input(crs.to_wkt()).equals(
+            pyproj.CRS.from_epsg(4326), ignore_axis_order=True
+        )
+    except pyproj.exceptions.CRSError:
+        return False
 
 
 def _transform(transformer: Any, xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
