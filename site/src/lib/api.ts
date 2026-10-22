@@ -280,6 +280,8 @@ export type RunSummary = {
   progress?: number | null;
   /** Null for runs older than the field; `case_id` is null for ordinary runs. */
   active_scenario?: { state?: string | null; case_id?: string | null } | null;
+  /** The area the run covers, e.g. `bangkok-bma` or `sai-mai-district`. */
+  aoi_id?: string | null;
   [key: string]: unknown;
 };
 
@@ -683,6 +685,9 @@ export type ObservedWaterYear = {
   known_km2?: number | null;
   excess_km2_vs_baseline?: number | null;
   baseline_year?: number | null;
+  /** Pixels of seasonal (code 2) and permanent (code 3) water inside the AOI. */
+  aoi_seasonal_pixels?: number | null;
+  aoi_permanent_pixels?: number | null;
   [key: string]: unknown;
 };
 
@@ -705,6 +710,25 @@ export type ObservedWaterResponse = {
   note?: string | null;
   warnings?: string[] | null;
   [key: string]: unknown;
+};
+
+/**
+ * `GET /v1/runs/{id}/observed-water/ever` (BKK-055c): everywhere ever detected
+ * as water in 1984-2021, served only for the tile the run recorded. Null
+ * figures carry `reason`. Extent only: not one flood, not depth.
+ */
+export type EverWater = FeatureCollection<ObservedWaterCellProperties> & {
+  run_id?: string | null;
+  available: boolean;
+  verified?: boolean | null;
+  is_observation?: boolean | null;
+  measures?: string | null;
+  aoi_km2?: number | null;
+  ever_water_km2: number | null;
+  no_data_km2?: number | null;
+  ever_water_share_of_observed?: number | null;
+  reason: string | null;
+  warnings?: unknown[] | null;
 };
 
 /** `observed-water/cells` feature properties. Extent per cell, never depth. */

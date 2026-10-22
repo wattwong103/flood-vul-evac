@@ -4,11 +4,11 @@
  *
  * The readings come from `/v1/runs/{id}/flood-summary`; the map reuses the
  * shared flood and road layers at the same time, with roads drawn for the mode
- * the reader picks. Past floods seen by satellite stay on the Observed & assets
- * screen until the Past tab lands (design note, section 4.1).
+ * the reader picks. Past floods seen by satellite are the Past tab (PastFlood.tsx;
+ * design note, section 4.1).
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { FloodReadings } from "@/components/FloodReadings";
 import { MapStatsGate } from "@/components/MapStatsGate";
 import { MapView, type LayerState, type MapBundle } from "@/components/MapView";
@@ -34,6 +34,7 @@ import {
 } from "@/lib/flood-summary";
 import { formatModelClock, formatText } from "@/lib/format";
 import { useRuns } from "@/lib/run-context";
+import { PastFlood } from "@/screens/PastFlood";
 import { RunPicker, Timeline } from "@/screens/ScenarioLab";
 
 /** Only the flood and the roads: the two layers the readings describe. */
@@ -56,7 +57,42 @@ const ROAD_MODES = [
 /** The layers this screen leaves off still need a (typed) empty collection. */
 const empty = () => asFeatureCollection<Record<string, unknown>>(null);
 
+export type FloodView = "what-if" | "past";
+
+/** The screen: a what-if flood or past floods seen by satellite, never mixed. */
 export function TheFlood({ reducedMotion }: { reducedMotion: boolean }) {
+  const [view, setView] = useState<FloodView>("what-if");
+  const switcher = <ViewSwitch view={view} onChange={setView} />;
+  return view === "past" ? (
+    <PastFlood reducedMotion={reducedMotion} switcher={switcher} />
+  ) : (
+    <WhatIfFlood reducedMotion={reducedMotion} switcher={switcher} />
+  );
+}
+
+function ViewSwitch({ view, onChange }: { view: FloodView; onChange: (view: FloodView) => void }) {
+  const options: Array<{ id: FloodView; label: string }> = [
+    { id: "what-if", label: "What-if flood (scenario)" },
+    { id: "past", label: "Past floods (observed)" },
+  ];
+  return (
+    <div className="flood-mode flood-views" role="group" aria-label="Which flood">
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          className={view === option.id ? "active" : ""}
+          aria-pressed={view === option.id}
+          onClick={() => onChange(option.id)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function WhatIfFlood({ reducedMotion, switcher }: { reducedMotion: boolean; switcher: ReactNode }) {
   const { activeRunId: runId, stats, hasNoRun, reloadAll } = useRuns();
   const [picked, setPicked] = useState<{ runId: string | null; time: number } | null>(null);
   const [roadMode, setRoadMode] = useState<string>(ROAD_MODES[0].code);
@@ -120,6 +156,8 @@ export function TheFlood({ reducedMotion }: { reducedMotion: boolean }) {
           </>
         }
       />
+
+      {switcher}
 
       <div className="flood-controls">
         <RunPicker />

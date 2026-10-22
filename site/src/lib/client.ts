@@ -261,6 +261,12 @@ export const routesPath = (runId: string) =>
 export const observedWaterPath = (runId: string) =>
   `/v1/runs/${encodeURIComponent(runId)}/observed-water`;
 
+/** Everywhere ever detected as water in 1984-2021, for a city run (BKK-055c). */
+export const everWaterPath = (runId: string, minShare: number | null = null) =>
+  `/v1/runs/${encodeURIComponent(runId)}/observed-water/ever${
+    minShare !== null ? `?min_share=${encodeURIComponent(String(minShare))}` : ""
+  }`;
+
 export const observedWaterCellsPath = (
   runId: string,
   year: number | null = null,
