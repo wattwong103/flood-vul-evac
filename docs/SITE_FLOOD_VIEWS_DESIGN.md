@@ -415,3 +415,12 @@ Added 22 October 2026, while building BKK-055c:
    time scrubber, map, table) using the existing run picker; then the Past tab
    with the JRC ever-water endpoint. An area × dry/moderate picker waits until
    `/v1/runs` reports each run's area.
+
+Added 22 October 2026, while building BKK-055d:
+
+6. **A trip whose start or end has every road closed is `no_route`.** Both
+   ends stay at the nodes the dry route snapped to, and `no_route_reason`
+   names the case (`origin_cut_off`, `destination_cut_off`, or `no_path`
+   between open ends). The evacuation step's re-snap to the nearest open road
+   within 250 m is not used for everyday trips, because people would have to
+   wade through closed roads to reach it.
