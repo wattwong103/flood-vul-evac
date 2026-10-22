@@ -68,6 +68,9 @@ class RunSummary(BaseModel):
         description="Overall run state, e.g. 'running' or 'failed_validation'.",
     )
     population_version: str | None = None
+    aoi_id: str | None = Field(
+        default=None, description="The area the run covers, from manifest.geography.aoi_id."
+    )
     warnings_count: int = 0
     active_scenario: ActiveScenarioSummary | None = Field(
         default=None,

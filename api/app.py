@@ -24,6 +24,7 @@ from pipeline.bkkflow.evacuation import validate_denominator_contract
 
 from api import CONTRACT_VERSION, __version__
 from api.errors import install_error_handlers
+from api.ever_water import build_ever_water
 from api.flood_summary import build_flood_summary
 from api.models import (
     ApiWarning,
@@ -444,6 +445,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 stage=run.stage,
                 state=run.state,
                 population_version=run.population_version,
+                aoi_id=run.aoi_id,
                 warnings_count=run.warnings_count,
                 active_scenario=run.active_scenario,
             )
@@ -1636,6 +1638,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "note": payload.get("note"),
             "warnings": warnings,
         }
+
+    @app.get("/v1/runs/{run_id}/observed-water/ever")
+    def get_ever_water(
+        run_id: str,
+        ctx: SettingsDep,
+        min_share: float = Query(default=0.05, ge=0.0, le=1.0),
+        limit: Annotated[int, Query(ge=1, le=MAX_ROW_LIMIT)] = DEFAULT_MESH_ROW_LIMIT,
+    ) -> dict[str, Any]:
+        """Everywhere ever detected as water in 1984-2021, for the run's area.
+
+        Served only for the extent tile the run recorded, checked by SHA-256;
+        otherwise null with a reason. Extent only: not one flood, not depth.
+        """
+        return build_ever_water(resolve_run(run_id), ctx, min_share=min_share, limit=limit)
 
     @app.get("/v1/runs/{run_id}/observed-water/cells")
     def get_observed_water_cells(
