@@ -20,7 +20,8 @@ from bkkflow.sources import gsw  # noqa: E402
 WEST, NORTH = 100.5, 13.7
 
 
-def extent_fixture(tmp_path, rows, *, nodata=None, crs="EPSG:4326", step=0.00025, name="extent.tif"):
+def extent_fixture(tmp_path, rows, *, nodata=None, crs="EPSG:4326", step=0.00025, name="extent.tif",
+                   transform=None):
     import rasterio
     from rasterio.transform import from_origin
 
@@ -28,7 +29,7 @@ def extent_fixture(tmp_path, rows, *, nodata=None, crs="EPSG:4326", step=0.00025
     array = np.array(rows, dtype="uint8")
     with rasterio.open(path, "w", driver="GTiff", width=array.shape[1], height=array.shape[0],
                        count=1, dtype="uint8", crs=crs, nodata=nodata,
-                       transform=from_origin(WEST, NORTH, step, step)) as dst:
+                       transform=transform or from_origin(WEST, NORTH, step, step)) as dst:
         dst.write(array, 1)
     bounds = (WEST, NORTH - array.shape[0] * 0.00025, WEST + array.shape[1] * 0.00025, NORTH)
     return path, bounds
@@ -163,3 +164,53 @@ def test_extent_counts_the_same_aoi_pixels_as_the_yearly_measure(tmp_path):
     year = gsw.measure_year(2020, "yearly.tif", yearly, bounds, aoi_geometry=triangle, extent_path=extent)
 
     assert measured["aoi_pixels"] == year.aoi_pixels
+
+
+
+# ---------------------------------------------------------------------------
+# Cross-harness (Codex) regressions, and a CRS check that needs no EPSG lookup.
+# ---------------------------------------------------------------------------
+
+
+def test_an_oversized_window_is_refused_before_it_is_rasterised(tmp_path, monkeypatch):
+    import rasterio.mask
+    from shapely.geometry import box
+
+    path, bounds = extent_fixture(tmp_path, [[1, 0, 1], [0, 1, 0]])
+
+    def never(*args, **kwargs):
+        raise AssertionError("the mask was built before the cap was checked")
+
+    monkeypatch.setattr(gsw, "EXTENT_MAX_WINDOW_PIXELS", 4)
+    monkeypatch.setattr(rasterio.mask, "raster_geometry_mask", never)
+    with pytest.raises(ValueError, match="cap"):
+        gsw.measure_extent(path, box(*bounds))
+
+
+def test_a_rotated_extent_is_refused(tmp_path):
+    from affine import Affine
+    from shapely.geometry import box
+
+    sheared = Affine(0.00025, 0.00001, WEST, 0.0, -0.00025, NORTH)
+    path, bounds = extent_fixture(tmp_path, [[1, 0], [0, 1]], transform=sheared)
+    with pytest.raises(ValueError, match="grid"):
+        gsw.measure_extent(path, box(*bounds))
+
+
+def test_the_crs_check_does_not_need_rasterios_epsg_lookup():
+    from types import SimpleNamespace
+
+    import pyproj
+    from affine import Affine
+    from shapely.geometry import box
+
+    # On a machine whose PROJ_LIB points at an old proj.db, rasterio's EPSG
+    # lookup returns None for a correct tile whose WKT is still intact.
+    crs = SimpleNamespace(to_epsg=lambda *args, **kwargs: None,
+                          to_wkt=lambda *args, **kwargs: pyproj.CRS.from_epsg(4326).to_wkt("WKT1_GDAL"))
+    dataset = SimpleNamespace(
+        nodata=None, crs=crs, res=(0.00025, 0.00025),
+        transform=Affine(0.00025, 0.0, WEST, 0.0, -0.00025, NORTH),
+        bounds=(WEST, NORTH - 0.0005, WEST + 0.0005, NORTH),
+    )
+    gsw._check_extent_grid(dataset, box(WEST, NORTH - 0.0005, WEST + 0.0005, NORTH))

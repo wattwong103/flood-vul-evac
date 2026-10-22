@@ -294,3 +294,18 @@ def test_the_limit_keeps_the_wettest_cells_and_says_so(client, dirs) -> None:
     assert body["matched_cells"] > 1
     assert body["returned"] == 1 and body["truncated"] is True
     assert "truncated" in _codes(body)
+
+
+
+def test_an_area_mismatch_reason_never_echoes_the_record(client, dirs) -> None:
+    runs_dir, data_dir = dirs
+    sha, _ = _staged(data_dir)
+    observed = _observed(sha)
+    observed["aoi_id"] = "C:\\secret\\boundary.geojson"
+    _write_run(runs_dir, "city", aoi_id="bangkok-bma", observed=observed)
+
+    body = client.get("/v1/runs/city/observed-water/ever").json()
+
+    assert body["available"] is False
+    assert "secret" not in body["reason"]
+    assert all("secret" not in warning["message"] for warning in body["warnings"])
