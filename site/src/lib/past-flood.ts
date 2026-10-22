@@ -35,6 +35,40 @@ export const PAST_MOVEMENT: Reading = {
   reason: null,
 };
 
+/** 2011 is the flood readers look for first. */
+const PREFERRED_YEAR = 2011;
+
+/** 2011 when the record has it, otherwise the latest year. */
+export function defaultPastYear(years: number[]): number | null {
+  if (years.includes(PREFERRED_YEAR)) return PREFERRED_YEAR;
+  return years.length > 0 ? years[years.length - 1] : null;
+}
+
+/**
+ * The layer to show: the reader's pick if the record has it, else the default
+ * year, else the 1984-2021 extent (still worth showing with no yearly record).
+ */
+export function resolvePastChoice(picked: PastChoice | null, years: number[]): PastChoice {
+  if (picked === EVER || (picked !== null && years.includes(picked))) return picked;
+  return defaultPastYear(years) ?? EVER;
+}
+
+/**
+ * A response only if it belongs to this run. `useApi` keeps the last answer
+ * while the next one loads, and another run's record must never show here.
+ */
+export function forRun<T extends { run_id?: string | null }>(data: T | null, runId: string | null): T | null {
+  return data !== null && data.run_id === runId ? data : null;
+}
+
+/** True when map cells were asked for this run and this layer (a year, or the extent). */
+export function cellsMatch(payload: unknown, runId: string | null, choice: PastChoice): boolean {
+  if (payload === null || typeof payload !== "object") return false;
+  const record = payload as Record<string, unknown>;
+  if (record.run_id !== runId) return false;
+  return choice === EVER ? "ever_water_km2" in record : record.year === choice;
+}
+
 /** The newest ordinary citywide run; the run list is newest first. */
 export function newestCityRun(runs: RunSummary[] | null): RunSummary | null {
   return (runs ?? []).find((run) => run.aoi_id === CITY_AOI && !run.active_scenario?.case_id) ?? null;
@@ -80,7 +114,18 @@ export function yearReading(entry: ObservedWaterYear | null): Reading {
   };
 }
 
-export function everReading(ever: Pick<EverWater, "available" | "ever_water_km2" | "reason" | "no_data_km2" | "ever_water_share_of_observed"> | null): Reading {
+export function everReading(
+  ever: Pick<EverWater, "available" | "ever_water_km2" | "reason" | "no_data_km2" | "ever_water_share_of_observed"> | null,
+  { loading = false }: { loading?: boolean } = {},
+): Reading {
+  if (ever === null && loading) {
+    return {
+      value: "Reading…",
+      unit: null,
+      detail: "Everywhere seen as water at least once in 1984–2021",
+      reason: null,
+    };
+  }
   const km2 = ever?.ever_water_km2 ?? null;
   if (ever === null || !ever.available || km2 === null) {
     return {

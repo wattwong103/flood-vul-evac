@@ -34,6 +34,7 @@ export function PastReadings({
   label,
   year,
   ever,
+  everLoading = false,
   status,
 }: {
   choice: PastChoice;
@@ -41,9 +42,11 @@ export function PastReadings({
   label: string;
   year: ObservedWaterYear | null;
   ever: Pick<EverWater, "available" | "ever_water_km2" | "reason" | "no_data_km2" | "ever_water_share_of_observed"> | null;
+  /** True while the 1984-2021 extent is still on its way. */
+  everLoading?: boolean;
   status: string | null;
 }) {
-  const big = choice === EVER ? everReading(ever) : yearReading(year);
+  const big = choice === EVER ? everReading(ever, { loading: everLoading }) : yearReading(year);
   return (
     <section className="metric-grid flood-readings" aria-label={`Observed water, ${label}`}>
       <MetricCard

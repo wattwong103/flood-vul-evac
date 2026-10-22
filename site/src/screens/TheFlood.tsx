@@ -8,7 +8,7 @@
  * design note, section 4.1).
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { FloodReadings } from "@/components/FloodReadings";
 import { MapStatsGate } from "@/components/MapStatsGate";
 import { MapView, type LayerState, type MapBundle } from "@/components/MapView";
@@ -34,6 +34,7 @@ import {
 } from "@/lib/flood-summary";
 import { formatModelClock, formatText } from "@/lib/format";
 import { useRuns } from "@/lib/run-context";
+import type { PastChoice } from "@/lib/past-flood";
 import { PastFlood } from "@/screens/PastFlood";
 import { RunPicker, Timeline } from "@/screens/ScenarioLab";
 
@@ -59,14 +60,43 @@ const empty = () => asFeatureCollection<Record<string, unknown>>(null);
 
 export type FloodView = "what-if" | "past";
 
-/** The screen: a what-if flood or past floods seen by satellite, never mixed. */
+type WhatIfPick = { runId: string | null; time: number } | null;
+
+/**
+ * The screen: a what-if flood or past floods seen by satellite, never mixed.
+ * The title and the switch render once, so switching keeps keyboard focus,
+ * and each view's selections live here, so switching back keeps them.
+ */
 export function TheFlood({ reducedMotion }: { reducedMotion: boolean }) {
   const [view, setView] = useState<FloodView>("what-if");
-  const switcher = <ViewSwitch view={view} onChange={setView} />;
-  return view === "past" ? (
-    <PastFlood reducedMotion={reducedMotion} switcher={switcher} />
-  ) : (
-    <WhatIfFlood reducedMotion={reducedMotion} switcher={switcher} />
+  const [whatIfPick, setWhatIfPick] = useState<WhatIfPick>(null);
+  const [roadMode, setRoadMode] = useState<string>(ROAD_MODES[0].code);
+  const [pastPick, setPastPick] = useState<PastChoice | null>(null);
+  return (
+    <div className="page flood-page">
+      <PageIntro
+        kicker="The flood"
+        title="How big, how deep, and can people still move?"
+        lead={
+          <>
+            A what-if flood is a declared scenario; a past flood is what satellites saw.
+            Neither is a forecast, a warning or a route.
+          </>
+        }
+      />
+      <ViewSwitch view={view} onChange={setView} />
+      {view === "past" ? (
+        <PastFlood reducedMotion={reducedMotion} picked={pastPick} onPick={setPastPick} />
+      ) : (
+        <WhatIfFlood
+          reducedMotion={reducedMotion}
+          picked={whatIfPick}
+          onPick={setWhatIfPick}
+          roadMode={roadMode}
+          onRoadMode={setRoadMode}
+        />
+      )}
+    </div>
   );
 }
 
@@ -92,10 +122,20 @@ function ViewSwitch({ view, onChange }: { view: FloodView; onChange: (view: Floo
   );
 }
 
-function WhatIfFlood({ reducedMotion, switcher }: { reducedMotion: boolean; switcher: ReactNode }) {
+function WhatIfFlood({
+  reducedMotion,
+  picked,
+  onPick: setPicked,
+  roadMode,
+  onRoadMode: setRoadMode,
+}: {
+  reducedMotion: boolean;
+  picked: WhatIfPick;
+  onPick: (pick: WhatIfPick) => void;
+  roadMode: string;
+  onRoadMode: (mode: string) => void;
+}) {
   const { activeRunId: runId, stats, hasNoRun, reloadAll } = useRuns();
-  const [picked, setPicked] = useState<{ runId: string | null; time: number } | null>(null);
-  const [roadMode, setRoadMode] = useState<string>(ROAD_MODES[0].code);
 
   // A time picked on one run means nothing on another, whose clock differs:
   // it is dropped, and the summary chooses the new run's peak.
@@ -144,20 +184,11 @@ function WhatIfFlood({ reducedMotion, switcher }: { reducedMotion: boolean; swit
   );
 
   return (
-    <div className="page flood-page" aria-busy={updating}>
-      <PageIntro
-        kicker="The flood"
-        title="How big, how deep, and can people still move?"
-        lead={
-          <>
-            {floodSourceNote(data?.source_role ?? null)} Roads close at the project&rsquo;s
-            declared depths. Past floods seen by satellite are on the Observed &amp; assets
-            screen.
-          </>
-        }
-      />
-
-      {switcher}
+    <div className="flood-view" aria-busy={updating}>
+      <p className="flood-source">
+        {floodSourceNote(data?.source_role ?? null)} Roads close at the project&rsquo;s
+        declared depths.
+      </p>
 
       <div className="flood-controls">
         <RunPicker />

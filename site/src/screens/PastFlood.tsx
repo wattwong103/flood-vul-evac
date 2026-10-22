@@ -6,12 +6,15 @@
  * citywide run on its own and names it, whatever pilot run is selected for the
  * what-if view (North, 22 October 2026). Extent only: depth is Unknown and
  * movement waits for an admitted citywide run (BKK-040).
+ *
+ * `useApi` keeps the last answer while the next one loads, so every response
+ * is checked against the run and layer it was asked for before it is shown.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo } from "react";
 import { PastReadings } from "@/components/PastReadings";
 import { MapView, type LayerState, type MapBundle } from "@/components/MapView";
-import { ErrorState, LoadingState, PageIntro } from "@/components/primitives";
+import { ErrorState, LoadingState } from "@/components/primitives";
 import { useApi } from "@/hooks/useApi";
 import type {
   EverWater,
@@ -22,10 +25,13 @@ import type {
 import { asFeatureCollection, observedWaterPath, studyAreaPath } from "@/lib/client";
 import { formatText } from "@/lib/format";
 import {
+  cellsMatch,
   EVER,
+  forRun,
   newestCityRun,
   pastCellsPath,
   pastYears,
+  resolvePastChoice,
   type PastChoice,
 } from "@/lib/past-flood";
 import { useRuns } from "@/lib/run-context";
@@ -41,32 +47,52 @@ const PAST_LAYERS: LayerState = {
   observedWater: true,
 };
 
-/** 2011 is the flood readers look for first, when the record has it. */
-const PREFERRED_YEAR = 2011;
-
 const empty = () => asFeatureCollection<Record<string, unknown>>(null);
-
 const choiceLabel = (choice: PastChoice) => (choice === EVER ? "1984–2021" : String(choice));
 
-export function PastFlood({ reducedMotion, switcher }: { reducedMotion: boolean; switcher: ReactNode }) {
+function warningMessages(payload: unknown): string[] {
+  const warnings = (payload as { warnings?: unknown } | null)?.warnings;
+  if (!Array.isArray(warnings)) return [];
+  return warnings.flatMap((warning) => {
+    const message = (warning as { message?: unknown } | null)?.message;
+    return typeof message === "string" && message ? [message] : [];
+  });
+}
+
+export function PastFlood({
+  reducedMotion,
+  picked,
+  onPick,
+}: {
+  reducedMotion: boolean;
+  picked: PastChoice | null;
+  onPick: (choice: PastChoice) => void;
+}) {
   const { runs } = useRuns();
   const cityRun = newestCityRun(runs.data);
   const cityId = cityRun?.run_id ?? null;
+  const status = cityRun?.validation_status ?? null;
 
-  const observed = useApi<ObservedWaterResponse>(cityId ? observedWaterPath(cityId) : null, [cityId]);
-  const years = pastYears(observed.data);
-  const [picked, setPicked] = useState<PastChoice | null>(null);
-  const choice: PastChoice | null =
-    picked ?? (years.includes(PREFERRED_YEAR) ? PREFERRED_YEAR : (years[years.length - 1] ?? null));
+  const observedState = useApi<ObservedWaterResponse>(cityId ? observedWaterPath(cityId) : null, [cityId]);
+  const observed = forRun(observedState.data, cityId);
+  const years = pastYears(observed);
+  const choice = resolvePastChoice(picked, years);
 
-  const ever = useApi<EverWater>(cityId ? pastCellsPath(cityId, EVER) : null, [cityId]);
+  // The extent's totals and cells come in one response, asked for only when shown.
+  const everState = useApi<EverWater>(
+    cityId && choice === EVER ? pastCellsPath(cityId, EVER) : null,
+    [cityId, choice === EVER],
+  );
+  const ever = forRun(everState.data, cityId);
   const yearCells = useApi<unknown>(
-    cityId && choice !== null && choice !== EVER ? pastCellsPath(cityId, choice) : null,
+    cityId && choice !== EVER ? pastCellsPath(cityId, choice) : null,
     [cityId, choice],
   );
   const studyArea = useApi<StudyAreaResponse>(studyAreaPath, []);
 
-  const cells = choice === EVER ? ever.data : yearCells.data;
+  // cellsMatch checks the run as well as the layer, so the raw responses suffice.
+  const cellsPayload = choice === EVER ? everState.data : yearCells.data;
+  const cells = cellsMatch(cellsPayload, cityId, choice) ? cellsPayload : null;
   const bundle = useMemo<MapBundle>(
     () => ({
       studyArea: asFeatureCollection<StudyAreaProperties>(studyArea.data),
@@ -81,40 +107,42 @@ export function PastFlood({ reducedMotion, switcher }: { reducedMotion: boolean;
     [studyArea.data, cells],
   );
 
-  const yearEntry =
-    choice !== null && choice !== EVER
-      ? (observed.data?.years ?? []).find((entry) => entry.year === choice) ?? null
-      : null;
-  const status = cityRun?.validation_status ?? null;
+  const yearEntry = choice !== EVER ? (observed?.years ?? []).find((entry) => entry.year === choice) ?? null : null;
+  const layerState = choice === EVER ? everState : yearCells;
+  const loading = runs.phase === "loading" || observedState.phase === "loading" || layerState.phase === "loading";
+  const notes = [...new Set([...warningMessages(observed), ...warningMessages(cells)])];
 
   return (
-    <div className="page flood-page">
-      <PageIntro
-        kicker="The flood"
-        title="How big, how deep, and can people still move?"
-        lead={
-          <>
-            Past floods seen by satellite (JRC Global Surface Water): where water was, not how
-            deep, and a yearly layer is not one flood event. Read from citywide run{" "}
-            <span className="mono">{cityId ? cityId.slice(0, 8) : "none"}</span>
-            {status ? ` (${status})` : ""}, whatever run is selected for the what-if view.
-          </>
-        }
-      />
+    <div className="flood-view" aria-busy={loading}>
+      <p className="flood-source">
+        Past floods seen by satellite (JRC Global Surface Water): where water was, not how deep,
+        and a yearly layer is not one flood event. Read from citywide run{" "}
+        <span className="mono">{cityId ? cityId.slice(0, 8) : "none"}</span>
+        {status ? ` (${status})` : ""}, whatever run is selected for the what-if view.
+      </p>
 
-      {switcher}
-
+      {runs.phase === "loading" ? <LoadingState label="Reading the run list" /> : null}
+      {runs.phase === "error" && runs.error ? (
+        <ErrorState error={runs.error} onRetry={runs.reload} context="The run list." />
+      ) : null}
       {runs.phase === "ready" && !cityRun ? (
         <p className="muted" role="status">
-          No citywide run is published, so there is no observed-water record to show.
+          No citywide run is listed, so there is no observed-water record to show.
         </p>
       ) : null}
-      {observed.phase === "error" && observed.error ? (
-        <ErrorState error={observed.error} onRetry={observed.reload} context="Observed water for the citywide run." />
+      {observedState.phase === "error" && observedState.error ? (
+        <ErrorState error={observedState.error} onRetry={observedState.reload} context="Observed water for the citywide run." />
       ) : null}
-      {observed.phase === "loading" ? <LoadingState label="Reading the observed-water record" /> : null}
+      {observedState.phase === "missing" ? (
+        <p className="muted" role="status">This citywide run has no observed-water record.</p>
+      ) : null}
+      {observed && years.length === 0 ? (
+        <p className="muted" role="status">
+          This citywide run records no past years; only the 1984–2021 extent can be shown.
+        </p>
+      ) : null}
 
-      {cityId && choice !== null ? (
+      {cityId ? (
         <>
           <div className="flood-mode" role="group" aria-label="Which past layer">
             {[...years, EVER].map((option) => (
@@ -123,7 +151,8 @@ export function PastFlood({ reducedMotion, switcher }: { reducedMotion: boolean;
                 type="button"
                 className={choice === option ? "active" : ""}
                 aria-pressed={choice === option}
-                onClick={() => setPicked(option)}
+                aria-label={option === EVER ? "Ever seen as water, 1984–2021" : `Water seen in ${option}`}
+                onClick={() => onPick(option)}
               >
                 {choiceLabel(option)}
               </button>
@@ -133,19 +162,24 @@ export function PastFlood({ reducedMotion, switcher }: { reducedMotion: boolean;
             choice={choice}
             label={choiceLabel(choice)}
             year={yearEntry}
-            ever={ever.data}
+            ever={ever}
+            everLoading={choice === EVER && everState.phase === "loading"}
             status={status}
           />
-          {[ever, yearCells].map((layer, index) =>
-            layer.phase === "error" && layer.error ? (
-              <ErrorState
-                key={index === 0 ? "ever" : "year"}
-                error={layer.error}
-                onRetry={layer.reload}
-                context={index === 0 ? "The 1984–2021 extent." : "Observed water cells for the map."}
-              />
-            ) : null,
-          )}
+          {notes.length > 0 ? (
+            <ul className="reading-notes" aria-label="Notes from the data">
+              {notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          ) : null}
+          {layerState.phase === "error" && layerState.error ? (
+            <ErrorState
+              error={layerState.error}
+              onRetry={layerState.reload}
+              context={choice === EVER ? "The 1984–2021 extent." : "Observed water cells for the map."}
+            />
+          ) : null}
           <MapView
             bundle={bundle}
             layers={PAST_LAYERS}

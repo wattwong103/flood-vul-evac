@@ -355,3 +355,5 @@
 .depth-tick.now { background: #b03a2b; width: 3px; }
 .depth-marks { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 11px; color: #33443f; }
 .reading-notes { margin: 0; padding: 10px 14px 10px 28px; background: #f6efe1; border-left: 3px solid #c98a2e; font-size: 11px; color: #5a4a33; display: grid; gap: 4px; }
+.flood-view { display: grid; gap: 26px; }
+.flood-source { margin: 0; color: #5f716d; font-size: 13px; line-height: 1.6; max-width: 80ch; }
