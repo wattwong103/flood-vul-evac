@@ -439,6 +439,12 @@ def test_flooded_pilot_routes_with_peak_speed_multipliers(pilot_inputs, monkeypa
         return build_graph(edges, mode, **kwargs)
 
     monkeypatch.setattr(runner.mobility_module, "build_routing_graph", capture_graph)
+    # Trip outcomes (BKK-055d) build their own flooded graphs; this test is
+    # about the evacuation's single peak graph.
+    monkeypatch.setattr(
+        runner.trip_outcomes_module, "classify_trip_outcomes",
+        lambda *args, **kwargs: pd.DataFrame(columns=runner.trip_outcomes_module.COLUMNS),
+    )
 
     result = runner.execute_run(
         pilot_id="khlong-san-district", flood_enabled=True, max_agents=10
@@ -451,10 +457,8 @@ def test_flooded_pilot_routes_with_peak_speed_multipliers(pilot_inputs, monkeypa
     peak_walk = states[(states["time_s"] == peak_time) & (states["mode"] == 0)]
     expected = dict(zip(peak_walk["edge_id"], peak_walk["speed_multiplier"]))
 
-    # Trip outcomes (BKK-055d) build flooded graphs earlier in the run, one per
-    # mode and departure state; the evacuation's graph is the last one built.
-    assert captured[-1] == expected
-    assert all(0.0 <= value <= 1.0 for graph in captured for value in graph.values())
+    assert captured == [expected]
+    assert all(0.0 <= value <= 1.0 for value in captured[0].values())
 
 
 def test_named_pilot_rejects_mismatched_scoped_provenance(pilot_inputs):
@@ -834,3 +838,6 @@ def test_flooded_pilot_writes_one_trip_outcome_per_trip(pilot_inputs):
     assert set(outcomes.loc[outcomes["outcome"] == "not_routed_dry", "trip_id"]) == unrouted
     registered = [entry for entry in manifest["outputs"] if entry["role"] == "trip_outcomes"]
     assert len(registered) == 1 and registered[0]["row_count"] == len(trips)
+    # Departure states keep their integer type through parquet, and the step is timed.
+    assert str(outcomes["state_time_s"].dtype) == "Int64"
+    assert any(stage["stage"] == "network_impact" for stage in manifest["stages"])
