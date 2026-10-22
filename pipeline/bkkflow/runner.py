@@ -33,6 +33,7 @@ from . import evacuation as evacuation_module
 from . import flood as flood_module
 from . import manifest as manifest_module
 from . import mobility as mobility_module
+from . import trip_outcomes as trip_outcomes_module
 from . import network as network_module
 from . import population as population_module
 from . import validate as validate_module
@@ -655,6 +656,19 @@ def _finish_run(
     )
     edge_states_path = _write_parquet(context, "edge_states.parquet", edge_states)
     register_output(context, "edge_states", edge_states_path, rows=len(edge_states))
+
+    # Everyday trips under the flood: unaffected, detour or no route (BKK-055d).
+    trip_outcome_table = trip_outcomes_module.classify_trip_outcomes(
+        trips,
+        waypoints,
+        edges,
+        edge_states,
+        analysis_crs=analysis_crs,
+        window=(scenario.start_time_s, scenario.end_time_s),
+        dry_indices=indices,
+    )
+    trip_outcomes_path = _write_parquet(context, "trip_outcomes.parquet", trip_outcome_table)
+    register_output(context, "trip_outcomes", trip_outcomes_path, rows=len(trip_outcome_table))
 
     exposure = flood_module.build_building_exposure(building_table, surface)
     building_table = building_table.merge(exposure, on="building_id", how="left")

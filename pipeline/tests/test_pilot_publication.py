@@ -451,8 +451,10 @@ def test_flooded_pilot_routes_with_peak_speed_multipliers(pilot_inputs, monkeypa
     peak_walk = states[(states["time_s"] == peak_time) & (states["mode"] == 0)]
     expected = dict(zip(peak_walk["edge_id"], peak_walk["speed_multiplier"]))
 
-    assert captured == [expected]
-    assert all(0.0 <= value <= 1.0 for value in captured[0].values())
+    # Trip outcomes (BKK-055d) build flooded graphs earlier in the run, one per
+    # mode and departure state; the evacuation's graph is the last one built.
+    assert captured[-1] == expected
+    assert all(0.0 <= value <= 1.0 for graph in captured for value in graph.values())
 
 
 def test_named_pilot_rejects_mismatched_scoped_provenance(pilot_inputs):
@@ -812,3 +814,23 @@ def test_partial_age_coverage_is_reported_truthfully(pilot_inputs, monkeypatch):
         demographics["age_coverage"]
     )
     assert runner.manifest_module.validate_manifest(manifest) == []
+
+
+def test_flooded_pilot_writes_one_trip_outcome_per_trip(pilot_inputs):
+    from bkkflow import trip_outcomes
+
+    result = runner.execute_run(
+        pilot_id="khlong-san-district", flood_enabled=True, max_agents=10
+    )
+
+    run = Path(result["run_dir"])
+    trips = pd.read_parquet(run / "trips.parquet")
+    outcomes = pd.read_parquet(run / "trip_outcomes.parquet")
+    manifest = read_json(run / "manifest.json")
+
+    assert sorted(outcomes["trip_id"]) == sorted(trips["trip_id"])
+    assert set(outcomes["outcome"]) <= set(trip_outcomes.OUTCOMES)
+    unrouted = set(trips.loc[trips["route_status"] != "routed", "trip_id"])
+    assert set(outcomes.loc[outcomes["outcome"] == "not_routed_dry", "trip_id"]) == unrouted
+    registered = [entry for entry in manifest["outputs"] if entry["role"] == "trip_outcomes"]
+    assert len(registered) == 1 and registered[0]["row_count"] == len(trips)

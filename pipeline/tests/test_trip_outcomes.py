@@ -60,10 +60,12 @@ def _waypoints(trips: pd.DataFrame) -> pd.DataFrame:
     for trip in trips.itertuples():
         if trip.route_status != "routed":
             continue
+        speed = WALK_SPEED if trip.mode == WALK else CAR_SPEED
         for seq, (node, edge) in enumerate(((1, "e12"), (2, "e23"), (3, None))):
             x, y = NODES[node]
             rows.append({"trip_id": trip.trip_id, "person_id": trip.person_id, "seq": seq,
-                         "x": x, "y": y, "edge_id": edge, "cumulative_time_s": 0.0, "mode": trip.mode})
+                         "x": x, "y": y, "edge_id": edge, "cumulative_time_s": seq * 100.0 / speed,
+                         "mode": trip.mode})
     return pd.DataFrame(rows)
 
 

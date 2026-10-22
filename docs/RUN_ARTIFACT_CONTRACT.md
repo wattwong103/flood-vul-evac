@@ -26,6 +26,7 @@ runs/<run_id>/
   network_edges.parquet
   flood_slices.parquet
   edge_states.parquet
+  trip_outcomes.parquet
   buildings.parquet
   refuges.parquet
   evacuation_states.parquet
@@ -112,6 +113,19 @@ speed_walk_mps, speed_vehicle_mps, geometry_wkt`
 ### edge_states.parquet
 `edge_id, time_s, mode, depth_m, speed_multiplier, capacity_multiplier,
 closed, threshold_set_version, reason_code`
+
+### trip_outcomes.parquet
+`trip_id, mode, dest_purpose, depart_time_s, state_time_s, origin_cell, weight,
+outcome, dry_time_s, flood_time_s, extra_time_s, blocking_edge_id`
+`outcome` ∈ `unaffected, detour, no_route, outside_flood_window, not_routed_dry`.
+Each routed trip is checked against the `edge_states` in force at its departure
+(the latest `time_s` at or before it) for its mode: closed roads are removed and
+slowed roads kept at reduced speed; a slower route is a `detour`, none is
+`no_route`. Trips departing outside the flood window, or with no dry route, are
+counted apart and are never flood effects. `blocking_edge_id` is the first
+closed (else slowed) edge on the dry route. `origin_cell` is the public 1 km
+cell, `g1km_<x>_<y>` by its lower-left corner. Trips are synthetic and stay
+inside the AOI: never commutes.
 
 ### evacuation_states.parquet
 `person_id, state, reason, event_time_s, weight, dest_id`
