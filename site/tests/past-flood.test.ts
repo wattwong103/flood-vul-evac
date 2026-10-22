@@ -10,9 +10,13 @@ import test from "node:test";
 import { everWaterPath, observedWaterCellsPath } from "../src/lib/client.ts";
 import { NOT_AVAILABLE } from "../src/lib/format.ts";
 import {
+  cellsMatch,
+  defaultPastYear,
   EVER,
   everReading,
+  forRun,
   newestCityRun,
+  resolvePastChoice,
   PAST_DEPTH,
   PAST_MOVEMENT,
   pastCellsPath,
@@ -110,4 +114,50 @@ test("the map reads yearly cells for a year and the extent for 1984-2021", () =>
   assert.equal(pastCellsPath("city", 2011), observedWaterCellsPath("city", 2011, 0.05));
   assert.equal(pastCellsPath("city", EVER), everWaterPath("city", 0.05));
   assert.equal(everWaterPath("a b", 0.05), "/v1/runs/a%20b/observed-water/ever?min_share=0.05");
+});
+
+
+// ---------------------------------------------------------------------------
+// Code-review regressions: never another year's or run's data, and loading is
+// not "not available".
+// ---------------------------------------------------------------------------
+
+test("2011 is the default past layer when the record has it", () => {
+  assert.equal(defaultPastYear([2010, 2011, 2020]), 2011);
+  assert.equal(defaultPastYear([2010, 2020]), 2020);
+  assert.equal(defaultPastYear([]), null);
+});
+
+test("a picked layer the record lacks falls back to the default", () => {
+  assert.equal(resolvePastChoice(2012, [2010, 2020]), 2020);
+  assert.equal(resolvePastChoice(2010, [2010, 2020]), 2010);
+  assert.equal(resolvePastChoice(EVER, [2010]), EVER);
+  assert.equal(resolvePastChoice(null, [2010, 2011]), 2011);
+  // With no yearly record the extent is still worth showing.
+  assert.equal(resolvePastChoice(null, []), EVER);
+});
+
+test("a record for another run is not shown under this one", () => {
+  assert.equal(forRun({ run_id: "a", years: [] }, "b"), null);
+  assert.deepEqual(forRun({ run_id: "a", years: [] }, "a"), { run_id: "a", years: [] });
+  assert.equal(forRun(null, "a"), null);
+});
+
+test("map cells are drawn only for the run and layer they were asked for", () => {
+  const cells2011 = { run_id: "a", year: 2011, features: [{}] };
+  assert.equal(cellsMatch(cells2011, "a", 2011), true);
+  assert.equal(cellsMatch(cells2011, "a", 2020), false);
+  assert.equal(cellsMatch(cells2011, "b", 2011), false);
+  assert.equal(cellsMatch(cells2011, "a", EVER), false);
+  const extent = { run_id: "a", ever_water_km2: 295, features: [{}] };
+  assert.equal(cellsMatch(extent, "a", EVER), true);
+  assert.equal(cellsMatch(extent, "a", 2011), false);
+  assert.equal(cellsMatch(null, "a", 2011), false);
+});
+
+test("an extent still loading reads as loading, not as unavailable", () => {
+  const reading = everReading(null, { loading: true });
+  assert.notEqual(reading.value, NOT_AVAILABLE);
+  assert.match(reading.value, /Reading/);
+  assert.equal(reading.reason, null);
 });
