@@ -76,7 +76,11 @@ def classify_trip_outcomes(
         return pd.DataFrame(columns=COLUMNS).astype(_DTYPES)
     routes = _route_edges(waypoints)
     states = _state_lookup(edge_states)
-    state_times = np.array(sorted({time for time, _ in states}), dtype="int64")
+    # Each mode's own state times, so one mode's clock never picks another's state.
+    state_times = {
+        mode: np.array(sorted(time for time, key_mode in states if key_mode == mode), dtype="int64")
+        for mode in {mode for _, mode in states}
+    }
     records: list[dict[str, Any]] = []
     reroutes: dict[_StateKey, _Pending] = {}
     for trip in trips.to_dict("records"):
@@ -111,19 +115,20 @@ def _screen(
     trip: dict[str, Any],
     routes: dict[str, tuple[list[str], float]],
     states: dict[_StateKey, _State],
-    state_times: np.ndarray,
+    state_times: dict[int, np.ndarray],
     window: tuple[int, int],
 ) -> dict[str, Any]:
     """Every outcome that needs no re-route; ``outcome`` None marks one that does."""
     if trip.get("route_status") != "routed":
         return {**_EMPTY, "outcome": "not_routed_dry"}
     depart, mode = int(trip["depart_time_s"]), int(trip["mode"])
-    position = int(np.searchsorted(state_times, depart, side="right")) - 1
-    if not window[0] <= depart <= window[1] or position < 0:
+    if not window[0] <= depart <= window[1]:
         return {**_EMPTY, "outcome": "outside_flood_window"}
-    state_time = int(state_times[position])
-    if (state_time, mode) not in states:
-        raise ValueError(f"edge_states has no road states for mode {mode} at time {state_time}")
+    times = state_times.get(mode)
+    position = -1 if times is None else int(np.searchsorted(times, depart, side="right")) - 1
+    if position < 0:
+        raise ValueError(f"edge_states has no road states for mode {mode} at or before {depart}")
+    state_time = int(times[position])
     if trip["trip_id"] not in routes:
         raise ValueError(f"routed trip {trip['trip_id']!r} has no waypoints")
     speeds, closed = states[(state_time, mode)]
@@ -200,15 +205,26 @@ def _route_edges(waypoints: pd.DataFrame) -> dict[str, tuple[list[str], float]]:
     """Each trip's dry route: its ordered edge ids and its stored travel time.
 
     The last waypoint's ``cumulative_time_s`` is the dry route's cost on the
-    same graph and weights, so the dry route is never searched for again.
+    same graph and weights, so the dry route is never searched for again. A
+    chain must be whole (``seq`` 0..n-1, an edge out of every point but the
+    last) or its stored cost would be short.
     """
     if waypoints.empty or "edge_id" not in waypoints.columns:
         return {}
     ordered = waypoints.sort_values(["trip_id", "seq"], kind="stable")
     routes: dict[str, tuple[list[str], float]] = {}
     for trip_id, group in ordered.groupby("trip_id", sort=False):
-        edges = [edge for edge in group["edge_id"] if isinstance(edge, str) and edge]
-        routes[trip_id] = (edges, float(group["cumulative_time_s"].max()))
+        edge_ids = group["edge_id"].tolist()
+        cost = float(group["cumulative_time_s"].iloc[-1])
+        whole = (
+            group["seq"].tolist() == list(range(len(group)))
+            and all(isinstance(edge, str) and edge for edge in edge_ids[:-1])
+            and not isinstance(edge_ids[-1], str)
+            and math.isfinite(cost)
+        )
+        if not whole:
+            raise ValueError(f"routed trip {trip_id!r} has an incomplete waypoint chain")
+        routes[trip_id] = (edge_ids[:-1], cost)
     return routes
 
 
@@ -219,8 +235,9 @@ def _state_lookup(edge_states: pd.DataFrame) -> dict[_StateKey, _State]:
     flag with a speed multiplier in [0, 1]. Anything else is unknown and is
     refused rather than read as open.
     """
-    if edge_states["closed"].isna().any():
-        raise ValueError("edge_states has rows with no closed flag; an unknown road state is never open")
+    # A text flag such as "false" is truthy, so only stored booleans are read.
+    if not edge_states["closed"].isin([True, False]).all():
+        raise ValueError("edge_states has rows without a true or false closed flag; an unknown road state is never open")
     closed = edge_states["closed"].astype(bool).to_numpy()
     speeds = pd.to_numeric(edge_states["speed_multiplier"], errors="coerce").to_numpy(dtype="float64")
     unknown = ~closed & ~((speeds >= 0.0) & (speeds <= 1.0))

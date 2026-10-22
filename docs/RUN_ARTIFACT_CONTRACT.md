@@ -125,8 +125,10 @@ time's rounding) is a `detour`, none is `no_route`. Both ends stay at the nodes
 the dry route snapped to; `no_route_reason` ∈ `origin_cut_off,
 destination_cut_off` (every road at that end is closed) or `no_path`. Trips
 departing outside the flood window, or with no dry route, are counted apart and
-are never flood effects. A missing or unknown road state (no closed flag, or an
-open row without a speed multiplier) stops the run rather than read as open.
+are never flood effects. A missing or unknown road state (no stored true or
+false closed flag, an open row without a speed multiplier, no state for the
+trip's mode at or before its departure) or an incomplete waypoint chain stops
+the run rather than read as open.
 `blocking_edge_id` is the first closed (else slowed) edge on the dry route.
 `origin_cell` is the public 1 km cell, `g1km_<x>_<y>` by its lower-left corner.
 `state_time_s` is a nullable integer; text columns are strings. Trips are
