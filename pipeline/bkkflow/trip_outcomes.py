@@ -9,6 +9,11 @@ same as the evacuation step): a slower or longer route is a detour, and no
 route is no route. Slowed means any speed reduction, as in the API and site
 (North, 22 October 2026).
 
+Both ends stay at the nodes the dry route snapped to, so a trip whose start
+or end has every road closed is no route, named by ``no_route_reason``. The
+evacuation step's re-snap to the nearest open road is not used here: that
+would have people wade closed roads to reach it (North, 22 October 2026).
+
 Trips departing outside the flood window, and trips that had no dry route,
 are counted apart and never as flood effects.
 
