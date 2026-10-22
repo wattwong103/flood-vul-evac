@@ -1,7 +1,8 @@
 # BKK/FLOW — unfinished work
 
 **Live list:** 11 October 2026; updated 20 October 2026 (paper scope,
-BKK-016a, BKK-052, BKK-053, BKK-054) and 21 October 2026 (BKK-055)
+BKK-016a, BKK-052, BKK-053, BKK-054), 21 October 2026 (BKK-055) and
+23 October 2026 (BKK-056)
 
 **Baseline:** `main` at merge commit `959d6f9` (PR #77)
 
@@ -70,6 +71,7 @@ holder before work assigned to that role starts.
 | P2 | BKK-053 — observed-extent plausibility check | IN PROGRESS | Paper owner (design note), then North (metric) | — |
 | P1 | BKK-054 — GSW water-share denominator (yearly code 0 is mostly never-water) | IN PROGRESS | Implementer (BKK-054b PR), then paper owner | — |
 | P1 | BKK-055 — site flood views: the flood, trips cut off, flood observations | IN PROGRESS | Implementer (BKK-055a design PR), then app owner | BKK-055h waits on PR #94 for 2010/2011 |
+| P1 | BKK-056 — point-observation skill check with a baseline ladder | DECISION | North (BKK-056a), then implementer; Data steward (BKK-056c) | BKK-056b waits on 056a; BKK-056c on an admitted point-observation source |
 
 ## P0 — evidence needed before stronger scientific or citywide claims
 
@@ -276,6 +278,91 @@ and that the views use new demonstration runs, labelled as separate from the
   depth surface; 2011 is replayed only inside the pilot AOIs (BKK-053 D1).
 - Replay of 2010 and 2011 waits on PR #94. Nothing here edits the admitted
   release or cites a city result before BKK-040.
+
+### BKK-056 — Score flood surfaces against timed point observations
+
+Found on 23 October 2026 while assessing an external Bangkok forecast
+(github.com/Sompote/bangkok-flood-forecast, commit `45997f8`). Its README
+reports AUC 0.56–0.58 against citizen flood reports over the 2026 season. Our
+own check of its one shipped replay (`app/data_demo`, issued 26 September 2026
+09:00, highest probability over leads 1–6) gave AUC 0.49 for the cells holding
+reports, below 12 h rain alone (0.67) and building density (0.60). A skill
+score without baselines hides that. This task builds the check for our own
+surfaces: BKK-053 (oec-v1) scores surfaces against mapped extent; this scores
+them against timed points (road-sensor depths, flood reports). It is not
+calibration and not the held-out validation of BKK-036C, which may use it.
+Nothing here edits the admitted release or cites a city result before
+BKK-040.
+
+- Three PRs. **BKK-056a** (DECISION): a protocol note `psk-v1` recording
+  North's choices D1–D6. **BKK-056b** (BLOCKED on 056a): the harness, tested
+  on synthetic fixtures only; if it passes about 300 changed lines, split the
+  null and bootstrap from the ladder. **BKK-056c** (EXTERNAL): the first
+  locked real run, once the Data steward admits a timed point-observation
+  source (BKK-036B covers forcing and extent, not sensors or reports) and
+  North decides privacy and consent for any citizen-report source.
+- D1 unit (recommended option first): 100 m blocks in EPSG:32647 as in
+  oec-v1, published only at 1 km; or the 1 km grid; or the scored surface's
+  native grid.
+- D2 labels: a sensor block is wet at a window maximum ≥ 0.15 m (oec-v1's
+  `SECONDARY_DEPTH_M`, equal to the API's flood-area threshold; or 0.10 m)
+  and dry only when its sensor reported below that at every scheduled reading
+  in the window (or a minimum reporting share); a gap never makes a block
+  dry. Reports are presence-only: a block without one is a `not_reported`
+  control, never `observed_dry`, drawn from blocks with exposure above zero
+  (or every in-domain block).
+- D3 ladder: AUC with the toroidal null as chance, as in oec-v1; an exposure
+  or reporting proxy, mandatory for presence-only labels (North picks
+  building cover or people present); distance to mapped channel; rain-only
+  and persistence when their inputs exist. Alternative: the exposure rung
+  only. No DSM elevation rung until BKK-036A admits a bare-earth surface
+  ([`docs/CITY_SCALE_LIMITATIONS.md`](docs/CITY_SCALE_LIMITATIONS.md)).
+- D4 bootstrap block length: oec-v1's correlogram rule with its
+  not-estimable fallback (no interval, no D5 verdict); or a fixed length.
+  The rule is untested on sparse sensor labels.
+- D5 claim: "adds skill over rung k" only when the lower bound of the paired
+  block-bootstrap 95% interval of AUC(candidate) − AUC(rung k) is above 0;
+  or report differences with no claim rule.
+- D6 time: timed surfaces against observations in [t, t + lead]. Declared
+  scenarios have no calendar date: their peak rank is scored against every
+  observation in the event window, as spatial plausibility in the manner of
+  BKK-053. A pilot scenario is a distance-to-water decay (`flood.py`), so its
+  rank equals the channel rung's and that comparison shows no difference by
+  construction; the record states this rather than reporting it as a finding.
+- 056b: a `psk-v1` record locks cases, rungs, windows, seeds and block
+  lengths before any score; evaluation refuses an unlocked case.
+- 056b: reuse oec-v1's `auc` unchanged (negate scores: it ranks the lower
+  value as wetter), tested equal to it on shared ranks. The null, bootstrap,
+  correlogram and TOC are new code, because oec-v1's are bound to its two
+  rows and 100 m blocks; on oec-v1's fixtures they reproduce oec-v1's
+  results. oec-v1's code, `PROTOCOL` and tests stay untouched and pass.
+- 056b: unknown is never dry and presence-only data never yield
+  `observed_dry`. Below oec-v1's minimum of 30 positives or 30 negatives a
+  case is `undefined_*` with null metrics, never 0 or 0.5.
+- 056b: per rung and candidate, the AUC, TOC (in the score's units),
+  toroidal-null p, block-bootstrap interval, paired difference interval and
+  D5 verdict. A rung without its input is null with a reason, never dropped.
+  Under the not-estimable fallback both intervals are null and the verdict
+  is `not_available`; a case with no computable correlogram lag is locked as
+  undefined, as in oec-v1.
+- 056b: no observation reaches `build_depth_surface` or `build_flood_slices`
+  (regression test); fixed seeds give a byte-identical JSON record.
+- 056b: a planted reporting-bias fixture with fixed seeds: reports follow
+  building cover and the candidate is building cover plus noise, so it beats
+  chance (toroidal-null p < 0.05) yet fails the recommended D5 rule against
+  the exposure rung.
+- 056c: the admitted source carries licence, checksums, gap audit, timezone
+  and units; reports are aggregated to blocks at ingest with no text, photos
+  or report ids; the locked record is committed before any score and names
+  and excludes the dates, areas and observations reserved for held-out
+  validation under BKK-036B/C (as oec-v1 reserves 2011 outside the pilots).
+- 056c: it scores the pilot scenario surfaces and, from a new demonstration
+  city run that is not cited as a current city result, the drainage
+  screening index against the full ladder; outputs stay outside Git; results
+  are reported as plausibility with intervals and nulls, never as
+  calibration or operational validity.
+- The BMA road-sensor feed lists about 262 sensors citywide, so most pilot
+  cases may be `undefined`. That is the correct result, not a failure.
 
 ## P2 — parked maintenance and paper handoff
 
