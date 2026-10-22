@@ -1,7 +1,7 @@
 # BKK/FLOW — unfinished work
 
 **Live list:** 11 October 2026; updated 20 October 2026 (paper scope,
-BKK-016a, BKK-052, BKK-053, BKK-054)
+BKK-016a, BKK-052, BKK-053, BKK-054) and 21 October 2026 (BKK-055)
 
 **Baseline:** `main` at merge commit `959d6f9` (PR #77)
 
@@ -69,6 +69,7 @@ holder before work assigned to that role starts.
 | P2 | BKK-052 — related work and novelty defence | IN PROGRESS | Paper owner (related-work session) | — |
 | P2 | BKK-053 — observed-extent plausibility check | IN PROGRESS | Paper owner (design note), then North (metric) | — |
 | P1 | BKK-054 — GSW water-share denominator (yearly code 0 is mostly never-water) | IN PROGRESS | Implementer (BKK-054b PR), then paper owner | — |
+| P1 | BKK-055 — site flood views: the flood, trips cut off, flood observations | IN PROGRESS | Implementer (BKK-055a design PR), then app owner | BKK-055h waits on PR #94 for 2010/2011 |
 
 ## P0 — evidence needed before stronger scientific or citywide claims
 
@@ -253,6 +254,28 @@ name list in
   their demonstration status, denominators and limitations in the UI.
 - Refuse partial, altered or unverifiable releases and keep superseded city
   results unavailable.
+
+### BKK-055 — Add the flood, trips-cut-off and flood-observation views
+
+Designed with North on 20 October 2026 in
+[`docs/SITE_FLOOD_VIEWS_DESIGN.md`](docs/SITE_FLOOD_VIEWS_DESIGN.md). Past and
+what-if floods only; no live view. North decided that the site may show the
+MitrEarth/GISTDA mapped footprints (BKK-053 D8 still governs journal figures)
+and that the views use new demonstration runs, labelled as separate from the
+11 October release.
+
+- Eleven ordered tasks, BKK-055a to BKK-055k, one PR each, tests first
+  (design note §7). BKK-055a is the design note and this entry.
+- The flood: how big, how deep and can people move, for what-if floods in the
+  four pilots; past years show depth as Unknown and movement as Not yet.
+- Trips cut off: everyday trips inside the district, classed unaffected,
+  detour or no route, plus whether people can still reach an open road exit.
+  Never called commutes; never drawn as individual trajectories.
+- Flood observations: what the project holds, and replay of mapped past floods
+  through roads and trips. Replay closes roads directly and never becomes a
+  depth surface; 2011 is replayed only inside the pilot AOIs (BKK-053 D1).
+- Replay of 2010 and 2011 waits on PR #94. Nothing here edits the admitted
+  release or cites a city result before BKK-040.
 
 ## P2 — parked maintenance and paper handoff
 
