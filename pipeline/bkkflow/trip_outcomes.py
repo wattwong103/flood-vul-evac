@@ -31,17 +31,30 @@ from .city_method import PUBLIC_GRID_M
 OUTCOMES = ("unaffected", "detour", "no_route", "outside_flood_window", "not_routed_dry")
 #: Outcomes that describe the flood's effect; the other two are counted apart.
 FLOOD_OUTCOMES = ("unaffected", "detour", "no_route")
-#: A re-route no slower than this is the same trip, not a detour.
-DETOUR_TOLERANCE_S = 1e-6
+#: Why a trip has no route: every road at one of its ends is closed, or the
+#: ends are open but no longer joined.
+NO_ROUTE_REASONS = ("origin_cut_off", "destination_cut_off", "no_path")
+#: ``route_trips`` stores the dry time rounded to 0.01 s, so a re-route within
+#: that of it is the same trip, not a detour.
+DETOUR_TOLERANCE_S = 0.01
 
 COLUMNS = [
-    "trip_id", "mode", "dest_purpose", "depart_time_s", "state_time_s", "origin_cell",
-    "weight", "outcome", "dry_time_s", "flood_time_s", "extra_time_s", "blocking_edge_id",
+    "trip_id", "mode", "dest_purpose", "depart_time_s", "state_time_s", "origin_cell", "weight",
+    "outcome", "dry_time_s", "flood_time_s", "extra_time_s", "blocking_edge_id", "no_route_reason",
 ]
+# Fixed types, so the parquet schema never depends on which outcomes occur.
+_DTYPES = {
+    "trip_id": "string", "mode": "int64", "dest_purpose": "string", "depart_time_s": "int64",
+    "state_time_s": "Int64", "origin_cell": "string", "weight": "float64", "outcome": "string",
+    "dry_time_s": "float64", "flood_time_s": "float64", "extra_time_s": "float64",
+    "blocking_edge_id": "string", "no_route_reason": "string",
+}
 
 # (state time, mode) -> (speed multiplier per edge, closed edge ids)
 _StateKey = tuple[int, int]
 _State = tuple[dict[str, float], frozenset[str]]
+# A trip's output record, paired with its input row, waiting for a re-route.
+_Pending = list[tuple[dict[str, Any], dict[str, Any]]]
 
 
 def classify_trip_outcomes(
@@ -54,19 +67,28 @@ def classify_trip_outcomes(
     window: tuple[int, int],
     dry_indices: dict[int, mobility_module.NetworkIndex] | None = None,
 ) -> pd.DataFrame:
-    """One row per trip with its outcome under the flood (see module docstring)."""
+    """One row per trip with its outcome under the flood (see module docstring).
+
+    Raises ``ValueError`` when a road state the trips need is missing or
+    unknown, or a routed trip has no waypoints: those are never read as open.
+    """
     if trips.empty:
-        return pd.DataFrame(columns=COLUMNS)
-    router = _Router(edges, analysis_crs, dict(dry_indices or {}))
+        return pd.DataFrame(columns=COLUMNS).astype(_DTYPES)
     routes = _route_edges(waypoints)
     states = _state_lookup(edge_states)
     state_times = np.array(sorted({time for time, _ in states}), dtype="int64")
-    records = []
+    records: list[dict[str, Any]] = []
+    reroutes: dict[_StateKey, _Pending] = {}
     for trip in trips.to_dict("records"):
-        record = _base_record(trip)
-        record.update(_outcome(trip, routes, states, state_times, window, router))
+        record = {**_base_record(trip), **_screen(trip, routes, states, state_times, window)}
+        if record["outcome"] is None:
+            reroutes.setdefault((record["state_time_s"], record["mode"]), []).append((record, trip))
         records.append(record)
-    return pd.DataFrame.from_records(records, columns=COLUMNS)
+    router = _Router(edges, analysis_crs, dict(dry_indices or {}))
+    # Grouped by state, so only one flooded graph is held at a time.
+    for key, pending in reroutes.items():
+        router.reroute(key, states[key], pending)
+    return pd.DataFrame.from_records(records, columns=COLUMNS).astype(_DTYPES)
 
 
 def _base_record(trip: dict[str, Any]) -> dict[str, Any]:
@@ -82,17 +104,17 @@ def _base_record(trip: dict[str, Any]) -> dict[str, Any]:
 
 
 _EMPTY = {"outcome": None, "dry_time_s": None, "flood_time_s": None, "extra_time_s": None,
-          "blocking_edge_id": None}
+          "blocking_edge_id": None, "no_route_reason": None}
 
 
-def _outcome(
+def _screen(
     trip: dict[str, Any],
     routes: dict[str, tuple[list[str], float]],
     states: dict[_StateKey, _State],
     state_times: np.ndarray,
     window: tuple[int, int],
-    router: "_Router",
 ) -> dict[str, Any]:
+    """Every outcome that needs no re-route; ``outcome`` None marks one that does."""
     if trip.get("route_status") != "routed":
         return {**_EMPTY, "outcome": "not_routed_dry"}
     depart, mode = int(trip["depart_time_s"]), int(trip["mode"])
@@ -100,65 +122,78 @@ def _outcome(
     if not window[0] <= depart <= window[1] or position < 0:
         return {**_EMPTY, "outcome": "outside_flood_window"}
     state_time = int(state_times[position])
-    speeds, closed = states.get((state_time, mode), ({}, frozenset()))
-    route, stored_cost = routes.get(trip["trip_id"], ([], float(trip["duration_s"])))
-    impacted = [edge for edge in route if edge in closed or speeds.get(edge, 1.0) < 1.0]
-    base = {**_EMPTY, "state_time_s": state_time, "dry_time_s": stored_cost}
+    if (state_time, mode) not in states:
+        raise ValueError(f"edge_states has no road states for mode {mode} at time {state_time}")
+    if trip["trip_id"] not in routes:
+        raise ValueError(f"routed trip {trip['trip_id']!r} has no waypoints")
+    speeds, closed = states[(state_time, mode)]
+    route, dry_cost = routes[trip["trip_id"]]
+    try:
+        impacted = [edge for edge in route if edge in closed or speeds[edge] < 1.0]
+    except KeyError as missing:
+        raise ValueError(
+            f"edge_states has no state for edge {missing.args[0]!r} (mode {mode}, time {state_time})"
+        ) from None
+    base = {**_EMPTY, "state_time_s": state_time, "dry_time_s": dry_cost}
     if not impacted:
-        return {**base, "outcome": "unaffected", "flood_time_s": stored_cost, "extra_time_s": 0.0}
+        return {**base, "outcome": "unaffected", "flood_time_s": dry_cost, "extra_time_s": 0.0}
+    return {**base, "blocking_edge_id": next((edge for edge in impacted if edge in closed), impacted[0])}
 
-    blocking = next((edge for edge in impacted if edge in closed), impacted[0])
-    flood_cost = router.flood_cost(trip, (state_time, mode), speeds, closed)
+
+def _settle(record: dict[str, Any], flood_cost: float | None, reason: str | None) -> None:
+    """Fill in a re-routed trip's outcome."""
     if flood_cost is None:
-        return {**base, "outcome": "no_route", "blocking_edge_id": blocking}
-    extra = flood_cost - stored_cost
+        record.update(outcome="no_route", no_route_reason=reason)
+        return
+    extra = flood_cost - record["dry_time_s"]
     if extra <= DETOUR_TOLERANCE_S:
-        return {**base, "outcome": "unaffected", "flood_time_s": stored_cost, "extra_time_s": 0.0}
-    return {**base, "outcome": "detour", "flood_time_s": flood_cost, "extra_time_s": extra,
-            "blocking_edge_id": blocking}
+        record.update(outcome="unaffected", flood_time_s=record["dry_time_s"], extra_time_s=0.0,
+                      blocking_edge_id=None)
+        return
+    record.update(outcome="detour", flood_time_s=flood_cost, extra_time_s=extra)
 
 
 class _Router:
-    """Dry snapping and flooded graphs, built once per mode and state time."""
+    """Dry snapping per mode, and one flooded graph at a time."""
 
     def __init__(self, edges: gpd.GeoDataFrame, analysis_crs: str,
                  dry: dict[int, mobility_module.NetworkIndex]) -> None:
         self.edges, self.analysis_crs, self.dry = edges, analysis_crs, dry
-        self.flooded: dict[_StateKey, Any] = {}
 
-    def flood_cost(self, trip: dict[str, Any], key: _StateKey,
-                   speeds: dict[str, float], closed: frozenset[str]) -> float | None:
-        """Least travel time on the flooded graph, or None when there is no way."""
-        import networkx as nx
-
+    def reroute(self, key: _StateKey, state: _State, pending: _Pending) -> None:
+        """Settle each pending record on the graph for ``key``, released on return."""
         mode = key[1]
+        speeds, closed = state
         if mode not in self.dry:
-            self.dry[mode] = _index(mobility_module.build_routing_graph(self.edges, mode), self.analysis_crs)
-        dry = self.dry[mode]
-        if dry is None:
-            return None
-        # Snap on the dry graph, as the dry routing did, so both use the same ends.
-        origin = dry.snap(float(trip["origin_x"]), float(trip["origin_y"]))
-        destination = dry.snap(float(trip["dest_x"]), float(trip["dest_y"]))
-        if origin is None or destination is None:
-            return None
-        if key not in self.flooded:
-            multipliers = {edge: 0.0 if edge in closed else value for edge, value in speeds.items()}
-            self.flooded[key] = mobility_module.build_routing_graph(
-                self.edges, mode, speed_multipliers=multipliers
+            self.dry[mode] = mobility_module.NetworkIndex(
+                mobility_module.build_routing_graph(self.edges, mode), self.analysis_crs
             )
-        try:
-            cost, _ = nx.bidirectional_dijkstra(self.flooded[key], origin, destination, weight="cost")
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
-            return None
-        return float(cost)
+        dry = self.dry[mode]
+        multipliers = {edge: 0.0 if edge in closed else value for edge, value in speeds.items()}
+        graph = mobility_module.build_routing_graph(self.edges, mode, speed_multipliers=multipliers)
+        for record, trip in pending:
+            # Both ends stay where the dry route snapped them, so it is the same trip.
+            origin = dry.snap(float(trip["origin_x"]), float(trip["origin_y"]))
+            destination = dry.snap(float(trip["dest_x"]), float(trip["dest_y"]))
+            if origin is None or destination is None:
+                raise ValueError(f"routed trip {trip['trip_id']!r} no longer snaps to its mode's network")
+            _settle(record, *_least_cost(graph, origin, destination))
 
 
-def _index(graph: Any, analysis_crs: str) -> mobility_module.NetworkIndex | None:
-    """A routing index, or None when every edge of the mode is closed."""
-    if graph.number_of_nodes() == 0:
-        return None
-    return mobility_module.NetworkIndex(graph, analysis_crs)
+def _least_cost(graph: Any, origin: int, destination: int) -> tuple[float | None, str | None]:
+    """Least travel time between the dry ends, or None with the reason there is none."""
+    import networkx as nx
+
+    # A node whose every road is closed is not in the flooded graph at all.
+    if origin not in graph:
+        return None, "origin_cut_off"
+    if destination not in graph:
+        return None, "destination_cut_off"
+    try:
+        cost, _ = nx.bidirectional_dijkstra(graph, origin, destination, weight="cost")
+    except nx.NetworkXNoPath:
+        return None, "no_path"
+    return float(cost), None
 
 
 def _route_edges(waypoints: pd.DataFrame) -> dict[str, tuple[list[str], float]]:
@@ -178,12 +213,28 @@ def _route_edges(waypoints: pd.DataFrame) -> dict[str, tuple[list[str], float]]:
 
 
 def _state_lookup(edge_states: pd.DataFrame) -> dict[_StateKey, _State]:
+    """Road states by (time, mode), under the API and site rule.
+
+    Closed only on a stored true flag; open or slowed only on a stored false
+    flag with a speed multiplier in [0, 1]. Anything else is unknown and is
+    refused rather than read as open.
+    """
+    if edge_states["closed"].isna().any():
+        raise ValueError("edge_states has rows with no closed flag; an unknown road state is never open")
+    closed = edge_states["closed"].astype(bool).to_numpy()
+    speeds = pd.to_numeric(edge_states["speed_multiplier"], errors="coerce").to_numpy(dtype="float64")
+    unknown = ~closed & ~((speeds >= 0.0) & (speeds <= 1.0))
+    if unknown.any():
+        raise ValueError(f"edge_states has {int(unknown.sum())} open rows without a speed multiplier in [0, 1]")
+    frame = pd.DataFrame({
+        "time_s": edge_states["time_s"].to_numpy(), "mode": edge_states["mode"].to_numpy(),
+        "edge_id": edge_states["edge_id"].to_numpy(), "speed": speeds, "closed": closed,
+    })
     lookup: dict[_StateKey, _State] = {}
-    for (time_s, mode), group in edge_states.groupby(["time_s", "mode"], sort=True):
-        closed_flags = group["closed"].fillna(False).astype(bool)
+    for (time_s, mode), group in frame.groupby(["time_s", "mode"], sort=True):
         lookup[(int(time_s), int(mode))] = (
-            dict(zip(group["edge_id"], group["speed_multiplier"].astype(float))),
-            frozenset(group.loc[closed_flags, "edge_id"]),
+            dict(zip(group["edge_id"], group["speed"])),
+            frozenset(group.loc[group["closed"], "edge_id"]),
         )
     return lookup
 

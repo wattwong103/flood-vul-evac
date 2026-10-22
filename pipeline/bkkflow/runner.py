@@ -657,7 +657,17 @@ def _finish_run(
     edge_states_path = _write_parquet(context, "edge_states.parquet", edge_states)
     register_output(context, "edge_states", edge_states_path, rows=len(edge_states))
 
+    exposure = flood_module.build_building_exposure(building_table, surface)
+    building_table = building_table.merge(exposure, on="building_id", how="left")
+    building_out = building_table.copy()
+    building_out["geometry_wkt"] = building_out.geometry.to_wkt()
+    buildings_path = _write_parquet(context, "buildings.parquet", building_out.drop(columns="geometry"))
+    register_output(context, "buildings", buildings_path, rows=len(building_table), crs=analysis_crs)
+    context.record("flood", time.time() - stage_start, rows=len(slices),
+                   note=f"source_role=scenario; {len(surface)} depth cells")
+
     # Everyday trips under the flood: unaffected, detour or no route (BKK-055d).
+    stage_start = time.time()
     trip_outcome_table = trip_outcomes_module.classify_trip_outcomes(
         trips,
         waypoints,
@@ -669,15 +679,8 @@ def _finish_run(
     )
     trip_outcomes_path = _write_parquet(context, "trip_outcomes.parquet", trip_outcome_table)
     register_output(context, "trip_outcomes", trip_outcomes_path, rows=len(trip_outcome_table))
-
-    exposure = flood_module.build_building_exposure(building_table, surface)
-    building_table = building_table.merge(exposure, on="building_id", how="left")
-    building_out = building_table.copy()
-    building_out["geometry_wkt"] = building_out.geometry.to_wkt()
-    buildings_path = _write_parquet(context, "buildings.parquet", building_out.drop(columns="geometry"))
-    register_output(context, "buildings", buildings_path, rows=len(building_table), crs=analysis_crs)
-    context.record("flood", time.time() - stage_start, rows=len(slices),
-                   note=f"source_role=scenario; {len(surface)} depth cells")
+    context.record("network_impact", time.time() - stage_start, rows=len(trip_outcome_table),
+                   note="trip outcomes")
 
     # ---- E1 cohort -------------------------------------------------------
     stage_start = time.time()

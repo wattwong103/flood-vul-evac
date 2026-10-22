@@ -840,4 +840,5 @@ def test_flooded_pilot_writes_one_trip_outcome_per_trip(pilot_inputs):
     assert len(registered) == 1 and registered[0]["row_count"] == len(trips)
     # Departure states keep their integer type through parquet, and the step is timed.
     assert str(outcomes["state_time_s"].dtype) == "Int64"
-    assert any(stage["stage"] == "network_impact" for stage in manifest["stages"])
+    stages = read_json(run / "run_state.json")["stages"]
+    assert any(stage["stage"] == "network_impact" for stage in stages)
