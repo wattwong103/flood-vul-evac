@@ -439,6 +439,12 @@ def test_flooded_pilot_routes_with_peak_speed_multipliers(pilot_inputs, monkeypa
         return build_graph(edges, mode, **kwargs)
 
     monkeypatch.setattr(runner.mobility_module, "build_routing_graph", capture_graph)
+    # Trip outcomes (BKK-055d) build their own flooded graphs; this test is
+    # about the evacuation's single peak graph.
+    monkeypatch.setattr(
+        runner.trip_outcomes_module, "classify_trip_outcomes",
+        lambda *args, **kwargs: pd.DataFrame(columns=runner.trip_outcomes_module.COLUMNS),
+    )
 
     result = runner.execute_run(
         pilot_id="khlong-san-district", flood_enabled=True, max_agents=10
@@ -812,3 +818,27 @@ def test_partial_age_coverage_is_reported_truthfully(pilot_inputs, monkeypatch):
         demographics["age_coverage"]
     )
     assert runner.manifest_module.validate_manifest(manifest) == []
+
+
+def test_flooded_pilot_writes_one_trip_outcome_per_trip(pilot_inputs):
+    from bkkflow import trip_outcomes
+
+    result = runner.execute_run(
+        pilot_id="khlong-san-district", flood_enabled=True, max_agents=10
+    )
+
+    run = Path(result["run_dir"])
+    trips = pd.read_parquet(run / "trips.parquet")
+    outcomes = pd.read_parquet(run / "trip_outcomes.parquet")
+    manifest = read_json(run / "manifest.json")
+
+    assert sorted(outcomes["trip_id"]) == sorted(trips["trip_id"])
+    assert set(outcomes["outcome"]) <= set(trip_outcomes.OUTCOMES)
+    unrouted = set(trips.loc[trips["route_status"] != "routed", "trip_id"])
+    assert set(outcomes.loc[outcomes["outcome"] == "not_routed_dry", "trip_id"]) == unrouted
+    registered = [entry for entry in manifest["outputs"] if entry["role"] == "trip_outcomes"]
+    assert len(registered) == 1 and registered[0]["row_count"] == len(trips)
+    # Departure states keep their integer type through parquet, and the step is timed.
+    assert str(outcomes["state_time_s"].dtype) == "Int64"
+    stages = read_json(run / "run_state.json")["stages"]
+    assert any(stage["stage"] == "network_impact" for stage in stages)
