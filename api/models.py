@@ -247,3 +247,78 @@ class ConfigResponse(BaseModel):
     resolved_at: str | None = None
     scenario: dict[str, Any] = Field(default_factory=dict)
     warnings: list[ApiWarning] = Field(default_factory=list)
+
+
+class FloodSize(BaseModel):
+    """How big: area at or above the flood-area threshold at one model time."""
+
+    flooded_area_km2: float | None = None
+    share_of_aoi: float | None = None
+    aoi_area_km2: float | None = None
+    cell_size_m: float | None = None
+    reason: str | None = None
+
+
+class ModeStopArea(BaseModel):
+    """Flooded area deep enough to close roads for one travel mode."""
+
+    mode: int
+    mode_name: str
+    closed_depth_m: float | None = None
+    area_km2: float | None = None
+
+
+class FloodDepth(BaseModel):
+    """How deep: the deepest cell and the area where each mode stops."""
+
+    max_depth_m: float | None = None
+    at_or_above_closing_depth: list[ModeStopArea] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class ModeMovement(BaseModel):
+    """Road length a mode may use, by state, at one model time.
+
+    Lengths are null when the mode's usable network cannot be determined;
+    shares are null when no usable edge has a state at this time.
+    """
+
+    mode: int
+    mode_name: str
+    closed_depth_m: float | None = None
+    total_km: float | None = None
+    open_km: float | None = None
+    slowed_km: float | None = None
+    closed_km: float | None = None
+    unknown_km: float | None = None
+    open_share: float | None = None
+    slowed_share: float | None = None
+    closed_share: float | None = None
+    unknown_share: float | None = None
+    reason: str | None = None
+
+
+class FloodMovement(BaseModel):
+    """Can people move: per-mode road states, or a reason there are none."""
+
+    modes: list[ModeMovement] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class FloodSummaryResponse(BaseModel):
+    """``GET /v1/runs/{id}/flood-summary``: size, depth and movement at one time."""
+
+    run_id: str
+    validation_status: str | None = None
+    available: bool = False
+    time_s: int | None = None
+    time_defaulted: bool = False
+    available_times: list[int] = Field(default_factory=list)
+    peak_time_s: int | None = None
+    source_role: str | None = None
+    flood_area_threshold_m: float
+    threshold_set_version: str | None = None
+    how_big: FloodSize = Field(default_factory=FloodSize)
+    how_deep: FloodDepth = Field(default_factory=FloodDepth)
+    movement: FloodMovement = Field(default_factory=FloodMovement)
+    warnings: list[ApiWarning] = Field(default_factory=list)

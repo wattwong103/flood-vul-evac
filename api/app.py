@@ -24,6 +24,7 @@ from pipeline.bkkflow.evacuation import validate_denominator_contract
 
 from api import CONTRACT_VERSION, __version__
 from api.errors import install_error_handlers
+from api.flood_summary import build_flood_summary
 from api.models import (
     ApiWarning,
     BuildingsMeta,
@@ -34,6 +35,7 @@ from api.models import (
     EvacuationTotals,
     ExportResponse,
     ArtefactEntry,
+    FloodSummaryResponse,
     HealthResponse,
     LinksMeta,
     LinksResponse,
@@ -755,6 +757,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "sample_is_spatial_subset": truncated,
             "warnings": warnings,
         }
+
+    @app.get(
+        "/v1/runs/{run_id}/flood-summary",
+        response_model=FloodSummaryResponse,
+        tags=["runs"],
+    )
+    def get_flood_summary(
+        run_id: str,
+        ctx: SettingsDep,
+        time: Annotated[int | None, Query(ge=0, le=2_592_000)] = None,
+    ) -> FloodSummaryResponse:
+        """How big, how deep, and whether roads are usable, at one model time.
+
+        Defaults to the flood peak. Missing evidence is returned as null with a
+        reason, never as zero.
+        """
+        return build_flood_summary(resolve_run(run_id), time)
 
     # ---------------------------------------------------------------- links
 
