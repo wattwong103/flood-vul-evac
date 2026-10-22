@@ -64,8 +64,10 @@ def _write_run(runs_dir: Path, run_id: str, *, aoi_id: str, observed: dict | Non
         (run_dir / "observed_water.json").write_text(json.dumps(observed), encoding="utf-8")
 
 
-def _observed(sha: str | None, *, status: str = "ok") -> dict:
-    record = {"status": "ok", "aoi_id": "bangkok-bma", "years": []}
+def _observed(sha: str | None, *, status: str = "ok", aoi_pixels: int | None = 8) -> dict:
+    # The run's own yearly count binds the boundary: the 2x4 fixture is 8 pixels.
+    years = [] if aoi_pixels is None else [{"year": 2020, "aoi_pixels": aoi_pixels}]
+    record = {"status": "ok", "aoi_id": "bangkok-bma", "years": years}
     if sha is not None:
         record["max_extent"] = {
             "source_id": "jrc-global-surface-water-max-extent-v1.4",
@@ -179,3 +181,116 @@ def test_the_run_list_names_each_runs_area(client, dirs) -> None:
     runs = client.get("/v1/runs").json()["runs"]
 
     assert runs[0]["aoi_id"] == "bangkok-bma"
+
+
+
+# ---------------------------------------------------------------------------
+# Review regressions: unusable inputs give a reason, never a 500 or a false
+# "verified".
+# ---------------------------------------------------------------------------
+
+
+def _codes(body: dict) -> set[str]:
+    return {warning["code"] for warning in body["warnings"]}
+
+
+def test_an_unreadable_boundary_gives_a_reason_not_a_500(client, dirs) -> None:
+    runs_dir, data_dir = dirs
+    sha, _ = _staged(data_dir)
+    (data_dir / "curated" / "aoi" / "bangkok-bma.geojson").write_text("{not json", encoding="utf-8")
+    _write_run(runs_dir, "city", aoi_id="bangkok-bma", observed=_observed(sha))
+
+    response = client.get("/v1/runs/city/observed-water/ever")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is False
+    assert "unreadable_artefact" in _codes(body)
+    assert str(data_dir) not in body["reason"]
+
+
+def test_a_locked_tile_gives_a_reason_not_a_500(client, dirs, monkeypatch) -> None:
+    runs_dir, data_dir = dirs
+    sha, _ = _staged(data_dir)
+    _write_run(runs_dir, "city", aoi_id="bangkok-bma", observed=_observed(sha))
+
+    def locked(self):
+        raise PermissionError(f"[Errno 13] Permission denied: '{self}'")
+
+    monkeypatch.setattr(Path, "read_bytes", locked)
+    response = client.get("/v1/runs/city/observed-water/ever")
+
+    assert response.status_code == 200
+    assert response.json()["available"] is False
+    assert str(data_dir) not in response.json()["reason"]
+
+
+def test_a_same_size_swap_is_never_served_as_verified(client, dirs) -> None:
+    import os
+
+    runs_dir, data_dir = dirs
+    sha, _ = _staged(data_dir)
+    _write_run(runs_dir, "city", aoi_id="bangkok-bma", observed=_observed(sha))
+    assert client.get("/v1/runs/city/observed-water/ever").json()["verified"] is True
+
+    tile = data_dir / "staged" / "gsw" / TILE
+    stat = tile.stat()
+    _write_tile(tile, [[0, 0, 0, 0], [0, 0, 0, 0]])  # same shape, same size
+    os.utime(tile, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    body = client.get("/v1/runs/city/observed-water/ever").json()
+
+    assert body["verified"] is False
+    assert "source_mismatch" in _codes(body)
+
+
+def test_a_boundary_that_does_not_match_the_run_is_not_verified(client, dirs) -> None:
+    runs_dir, data_dir = dirs
+    sha, _ = _staged(data_dir)
+    _write_run(runs_dir, "city", aoi_id="bangkok-bma", observed=_observed(sha, aoi_pixels=99))
+
+    body = client.get("/v1/runs/city/observed-water/ever").json()
+
+    assert body["available"] is False
+    assert body["verified"] is False
+    assert "aoi_mismatch" in _codes(body)
+
+
+def test_an_area_id_that_disagrees_with_the_manifest_is_refused(client, dirs) -> None:
+    runs_dir, data_dir = dirs
+    sha, _ = _staged(data_dir)
+    _write_run(runs_dir, "city", aoi_id="sai-mai-district", observed=_observed(sha))
+
+    body = client.get("/v1/runs/city/observed-water/ever").json()
+
+    assert body["available"] is False
+    assert "manifest" in body["reason"]
+
+
+@pytest.mark.parametrize("tile_name", ["../extent.tif", "extent.tif\n", "C:extent.tif"])
+def test_a_tile_name_that_is_not_a_plain_file_name_is_refused(client, dirs, tile_name) -> None:
+    runs_dir, _ = dirs
+    observed = _observed("a" * 64)
+    observed["max_extent"]["tile_name"] = tile_name
+    _write_run(runs_dir, "city", aoi_id="bangkok-bma", observed=observed)
+
+    body = client.get("/v1/runs/city/observed-water/ever").json()
+
+    assert body["available"] is False
+    assert "plain file name" in body["reason"]
+
+
+def test_the_limit_keeps_the_wettest_cells_and_says_so(client, dirs) -> None:
+    runs_dir, data_dir = dirs
+    tile = data_dir / "staged" / "gsw" / TILE
+    # 48 x 48 pixels (about 1.3 km) spans several 1 km cells.
+    rows = [[1 if (r + c) % 3 else 0 for c in range(48)] for r in range(48)]
+    bounds = _write_tile(tile, rows)
+    _write_aoi(data_dir, "bangkok-bma", bounds)
+    sha = hashlib.sha256(tile.read_bytes()).hexdigest()
+    _write_run(runs_dir, "city", aoi_id="bangkok-bma", observed=_observed(sha, aoi_pixels=48 * 48))
+
+    body = client.get("/v1/runs/city/observed-water/ever?min_share=0&limit=1").json()
+
+    assert body["matched_cells"] > 1
+    assert body["returned"] == 1 and body["truncated"] is True
+    assert "truncated" in _codes(body)
