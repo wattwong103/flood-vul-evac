@@ -76,7 +76,8 @@ export function PastFlood({
   const observedState = useApi<ObservedWaterResponse>(cityId ? observedWaterPath(cityId) : null, [cityId]);
   const observed = forRun(observedState.data, cityId);
   const years = pastYears(observed);
-  const choice = resolvePastChoice(picked, years);
+  const recordPending = cityId !== null && observed === null && observedState.phase === "loading";
+  const choice = resolvePastChoice(picked, years, { pending: recordPending });
 
   // The extent's totals and cells come in one response, asked for only when shown.
   const everState = useApi<EverWater>(
@@ -85,14 +86,14 @@ export function PastFlood({
   );
   const ever = forRun(everState.data, cityId);
   const yearCells = useApi<unknown>(
-    cityId && choice !== EVER ? pastCellsPath(cityId, choice) : null,
+    cityId && choice !== null && choice !== EVER ? pastCellsPath(cityId, choice) : null,
     [cityId, choice],
   );
   const studyArea = useApi<StudyAreaResponse>(studyAreaPath, []);
 
   // cellsMatch checks the run as well as the layer, so the raw responses suffice.
   const cellsPayload = choice === EVER ? everState.data : yearCells.data;
-  const cells = cellsMatch(cellsPayload, cityId, choice) ? cellsPayload : null;
+  const cells = choice !== null && cellsMatch(cellsPayload, cityId, choice) ? cellsPayload : null;
   const bundle = useMemo<MapBundle>(
     () => ({
       studyArea: asFeatureCollection<StudyAreaProperties>(studyArea.data),
@@ -107,7 +108,8 @@ export function PastFlood({
     [studyArea.data, cells],
   );
 
-  const yearEntry = choice !== EVER ? (observed?.years ?? []).find((entry) => entry.year === choice) ?? null : null;
+  const yearEntry =
+    choice !== null && choice !== EVER ? (observed?.years ?? []).find((entry) => entry.year === choice) ?? null : null;
   const layerState = choice === EVER ? everState : yearCells;
   const loading = runs.phase === "loading" || observedState.phase === "loading" || layerState.phase === "loading";
   const notes = [...new Set([...warningMessages(observed), ...warningMessages(cells)])];
@@ -142,7 +144,7 @@ export function PastFlood({
         </p>
       ) : null}
 
-      {cityId ? (
+      {cityId && choice !== null ? (
         <>
           <div className="flood-mode" role="group" aria-label="Which past layer">
             {[...years, EVER].map((option) => (
@@ -172,6 +174,12 @@ export function PastFlood({
                 <li key={note}>{note}</li>
               ))}
             </ul>
+          ) : null}
+          {layerState.phase === "missing" ? (
+            <p className="muted" role="status">
+              The map cells for this layer are unavailable, so the map shows none; that is not
+              an absence of water.
+            </p>
           ) : null}
           {layerState.phase === "error" && layerState.error ? (
             <ErrorState

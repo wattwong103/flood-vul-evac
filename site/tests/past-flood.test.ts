@@ -161,3 +161,10 @@ test("an extent still loading reads as loading, not as unavailable", () => {
   assert.match(reading.value, /Reading/);
   assert.equal(reading.reason, null);
 });
+
+test("a picked layer is kept while the yearly record is still loading", () => {
+  assert.equal(resolvePastChoice(2011, [], { pending: true }), 2011);
+  assert.equal(resolvePastChoice(EVER, [], { pending: true }), EVER);
+  // With nothing picked, nothing is chosen (or requested) until the record arrives.
+  assert.equal(resolvePastChoice(null, [], { pending: true }), null);
+});

@@ -48,7 +48,14 @@ export function defaultPastYear(years: number[]): number | null {
  * The layer to show: the reader's pick if the record has it, else the default
  * year, else the 1984-2021 extent (still worth showing with no yearly record).
  */
-export function resolvePastChoice(picked: PastChoice | null, years: number[]): PastChoice {
+export function resolvePastChoice(
+  picked: PastChoice | null,
+  years: number[],
+  { pending = false }: { pending?: boolean } = {},
+): PastChoice | null {
+  // Until the record arrives its years are unknown: keep the reader's pick,
+  // and choose nothing on their behalf.
+  if (pending) return picked;
   if (picked === EVER || (picked !== null && years.includes(picked))) return picked;
   return defaultPastYear(years) ?? EVER;
 }
