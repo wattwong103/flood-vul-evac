@@ -31,8 +31,9 @@ prompts offered the options listed under BKK-056 in `tasks.md` (PR #104), plus
 three the prompts added: the 80% and 75% shares for D2b, and "timed surfaces
 only" for D6. Two choices differ from the recommended option: D2b and D5.
 
-Labels marked **ASSUMPTION** below are this note's readings of those choices,
-not North's decisions; North confirms or changes them in review of this PR.
+Labels marked **ASSUMPTION** below are this note's readings of those choices.
+North confirmed all of them unchanged on 10 November 2026, in review of PR
+#105, so they bind BKK-056b like the choices themselves.
 
 | # | Decision | Chosen | Not chosen |
 |---|---|---|---|

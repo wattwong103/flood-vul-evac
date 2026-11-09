@@ -301,7 +301,8 @@ dry only if at least 90% of scheduled readings arrived and all were below
 0.15 m; report controls come from blocks with building cover above zero. D3:
 the full ladder, with building cover as the exposure proxy. D4: oec-v1's
 correlogram rule and fallback. D5: report differences and intervals with no
-claim rule, so the record has no verdict field. D6: as written below. The
+claim rule, so the record has no verdict field. D6: as written below. North
+also confirmed the note's five ASSUMPTION readings in review of PR #105. The
 options listed below are kept as the record of what was offered.
 
 - Three PRs. **BKK-056a** (DECISION, done): a protocol note `psk-v1` recording
