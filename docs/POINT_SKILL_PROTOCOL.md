@@ -1,0 +1,178 @@
+# BKK/FLOW point-observation skill check
+
+**Protocol version:** `psk-v1`
+**Status:** decisions locked (BKK-056a); harness not built (BKK-056b); no real run (BKK-056c)
+**Applies to:** the BKK-056b harness and every BKK-056c run
+**Decided by:** North, 10 November 2026
+
+This note records North's choices D1–D6 for BKK-056 (`tasks.md`). It is the
+protocol the BKK-056b harness implements and the BKK-056c record locks. It
+reuses the observed-extent check's `oec-v1` rules where the two checks meet,
+and names each one by file and line, so a change to `oec-v1` cannot silently
+change `psk-v1`.
+
+## 1. Question and boundary
+
+The check scores flood surfaces against **timed point observations**: road
+flood-sensor depths and citizen flood reports. BKK-053 (`oec-v1`) scores
+surfaces against mapped extent; this scores them against points.
+
+- It is a plausibility check with baselines. It is **not calibration**, and it
+  is **not** the held-out validation of BKK-036C, which may reuse it.
+- No observation reaches `build_depth_surface` (`pipeline/bkkflow/flood.py:101`)
+  or `build_flood_slices` (`pipeline/bkkflow/flood.py:208`).
+- Nothing here edits the admitted release or cites a city result before
+  BKK-040.
+
+## 2. Decisions
+
+North chose these on 10 November 2026, from the options listed under BKK-056
+in `tasks.md` (PR #104). Two choices differ from the recommended option: D2b
+and D5.
+
+| # | Decision | Chosen | Not chosen |
+|---|---|---|---|
+| D1 | Scoring unit | 100 m blocks in EPSG:32647, as in `oec-v1`; published only at 1 km | the 1 km grid; the surface's native grid |
+| D2a | Sensor wet depth | window maximum ≥ 0.15 m | 0.10 m |
+| D2b | Sensor observed dry | below 0.15 m at every reported reading, **and** at least 90% of scheduled readings reported | below the threshold at every scheduled reading (recommended); a share of 80% or 75% |
+| D2c | Report controls | `not_reported` blocks drawn from blocks with exposure above zero | every in-domain block |
+| D3 | Baseline ladder | the full ladder (section 3.3) | the exposure rung only |
+| D3 | Exposure proxy | building cover | people present |
+| D4 | Bootstrap block length | `oec-v1`'s correlogram rule with its not-estimable fallback | a fixed length |
+| D5 | Claim rule | **report differences and intervals, with no claim rule** | "adds skill over rung k" when the paired 95% interval's lower bound is above 0 (recommended) |
+| D6 | Time | as written in BKK-056 (section 3.6) | timed surfaces only |
+
+## 3. The protocol
+
+### 3.1 Unit (D1)
+
+- A block is 100 m: an exact 2 × 2 group of `oec-v1`'s 50 m lattice points in
+  EPSG:32647 (`pipeline/bkkflow/observed_extent.py:26-28`). Every label,
+  score and rung is computed on these blocks.
+- Any map or table of labels or scores that leaves the run directory is
+  aggregated to 1 km cells first. Case-level metrics (AUC, intervals, nulls)
+  are published as computed.
+
+### 3.2 Labels (D2)
+
+**Road sensors.** For each block holding a sensor and each event window:
+
+- `observed_wet`: the window maximum of the reported depth is ≥ 0.15 m. This
+  equals `oec-v1`'s `SECONDARY_DEPTH_M` (`pipeline/bkkflow/observed_extent.py:32`)
+  and the API's flood-area threshold `FLOOD_AREA_THRESHOLD_M`
+  (`api/flood_summary.py:38`).
+- `observed_dry`: the sensor reported at least 90% of its scheduled readings
+  in the window, and every reported reading is below 0.15 m.
+- `unknown`: anything else. A gap never makes a block dry, and a block with
+  fewer than 90% of its readings is never dry.
+
+**Citizen reports.** Reports are presence-only.
+
+- `reported`: at least one report falls in the block within the window.
+- `not_reported`: a control drawn only from in-domain blocks whose building
+  cover (section 3.3) is above zero. It is never `observed_dry`.
+
+Consequence of D2, not a separate choice: sensor labels and report labels
+answer different questions (dry versus not reported), so they are scored as
+separate cases and never pooled.
+
+**Minimum.** As in `oec-v1` (`pipeline/bkkflow/observed_extent_stats.py:48`), a
+case with fewer than 30 positives or fewer than 30 negatives is
+`undefined_*`, with null metrics, never 0 or 0.5.
+
+### 3.3 Baseline ladder (D3)
+
+Every candidate surface is reported against every rung. A rung whose input
+does not exist is reported as null with a reason, never dropped.
+
+| Rung | Definition | Input today |
+|---|---|---|
+| Chance | `oec-v1`'s toroidal-shift null (`pipeline/bkkflow/observed_extent_stats.py:132`) | always |
+| Exposure | share of the block covered by OSM building footprints | footprints are loaded (`pipeline/bkkflow/sources/osm.py:252`); no code computes block cover yet, so BKK-056b adds it |
+| Channel | distance to `oec-v1`'s channel mask, the union of MitrEarth water bodies and GSW permanent water (`pipeline/bkkflow/observed_extent_stats.py:51`) | yes |
+| Rain-only | defined in BKK-056b (section 5) | needs admitted event forcing (BKK-036B) |
+| Persistence | defined in BKK-056b (section 5) | needs a prior observation of the same kind |
+
+There is no elevation rung until BKK-036A admits a bare-earth surface: the
+available DSMs are insufficient for Bangkok depth
+(`docs/CITY_SCALE_LIMITATIONS.md:91`).
+
+Building cover is mandatory for report cases: it is both the exposure rung and
+D2c's control pool, because reports follow where people can see and file
+them.
+
+### 3.4 Statistic, null and interval (D4)
+
+- **AUC:** `oec-v1`'s `auc` unchanged (`pipeline/bkkflow/observed_extent_stats.py:89`):
+  Mann-Whitney, ties count 1/2. It ranks the lower value as wetter, so higher
+  surface depths are negated before scoring. The TOC curve is reported in the
+  score's own units.
+- **Chance:** the toroidal-shift null; p = (1 + k) / (1 + n) over defined
+  shifts, as in `oec-v1`.
+- **Interval:** a paired spatial block bootstrap, percentile 95%. The block
+  length is the first lag at which the label correlogram is ≤ 0.05
+  (`RANGE_THRESHOLD`, `pipeline/bkkflow/observed_extent_stats.py:27`).
+- **Fallback:** as `oec-v1`'s option (c): if the correlogram stays above 0.05
+  up to half the shorter grid side, the case has no interval, with status
+  `interval_not_estimable` and the lags and r values examined. If no
+  correlogram lag can be computed at all, the case is locked as undefined.
+- The rule is **untested on sparse sensor labels**; BKK-056b must test it on a
+  sparse fixture before any real run.
+- The null, bootstrap, correlogram and TOC are new code, because `oec-v1`'s are
+  bound to its rows; on `oec-v1`'s fixtures they must reproduce `oec-v1`'s
+  results. `oec-v1`'s code, `PROTOCOL` and tests stay untouched.
+
+### 3.5 Reporting, with no claim rule (D5)
+
+For each case, rung and candidate, the record reports:
+
+- AUC, TOC, toroidal-null p and the block-bootstrap 95% interval;
+- the paired difference AUC(candidate) − AUC(rung) and its paired 95%
+  interval.
+
+There is **no verdict field**. Neither the record nor any text generated from
+it says that a surface "adds skill", "beats" or "outperforms" a rung; a reader
+gets the numbers and intervals. Under the D4 fallback both intervals are null.
+
+### 3.6 Time (D6)
+
+- A **timed surface** (one with an issue time t and a lead) is scored against
+  observations in [t, t + lead].
+- A **declared scenario** has no calendar date. Its peak rank is scored
+  against every observation in the event window, as spatial plausibility in
+  the manner of BKK-053.
+- A pilot scenario is a distance-to-water decay (`pipeline/bkkflow/flood.py`),
+  so its rank equals the channel rung's rank. That comparison shows no
+  difference **by construction**; the record states this rather than
+  reporting it as a finding.
+
+## 4. Changes to BKK-056b's acceptance criteria
+
+`tasks.md` was written before D5 was chosen and assumes a verdict exists.
+**ASSUMPTION** (labelled for North's review of this PR): with D5's
+report-only rule, two BKK-056b criteria change, and nothing else does.
+
+| Criterion in `tasks.md` (PR #104) | Under `psk-v1` |
+|---|---|
+| per rung and candidate, "… paired difference interval and D5 verdict"; under the fallback "the verdict is `not_available`" | the same quantities without a verdict field; under the fallback both intervals are null |
+| the planted reporting-bias fixture "beats chance … yet fails the recommended D5 rule against the exposure rung" | it beats chance (toroidal-null p < 0.05), and its paired difference interval against the exposure rung contains 0 |
+
+The fixture still shows the failure BKK-056 exists to catch: a surface that
+only tracks exposure beats chance but not the exposure rung. Only the wording
+changes, from a verdict to a reported interval.
+
+## 5. Open points, decided in later PRs
+
+None of these was put to North in BKK-056a. Each is proposed in the PR that
+needs it and approved by North there, never chosen silently.
+
+- **Several sensors in one block** (BKK-056b): how their readings combine into
+  one block label. With about 262 sensors citywide this should be rare, and the
+  harness must count how often it happens.
+- **Rain-only and persistence rungs** (BKK-056b): their exact definitions.
+- **Scheduled readings** (BKK-056c): each sensor's reporting interval, taken
+  from the admitted source and recorded at ingest, which D2b's 90% share
+  counts against.
+- **Event windows, seeds and held-out reservations** (BKK-056c): locked in the
+  record before any score, naming the dates, areas and observations reserved
+  for BKK-036B/C.

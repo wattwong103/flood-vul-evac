@@ -1,8 +1,8 @@
 # BKK/FLOW — unfinished work
 
 **Live list:** 11 October 2026; updated 20 October 2026 (paper scope,
-BKK-016a, BKK-052, BKK-053, BKK-054), 21 October 2026 (BKK-055) and
-23 October 2026 (BKK-056)
+BKK-016a, BKK-052, BKK-053, BKK-054), 21 October 2026 (BKK-055),
+23 October 2026 (BKK-056) and 10 November 2026 (BKK-056a)
 
 **Baseline:** `main` at merge commit `959d6f9` (PR #77)
 
@@ -71,7 +71,7 @@ holder before work assigned to that role starts.
 | P2 | BKK-053 — observed-extent plausibility check | IN PROGRESS | Paper owner (design note), then North (metric) | — |
 | P1 | BKK-054 — GSW water-share denominator (yearly code 0 is mostly never-water) | IN PROGRESS | Implementer (BKK-054b PR), then paper owner | — |
 | P1 | BKK-055 — site flood views: the flood, trips cut off, flood observations | IN PROGRESS | Implementer (BKK-055a design PR), then app owner | BKK-055h waits on PR #94 for 2010/2011 |
-| P1 | BKK-056 — point-observation skill check with a baseline ladder | DECISION | North (BKK-056a), then implementer; Data steward (BKK-056c) | BKK-056b waits on 056a; BKK-056c on an admitted point-observation source |
+| P1 | BKK-056 — point-observation skill check with a baseline ladder | READY | Implementer (BKK-056b); Data steward (BKK-056c) | BKK-056c on an admitted point-observation source |
 
 ## P0 — evidence needed before stronger scientific or citywide claims
 
@@ -294,8 +294,18 @@ calibration and not the held-out validation of BKK-036C, which may use it.
 Nothing here edits the admitted release or cites a city result before
 BKK-040.
 
-- Three PRs. **BKK-056a** (DECISION): a protocol note `psk-v1` recording
-  North's choices D1–D6. **BKK-056b** (BLOCKED on 056a): the harness, tested
+**Decided, 10 November 2026 (BKK-056a).** North chose D1–D6; the protocol is
+[`docs/POINT_SKILL_PROTOCOL.md`](docs/POINT_SKILL_PROTOCOL.md) (`psk-v1`).
+D1: 100 m blocks, published at 1 km. D2: wet at ≥ 0.15 m; a sensor block is
+dry only if at least 90% of scheduled readings arrived and all were below
+0.15 m; report controls come from blocks with building cover above zero. D3:
+the full ladder, with building cover as the exposure proxy. D4: oec-v1's
+correlogram rule and fallback. D5: report differences and intervals with no
+claim rule, so the record has no verdict field. D6: as written below. The
+options listed below are kept as the record of what was offered.
+
+- Three PRs. **BKK-056a** (DECISION, done): a protocol note `psk-v1` recording
+  North's choices D1–D6. **BKK-056b** (READY): the harness, tested
   on synthetic fixtures only; if it passes about 300 changed lines, split the
   null and bootstrap from the ladder. **BKK-056c** (EXTERNAL): the first
   locked real run, once the Data steward admits a timed point-observation
@@ -340,17 +350,17 @@ BKK-040.
   `observed_dry`. Below oec-v1's minimum of 30 positives or 30 negatives a
   case is `undefined_*` with null metrics, never 0 or 0.5.
 - 056b: per rung and candidate, the AUC, TOC (in the score's units),
-  toroidal-null p, block-bootstrap interval, paired difference interval and
-  D5 verdict. A rung without its input is null with a reason, never dropped.
-  Under the not-estimable fallback both intervals are null and the verdict
-  is `not_available`; a case with no computable correlogram lag is locked as
-  undefined, as in oec-v1.
+  toroidal-null p, block-bootstrap interval and paired difference interval,
+  with no verdict field (D5). A rung without its input is null with a
+  reason, never dropped. Under the not-estimable fallback both intervals are
+  null; a case with no computable correlogram lag is locked as undefined, as
+  in oec-v1.
 - 056b: no observation reaches `build_depth_surface` or `build_flood_slices`
   (regression test); fixed seeds give a byte-identical JSON record.
 - 056b: a planted reporting-bias fixture with fixed seeds: reports follow
   building cover and the candidate is building cover plus noise, so it beats
-  chance (toroidal-null p < 0.05) yet fails the recommended D5 rule against
-  the exposure rung.
+  chance (toroidal-null p < 0.05), yet its paired difference interval
+  against the exposure rung contains 0.
 - 056c: the admitted source carries licence, checksums, gap audit, timezone
   and units; reports are aggregated to blocks at ingest with no text, photos
   or report ids; the locked record is committed before any score and names
