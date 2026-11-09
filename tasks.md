@@ -359,8 +359,13 @@ options listed below are kept as the record of what was offered.
   (regression test); fixed seeds give a byte-identical JSON record.
 - 056b: a planted reporting-bias fixture with fixed seeds: reports follow
   building cover and the candidate is building cover plus noise, so it beats
-  chance (toroidal-null p < 0.05), yet its paired difference interval
-  against the exposure rung contains 0.
+  chance (toroidal-null p < 0.05), yet the lower bound of its defined paired
+  difference interval against the exposure rung is not above 0 (a test
+  assertion only; the record carries no verdict).
+- 056b (D2b): with readings all below 0.15 m, a sensor block with 89% of
+  scheduled readings is `unknown` and one with 90% is `observed_dry`; fewer
+  than 90% with a maximum ≥ 0.15 m is `observed_wet`; a gap never makes a
+  block dry.
 - 056c: the admitted source carries licence, checksums, gap audit, timezone
   and units; reports are aggregated to blocks at ingest with no text, photos
   or report ids; the locked record is committed before any score and names

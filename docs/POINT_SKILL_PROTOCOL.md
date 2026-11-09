@@ -26,9 +26,13 @@ surfaces against mapped extent; this scores them against points.
 
 ## 2. Decisions
 
-North chose these on 10 November 2026, from the options listed under BKK-056
-in `tasks.md` (PR #104). Two choices differ from the recommended option: D2b
-and D5.
+North chose these on 10 November 2026 in structured decision prompts. The
+prompts offered the options listed under BKK-056 in `tasks.md` (PR #104), plus
+three the prompts added: the 80% and 75% shares for D2b, and "timed surfaces
+only" for D6. Two choices differ from the recommended option: D2b and D5.
+
+Labels marked **ASSUMPTION** below are this note's readings of those choices,
+not North's decisions; North confirms or changes them in review of this PR.
 
 | # | Decision | Chosen | Not chosen |
 |---|---|---|---|
@@ -50,8 +54,10 @@ and D5.
   EPSG:32647 (`pipeline/bkkflow/observed_extent.py:26-28`). Every label,
   score and rung is computed on these blocks.
 - Any map or table of labels or scores that leaves the run directory is
-  aggregated to 1 km cells first. Case-level metrics (AUC, intervals, nulls)
-  are published as computed.
+  aggregated to 1 km cells first.
+- **ASSUMPTION:** case-level metrics (AUC, intervals, null p), which carry no
+  location, are published as computed. D1's 1 km rule is read as applying to
+  anything mapped or tabulated by place.
 
 ### 3.2 Labels (D2)
 
@@ -69,12 +75,13 @@ and D5.
 **Citizen reports.** Reports are presence-only.
 
 - `reported`: at least one report falls in the block within the window.
-- `not_reported`: a control drawn only from in-domain blocks whose building
-  cover (section 3.3) is above zero. It is never `observed_dry`.
+- `not_reported`: an in-domain block with no report in the window and with
+  building cover (section 3.3) above zero. It is never `observed_dry`.
+- **ASSUMPTION:** every block that qualifies as `not_reported` is a control,
+  with no sampling, as oec-v1 uses every block.
 
-Consequence of D2, not a separate choice: sensor labels and report labels
-answer different questions (dry versus not reported), so they are scored as
-separate cases and never pooled.
+**ASSUMPTION:** sensor labels and report labels answer different questions (dry
+versus not reported), so they are scored as separate cases and never pooled.
 
 **Minimum.** As in `oec-v1` (`pipeline/bkkflow/observed_extent_stats.py:48`), a
 case with fewer than 30 positives or fewer than 30 negatives is
@@ -83,7 +90,9 @@ case with fewer than 30 positives or fewer than 30 negatives is
 ### 3.3 Baseline ladder (D3)
 
 Every candidate surface is reported against every rung. A rung whose input
-does not exist is reported as null with a reason, never dropped.
+does not exist is reported as null with a reason, never dropped. Chance is the
+null distribution; the other rungs are scores, and the paired differences in
+section 3.5 are taken against them only.
 
 | Rung | Definition | Input today |
 |---|---|---|
@@ -100,6 +109,14 @@ available DSMs are insufficient for Bangkok depth
 Building cover is mandatory for report cases: it is both the exposure rung and
 D2c's control pool, because reports follow where people can see and file
 them.
+
+- The definition, the share of the block covered by OSM building footprints,
+  is the wording of the option North chose.
+- OSM footprints are present-day, not event-time. This is the same limitation
+  as oec-v1's assumption A7 (`pipeline/bkkflow/observed_extent.py:59`), and
+  any result carries it.
+- **ASSUMPTION:** higher cover ranks as more likely positive, and nearer to
+  channel ranks as wetter, as in oec-v1.
 
 ### 3.4 Statistic, null and interval (D4)
 
@@ -124,11 +141,13 @@ them.
 
 ### 3.5 Reporting, with no claim rule (D5)
 
-For each case, rung and candidate, the record reports:
+For each case, the record reports:
 
-- AUC, TOC, toroidal-null p and the block-bootstrap 95% interval;
-- the paired difference AUC(candidate) − AUC(rung) and its paired 95%
-  interval.
+- for the candidate and for each score rung (exposure, channel, rain-only,
+  persistence): AUC, TOC, toroidal-null p (the Chance rung) and the
+  block-bootstrap 95% interval;
+- for the candidate against each score rung: the paired difference
+  AUC(candidate) − AUC(rung) and its paired 95% interval.
 
 There is **no verdict field**. Neither the record nor any text generated from
 it says that a surface "adds skill", "beats" or "outperforms" a rung; a reader
@@ -146,20 +165,34 @@ gets the numbers and intervals. Under the D4 fallback both intervals are null.
   difference **by construction**; the record states this rather than
   reporting it as a finding.
 
+### 3.7 Privacy
+
+These restate rules already set for BKK-056c in `tasks.md`:
+
+- Citizen reports are aggregated to 100 m blocks at ingest. No report text,
+  photo or report id is kept.
+- Run outputs stay outside Git.
+- North decides privacy and consent for any citizen-report source before it
+  is ingested.
+
+A minimum report count per published 1 km cell is still open (section 5).
+
 ## 4. Changes to BKK-056b's acceptance criteria
 
-`tasks.md` was written before D5 was chosen and assumes a verdict exists.
-**ASSUMPTION** (labelled for North's review of this PR): with D5's
-report-only rule, two BKK-056b criteria change, and nothing else does.
+`tasks.md` was written before D5 and D2b were chosen, so it assumes a verdict
+exists and has no test for D2b's 90% share. **ASSUMPTION** (labelled for
+North's review of this PR): two BKK-056b criteria change and one is added.
 
 | Criterion in `tasks.md` (PR #104) | Under `psk-v1` |
 |---|---|
 | per rung and candidate, "… paired difference interval and D5 verdict"; under the fallback "the verdict is `not_available`" | the same quantities without a verdict field; under the fallback both intervals are null |
-| the planted reporting-bias fixture "beats chance … yet fails the recommended D5 rule against the exposure rung" | it beats chance (toroidal-null p < 0.05), and its paired difference interval against the exposure rung contains 0 |
+| the planted reporting-bias fixture "beats chance … yet fails the recommended D5 rule against the exposure rung" | it beats chance (toroidal-null p < 0.05), and the lower bound of its defined paired difference interval against the exposure rung is not above 0 |
+| (none) | new, for D2b: with readings all below 0.15 m, 89% reported gives `unknown` and 90% gives `observed_dry`; a block with fewer than 90% reported and a maximum ≥ 0.15 m gives `observed_wet`; a gap never makes a block dry |
 
 The fixture still shows the failure BKK-056 exists to catch: a surface that
-only tracks exposure beats chance but not the exposure rung. Only the wording
-changes, from a verdict to a reported interval.
+only tracks exposure beats chance but not the exposure rung. An interval
+wholly below 0 passes too, as it would have failed the old rule. The bound is
+a test assertion only; the record itself still carries no verdict.
 
 ## 5. Open points, decided in later PRs
 
@@ -169,6 +202,15 @@ needs it and approved by North there, never chosen silently.
 - **Several sensors in one block** (BKK-056b): how their readings combine into
   one block label. With about 262 sensors citywide this should be rare, and the
   harness must count how often it happens.
+- **Surface to block score** (BKK-056b): how a candidate surface becomes one
+  score per block (block mean, block maximum, or a point rule like oec-v1's),
+  and how ties are handled.
+- **A reported block with zero building cover** (BKK-056b): keep it as a
+  positive, or restrict both classes of a report case to blocks with cover
+  above zero. As written, D2c restricts only the controls, and zero-cover
+  positives would rank lowest on the exposure rung.
+- **Minimum reports per published 1 km cell** (BKK-056c): a floor below which
+  a cell is suppressed, so no published cell points to a single reporter.
 - **Rain-only and persistence rungs** (BKK-056b): their exact definitions.
 - **Scheduled readings** (BKK-056c): each sensor's reporting interval, taken
   from the admitted source and recorded at ingest, which D2b's 90% share
