@@ -265,3 +265,12 @@ def test_report_blocks_must_not_be_missing():
         counts[column] = pd.array([pd.NA], dtype="Int64")
         with pytest.raises(ValueError, match="block"):
             psk.report_labels(counts, cover, WINDOW)
+
+
+def test_an_empty_table_of_any_construction_is_a_window_with_no_observation():
+    # PR 3 review: an empty frame built from lists has an untyped time column, and comparing it failed.
+    cover = pd.DataFrame({"bi": [0], "bj": [0], "cover": [0.5]})
+    empty = pd.DataFrame({"bi": [], "bj": [], "time": [], "count": []})
+    assert psk.report_labels(empty, cover, WINDOW)[0]["state"].tolist() == ["not_reported"]
+    silent = pd.DataFrame({"sensor_id": [], "time": [], "depth_m": []})
+    assert psk.sensor_labels(silent, {"s": 4}, WINDOW)["state"].tolist() == ["unknown"]
