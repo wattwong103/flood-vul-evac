@@ -255,3 +255,10 @@ def test_toc_reads_a_grid_as_its_flattened_blocks():
     grid = np.array([[0.5, 0.0], [0.2, 0.5]])
     assert pss.toc(grid, grid > 0.3, higher_is_wetter=True, bottom="x") == pss.toc(
         grid.ravel(), grid.ravel() > 0.3, higher_is_wetter=True, bottom="x")
+
+
+def test_auc_reads_a_grid_as_its_flattened_blocks():
+    # Codex review of PR 1: oec-v1's auc needs flat arrays; the wrapper must accept the grids it promises.
+    grid, wet = np.array([[0.9, 0.1], [0.8, 0.2]]), np.array([[True, False], [True, False]])
+    assert pss.auc(grid, wet, higher_is_wetter=True) == 1.0
+    assert pss.auc(grid, wet, higher_is_wetter=False) == pss.auc(grid.ravel(), wet.ravel(), higher_is_wetter=False) == 0.0
