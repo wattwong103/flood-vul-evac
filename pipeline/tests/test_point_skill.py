@@ -227,3 +227,41 @@ def test_report_counts_must_be_aggregated_and_may_be_empty():
         with pytest.raises(ValueError, match=message):
             psk.report_labels(bad, cover, WINDOW)
     assert psk.check_report_counts(counts) is not None
+
+
+# Codex review of PR 2: regressions
+def test_depths_and_rain_must_be_numbers_never_strings():
+    # A string column aggregates lexically: "1e-2" > "0.15", so a wet sensor would read dry.
+    feed = pd.DataFrame({"sensor_id": "s", "time": [T0, T0 + pd.Timedelta(minutes=1)], "depth_m": ["0.15", "1e-2"]})
+    with pytest.raises(ValueError, match="numbers"):
+        psk.sensor_labels(feed, {"s": 2}, WINDOW)
+    with pytest.raises(ValueError, match="numbers"):
+        psk.window_tally(feed, "sensor_id", "depth_m", {"s": 2}, WINDOW)
+
+
+def test_an_observation_without_a_time_is_refused_never_dropped():
+    cover = pd.DataFrame({"bi": [0], "bj": [0], "cover": [0.5]})
+    counts = pd.DataFrame({"bi": [0], "bj": [0], "time": pd.to_datetime([None]).tz_localize("Asia/Bangkok"),
+                           "count": [1]})
+    with pytest.raises(ValueError, match="time"):
+        psk.report_labels(counts, cover, WINDOW)  # else the block would become a not_reported control
+    feed = readings("s", [0.1] * 3).assign(time=lambda f: f["time"].where(f.index != 1))
+    with pytest.raises(ValueError, match="time"):
+        psk.sensor_labels(feed, {"s": 3}, WINDOW)
+
+
+def test_a_positioned_sensor_without_a_label_keeps_its_block_from_being_dry():
+    labels = pd.DataFrame({"sensor_id": ["a"], "state": ["observed_dry"]})
+    sensors = pd.DataFrame({"sensor_id": ["a", "b"], "x": [10.0, 60.0], "y": [10.0, 60.0]})  # both in block (0, 0)
+    blocks, counts = psk.block_sensor_labels(labels, sensors, (0.0, 0.0))
+    assert blocks[["sensors", "state"]].values.tolist() == [[2, "unknown"]]
+    assert counts["blocks_with_several_sensors"] == 1
+
+
+def test_report_blocks_must_not_be_missing():
+    cover = pd.DataFrame({"bi": [0], "bj": [0], "cover": [0.5]})
+    for column in ("bi", "bj"):
+        counts = pd.DataFrame({"bi": [0], "bj": [0], "time": [T0], "count": [1]})
+        counts[column] = pd.array([pd.NA], dtype="Int64")
+        with pytest.raises(ValueError, match="block"):
+            psk.report_labels(counts, cover, WINDOW)
