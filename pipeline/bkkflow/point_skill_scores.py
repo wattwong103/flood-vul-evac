@@ -24,7 +24,7 @@ import shapely
 from shapely.geometry.base import BaseGeometry
 
 from . import observed_extent as oe
-from .point_skill import BLOCK_M, LATTICE_M, _in_window, block_of, check_report_counts, window_tally
+from .point_skill import BLOCK_M, LATTICE_M, _in_window, _numbers, block_of, check_report_counts, window_tally
 
 IDW_POWER = 2  # Q4b
 BOTTOM = -np.inf  # the bottom tie of a score on which higher is wetter
@@ -180,6 +180,8 @@ def idw_rain(blocks: pd.DataFrame, origin: tuple[float, float], gauges: pd.DataF
         raise ValueError("every complete gauge needs a finite position and a finite total")
     cx = origin[0] + BLOCK_M * blocks["bi"].to_numpy(dtype=float) + LATTICE_M / 2  # the 2 x 2 group's centre
     cy = origin[1] + BLOCK_M * blocks["bj"].to_numpy(dtype=float) + LATTICE_M / 2
+    if not (np.isfinite(cx).all() and np.isfinite(cy).all()):
+        raise ValueError("the origin and every block index must be finite")
     out = np.empty(len(cx))
     for first in range(0, len(cx), _CHUNK):
         part = slice(first, first + _CHUNK)
@@ -209,7 +211,14 @@ def _in_prior(frame: pd.DataFrame, window: tuple[Any, Any]) -> pd.DataFrame:
 
 def sensor_persistence(readings: pd.DataFrame, sensors: pd.DataFrame, origin: tuple[float, float],
                        window: tuple[Any, Any], blocks: pd.DataFrame) -> np.ndarray:
-    """Q5 for a sensor case: each block's maximum reported depth in the prior window; none ties at the bottom."""
+    """Q5 for a sensor case: each block's maximum reported depth in the prior window; none ties at the bottom.
+
+    Depths are checked as for labels: numbers (text would compare lexically), finite, never negative.
+    """
+    _numbers(readings, "depth_m")
+    depth = readings["depth_m"].to_numpy(dtype=float)
+    if np.isinf(depth).any() or (depth[~np.isnan(depth)] < 0).any():
+        raise ValueError("a depth must be a finite reading of at least 0 m, or NaN for a gap")
     prior = _in_prior(readings, window).dropna(subset=["depth_m"])
     if prior.empty:
         return np.full(len(blocks), BOTTOM)
