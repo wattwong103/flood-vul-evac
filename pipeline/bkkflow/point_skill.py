@@ -49,6 +49,8 @@ def _in_window(frame: pd.DataFrame, window: tuple[Any, Any]) -> pd.DataFrame:
     start, end = window
     if not start < end:
         raise ValueError(f"a window must open before it closes, not {start} to {end}")
+    if frame.empty:  # an untyped empty time column cannot be compared; nothing arrived
+        return frame
     if frame["time"].isna().any():
         raise ValueError("every observation needs a time; one without it is never dropped silently")
     if pd.api.types.is_datetime64_any_dtype(frame["time"]):
