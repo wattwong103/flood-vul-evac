@@ -1,7 +1,7 @@
 # BKK/FLOW point-observation skill check
 
 **Protocol version:** `psk-v1`
-**Status:** decisions locked (BKK-056a); harness not built (BKK-056b); no real run (BKK-056c)
+**Status:** decisions locked (BKK-056a); harness in review (BKK-056b, four PRs from #106); no real run (BKK-056c)
 **Applies to:** the BKK-056b harness and every BKK-056c run
 **Decided by:** North, 10 November 2026
 
