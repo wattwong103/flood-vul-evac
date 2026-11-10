@@ -152,3 +152,66 @@ def test_persistence_reads_the_equal_window_before_and_ties_blocks_without_one_a
     assert pks.report_persistence(counts, WINDOW, blocks_frame((0, 0), (1, 0), (2, 0))).tolist() == [2, 1, 0]
     with pytest.raises(ValueError, match="bi, bj, time, count"):
         pks.report_persistence(counts.assign(text="x"), WINDOW, blocks_frame((0, 0)))
+
+
+# Review round (code-reviewer, python-reviewer): regressions
+def test_block_scores_refuse_duplicate_points_and_blank_out_of_domain_blocks():
+    frame = points([(0, 0, 1.0, 0.9), (1, 0, 1.0, np.nan), (0, 1, 1.0, np.nan), (1, 1, 1.0, np.nan)])
+    scores = pks.block_scores(frame, higher_is_wetter=True)
+    assert scores["in_domain"].tolist() == [False] and np.isnan(scores["score"]).all()  # never ranked by mistake
+    with pytest.raises(ValueError, match="once"):
+        pks.block_scores(pd.concat([frame, frame]), higher_is_wetter=True)
+
+
+def test_scenario_points_refuse_a_stored_point_without_a_value():
+    nodes = pd.DataFrame({"i": [0], "j": [0], "x": [0.0], "y": [0.0], "aoi_frac": [1.0], "state": ["stored"],
+                          "peak_depth_m": [np.nan]})
+    with pytest.raises(ValueError, match="stored"):
+        pks.scenario_points(nodes)
+
+
+def test_cell_values_tolerate_float_edges_and_refuse_bad_grids():
+    origin = 0.1 + 0.2  # 0.30000000000000004: a lattice point meant to sit on a cell edge lands a hair below it
+    cells = pd.DataFrame({"x_min": [origin, origin + 1000.0], "y_min": [0.0, 0.0], "value": [0.2, 0.7]})
+    edge = origin + 1000.0 - 1e-12
+    assert pks.cell_values([edge], [10.0], cells, 1000.0).tolist() == [0.7]
+    for bad_cells, cell_m in ((cells.iloc[:0], 1000.0), (cells, -1000.0), (cells, np.nan)):
+        with pytest.raises(ValueError, match="cell"):
+            pks.cell_values([500.0], [10.0], bad_cells, cell_m)
+
+
+def test_channel_distance_refuses_non_finite_points_and_reads_each_part_of_the_mask():
+    mask = box(-1000, -1000, -25, 1000).union(box(300, -1000, 400, 1000))  # two separate channels
+    lattice = pd.DataFrame({"x": [0.0, 250.0, 350.0], "y": 0.0})
+    assert pks.channel_distance(lattice, mask).tolist() == [25.0, 50.0, 0.0]
+    with pytest.raises(ValueError, match="finite"):
+        pks.channel_distance(lattice.assign(x=[0.0, np.nan, 1.0]), mask)
+
+
+def test_rain_must_be_finite_and_the_chunked_idw_matches_one_pass(monkeypatch):
+    with pytest.raises(ValueError, match="finite"):
+        pks.gauge_totals(rain("a", [1.0, np.inf]), {"a": 2}, WINDOW)
+    gauges = pd.DataFrame({"gauge_id": ["g1", "g2"], "x": [25.0, 1025.0], "y": [25.0, 525.0]})
+    totals = pd.DataFrame({"gauge_id": ["g1", "g2"], "total_mm": [10.0, 30.0], "complete": True})
+    with pytest.raises(ValueError, match="finite"):
+        pks.idw_rain(blocks_frame((0, 0)), ORIGIN, gauges, totals.assign(total_mm=[10.0, np.nan]))
+    blocks = blocks_frame(*[(i, j) for i in range(4) for j in range(3)])
+    whole = pks.idw_rain(blocks, ORIGIN, gauges, totals)
+    monkeypatch.setattr(pks, "_CHUNK", 5)  # 12 blocks in chunks of 5, 5 and 2
+    assert pks.idw_rain(blocks, ORIGIN, gauges, totals).tolist() == whole.tolist()
+    assert pks.rain_window({"timing": "declared"}, WINDOW, hours_before=np.int64(3)) == WINDOW
+
+
+def test_windows_are_checked_and_empty_observations_give_the_bottom():
+    with pytest.raises(ValueError, match="window"):
+        pks.prior_window(WINDOW[::-1])
+    with pytest.raises(ValueError, match="lead|issue_time"):
+        pks.scoring_window({"timing": "timed", "issue_time": T0}, WINDOW)
+    sensors = pd.DataFrame({"sensor_id": ["a"], "x": [10.0], "y": [10.0]})
+    naive = pd.DataFrame({"sensor_id": ["a"], "depth_m": [0.3], "time": [(T0 - pd.Timedelta(hours=1)).tz_localize(None)]})
+    with pytest.raises(ValueError, match="time zone"):
+        pks.sensor_persistence(naive, sensors, ORIGIN, WINDOW, blocks_frame((0, 0)))
+    silent = pd.DataFrame({"sensor_id": [], "depth_m": [], "time": []})
+    assert pks.sensor_persistence(silent, sensors, ORIGIN, WINDOW, blocks_frame((0, 0))).tolist() == [-INF]
+    quiet = pd.DataFrame({"bi": [], "bj": [], "time": [], "count": []})
+    assert pks.report_persistence(quiet, WINDOW, blocks_frame((1, 0), (0, 0))).tolist() == [0.0, 0.0]
