@@ -225,7 +225,8 @@ def test_the_lock_fixes_cases_before_any_score_and_evaluation_refuses_the_rest()
 
 def test_assembly_intersects_candidate_domains_and_keeps_report_cases_on_covered_blocks():
     labels = pd.DataFrame({"bi": [0, 1, 2, 3], "bj": 0, "state": ["reported", "not_reported", "unknown", "reported"]})
-    first = pd.DataFrame({"bi": [0, 1, 2, 3], "bj": 0, "score": [1.0, 2.0, 3.0, np.nan], "in_domain": [1, 1, 1, 0] == 1})
+    first = pd.DataFrame({"bi": [0, 1, 2, 3], "bj": 0, "score": [1.0, 2.0, 3.0, np.nan],
+                          "in_domain": [True, True, True, False]})
     second = first.assign(in_domain=True, score=1.0)
     rung = {"exposure": pd.DataFrame({"bi": [0, 1, 2, 3], "bj": 0, "value": [0.5, 0.4, 0.0, 0.3]})}
     case = psl.assemble_case("report", labels, {"a": first, "b": second}, rung)
