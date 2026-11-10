@@ -98,7 +98,7 @@ section 3.5 are taken against them only.
 | Rung | Definition | Input today |
 |---|---|---|
 | Chance | `oec-v1`'s toroidal-shift null (`pipeline/bkkflow/observed_extent_stats.py:132`) | always |
-| Exposure | share of the block covered by OSM building footprints | footprints are loaded (`pipeline/bkkflow/sources/osm.py:252`); no code computes block cover yet, so BKK-056b adds it |
+| Exposure | share of the block covered by OSM building footprints | footprints are loaded (`pipeline/bkkflow/sources/osm.py:252`); `point_skill.building_cover` computes block cover (BKK-056b) |
 | Channel | distance to `oec-v1`'s channel mask, the union of MitrEarth water bodies and GSW permanent water (`pipeline/bkkflow/observed_extent_stats.py:51`) | yes |
 | Rain-only | defined in BKK-056b (section 5) | needs admitted event forcing (BKK-036B) |
 | Persistence | defined in BKK-056b (section 5) | needs a prior observation of the same kind |
