@@ -105,7 +105,7 @@ def test_reports_are_presence_only_and_both_classes_need_building_cover():
     blocks, tally = psk.report_labels(counts, cover, WINDOW)
     assert blocks[["bi", "reports", "state"]].values.tolist() == [
         [0, 2, "reported"], [1, 0, "not_reported"], [2, 1, "unknown"], [3, 0, "unknown"]]
-    assert tally == {"reported_zero_cover": 1, "reported_outside_domain": 1}  # block 9 is outside the domain
+    assert tally == {"reported_zero_cover_blocks": 1, "reported_outside_domain_blocks": 1}  # block 9: outside
     assert "observed_dry" not in set(blocks["state"]) and set(blocks["state"]) <= set(psk.REPORT_STATES)
 
 
@@ -151,3 +151,79 @@ def test_building_cover_projects_repairs_and_refuses_a_layer_without_crs():
     assert repaired["cover"].tolist() == pytest.approx([0.125])
     with pytest.raises(ValueError, match="CRS"):
         psk.building_cover(gpd.GeoDataFrame(geometry=[box(0, 0, 1, 1)]), origin, blocks_frame((0, 0)))
+
+
+# Review round (code-reviewer, python-reviewer): regressions
+def test_building_cover_matches_a_brute_force_union_on_hundreds_of_blocks():
+    rng = np.random.default_rng(12)
+    corners = rng.uniform(-50, 1950, size=(1500, 2))
+    sizes = rng.uniform(2, 40, size=(1500, 2))
+    footprints = gpd.GeoDataFrame(geometry=[box(x, y, x + w, y + h) for (x, y), (w, h) in zip(corners, sizes)], crs=CRS)
+    blocks = blocks_frame(*[(i, j) for i in range(20) for j in range(20)])
+    cover = psk.building_cover(footprints, (0.0, 0.0), blocks)["cover"].to_numpy()
+    union = footprints.geometry.union_all()
+    boxes = psk.block_boxes(blocks, (0.0, 0.0))
+    brute = np.array([square.intersection(union).area / 10_000 for square in boxes])
+    assert cover == pytest.approx(np.where(brute * 10_000 >= 1.0, brute, 0.0), abs=1e-12)
+
+
+def test_cover_below_one_square_metre_is_zero():
+    # North, 10 Nov 2026: a 1 m2 floor, so reprojection slivers never make a building-free block a control.
+    assert psk.MIN_COVER_M2 == 1.0
+    touching = gpd.GeoDataFrame(geometry=[box(75, 0, 100, 50)], crs=CRS).to_crs("EPSG:4326")  # abuts block (0, 0)
+    assert psk.building_cover(touching, (0.0, 0.0), blocks_frame((0, 0)))["cover"].tolist() == [0.0]
+    small = gpd.GeoDataFrame(geometry=[box(0, 0, 1, 1), box(30, 30, 30.9, 31)], crs=CRS)  # 1 m2 and 0.9 m2
+    cover = psk.building_cover(small, (0.0, 0.0), blocks_frame((0, 0)))["cover"].tolist()
+    assert cover == pytest.approx([1.9e-4])  # the floor reads the block's total, not each footprint
+    alone = gpd.GeoDataFrame(geometry=[box(30, 30, 30.9, 31)], crs=CRS)
+    assert psk.building_cover(alone, (0.0, 0.0), blocks_frame((0, 0)))["cover"].tolist() == [0.0]
+
+
+def test_building_cover_ignores_empty_geometry_and_refuses_bad_input():
+    mixed = gpd.GeoDataFrame(geometry=[box(0, 0, 50, 50), LineString([(0, 0), (50, 50)]), None, Polygon()], crs=CRS)
+    assert psk.building_cover(mixed, (0.0, 0.0), blocks_frame((0, 0)))["cover"].tolist() == [0.25]
+    with pytest.raises(ValueError, match="once"):
+        psk.building_cover(mixed, (0.0, 0.0), blocks_frame((0, 0), (0, 0)))
+    broken = gpd.GeoDataFrame(geometry=[Polygon([(0, 0), (np.nan, 1), (1, 1)])], crs=CRS)
+    with pytest.raises(ValueError, match="finite"):
+        psk.building_cover(broken, (0.0, 0.0), blocks_frame((0, 0)))
+
+
+def test_depths_must_be_readings_and_windows_must_be_sound():
+    for bad in (-9999.0, -0.01, np.inf):  # ingest (BKK-056c) maps any sentinel to a gap; the harness never guesses
+        with pytest.raises(ValueError, match="depth"):
+            state_of([0.1] * 95 + [bad], 100)
+    assert state_of([0.1] * 90, np.int64(100)) == "observed_dry"  # a schedule may hold numpy integers
+    feed = readings("s", [0.1] * 10)
+    with pytest.raises(ValueError, match="window"):
+        psk.sensor_labels(feed, {"s": 10}, WINDOW[::-1])
+    with pytest.raises(ValueError, match="time zone"):
+        psk.sensor_labels(feed, {"s": 10}, (T0.tz_localize(None), WINDOW[1].tz_localize(None)))
+    with pytest.raises(ValueError, match="sensor_id"):
+        psk.sensor_labels(feed.assign(sensor_id=[None] + ["s"] * 9), {"s": 10}, WINDOW)
+    with pytest.raises(ValueError, match="finite"):
+        psk.block_of([np.inf, 0.0], [0.0, 0.0], (0.0, 0.0))
+
+
+def test_sensor_blocks_refuse_duplicate_positions_and_unknown_states():
+    labels = pd.DataFrame({"sensor_id": ["a"], "state": ["observed_dry"]})
+    twice = pd.DataFrame({"sensor_id": ["a", "a"], "x": [0.0, 1.0], "y": [0.0, 1.0]})
+    with pytest.raises(ValueError):
+        psk.block_sensor_labels(labels, twice, (0.0, 0.0))
+    with pytest.raises(ValueError, match="states"):
+        psk.block_sensor_labels(labels.assign(state="dry"), twice.iloc[:1], (0.0, 0.0))
+
+
+def test_report_counts_must_be_aggregated_and_may_be_empty():
+    cover = pd.DataFrame({"bi": [0, 1], "bj": [0, 0], "cover": [0.5, 0.0]})
+    empty = pd.DataFrame(columns=list(psk.REPORT_COLUMNS))  # a window with no report at all
+    blocks, tally = psk.report_labels(empty, cover, WINDOW)
+    assert blocks["state"].tolist() == ["not_reported", "unknown"] and sum(tally.values()) == 0
+    counts = pd.DataFrame({"bi": [0], "bj": [0], "time": [WINDOW[1]], "count": [1]})  # exactly at the end
+    assert psk.report_labels(counts, cover, WINDOW)[0]["state"].tolist() == ["reported", "unknown"]
+    for bad, message in ((pd.concat([counts, counts]), "aggregated"), (counts.assign(bi=["0"]), "integer"),
+                         (counts.assign(bi=[0.0]), "integer"),
+                         (counts.assign(count=pd.array([pd.NA], dtype="Int64")), "count")):
+        with pytest.raises(ValueError, match=message):
+            psk.report_labels(bad, cover, WINDOW)
+    assert psk.check_report_counts(counts) is not None
