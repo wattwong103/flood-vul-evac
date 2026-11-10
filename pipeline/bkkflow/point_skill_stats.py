@@ -36,8 +36,8 @@ def as_rank(values: Any, *, higher_is_wetter: bool) -> np.ndarray:
 
 
 def auc(values: Any, positive: Any, *, higher_is_wetter: bool) -> float | None:
-    """oec-v1's AUC, unchanged (Mann-Whitney, ties count 1/2), read on the score in rank order."""
-    return oes.auc(as_rank(values, higher_is_wetter=higher_is_wetter), positive)
+    """oec-v1's AUC, unchanged (Mann-Whitney, ties count 1/2), on the score's flattened blocks in rank order."""
+    return oes.auc(as_rank(values, higher_is_wetter=higher_is_wetter).ravel(), np.asarray(positive, dtype=bool).ravel())
 
 
 def toc(values: Any, positive: Any, *, higher_is_wetter: bool, bottom: str) -> list[dict[str, Any]]:
