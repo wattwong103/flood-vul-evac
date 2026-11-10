@@ -49,12 +49,13 @@ def bias_case(side=40, seed=5):
     candidate = pd.DataFrame({"bi": bi, "bj": bj, "score": cover + rng.normal(0, 0.15, side * side), "in_domain": True})
     rungs = {"exposure": pd.DataFrame({"bi": bi, "bj": bj, "value": cover}),
              "channel": pd.DataFrame({"bi": bi, "bj": bj, "value": rng.uniform(0, 500, side * side)})}
-    return psl.assemble_case("report", labels, {"cand": candidate}, rungs)
+    return psl.assemble_case("report", labels, {"cand": candidate}, rungs, area="synthetic", window=WINDOW)
 
 
-def spec(case, case_id="bias", kind="report", candidates=DECLARED, block_m="auto"):
-    return {"case_id": case_id, "kind": kind, "area": "synthetic", "window": WINDOW, "candidates": candidates,
-            "block_m": psl.case_block_length(case) if block_m == "auto" else block_m}
+def spec(case, case_id="bias", candidates=DECLARED, block_m="auto", **override):
+    """The lock entry case_spec builds, with a chosen block length or field swapped in for negative tests."""
+    entry = psl.case_spec(case, case_id=case_id, candidates=candidates)
+    return {**entry, **({} if block_m == "auto" else {"block_m": block_m}), **override}
 
 
 def locked(*specs, n=199):
@@ -159,8 +160,8 @@ def test_a_full_sensor_case_never_calls_the_builders_or_changes_the_surface(monk
     blocks, _ = psk.block_sensor_labels(labels, sensors, origin)
     channel = nodes[["i", "j", "aoi_frac"]].assign(value=pks.channel_distance(nodes, diagonal.geometry.union_all()))
     channel = pks.block_scores(channel, higher_is_wetter=False).rename(columns={"score": "value"})
-    case = psl.assemble_case("sensor", blocks, {"scenario": candidate}, {"channel": channel})
-    protocol = locked(spec(case, "pilot", "sensor", [{"name": "scenario", "timing": "declared", "distance_decay": True}]))
+    case = psl.assemble_case("sensor", blocks, {"scenario": candidate}, {"channel": channel}, area="synthetic", window=WINDOW)
+    protocol = locked(spec(case, "pilot", [{"name": "scenario", "timing": "declared", "distance_decay": True}]))
     record = psl.build_record(run_id="r", protocol=protocol, results=[psl.evaluate(case, protocol, "pilot")])
     assert record["results"][0]["status"] == "ok"
     assert slices.equals(before)  # the harness reads the surface and never changes it
@@ -187,9 +188,9 @@ def test_sparse_sensor_labels_keep_auc_and_null_but_have_no_interval():
     states[picked] = np.where(np.arange(70) % 2 == 0, "observed_wet", "observed_dry")
     labels = pd.DataFrame({"bi": bi, "bj": bj, "state": states})
     candidate = pd.DataFrame({"bi": bi, "bj": bj, "score": rng.random(bi.size), "in_domain": True})
-    case = psl.assemble_case("sensor", labels, {"cand": candidate}, {})
+    case = psl.assemble_case("sensor", labels, {"cand": candidate}, {}, area="synthetic", window=WINDOW)
     assert psl.case_block_length(case) == psl.NOT_ESTIMABLE
-    result = psl.evaluate(case, locked(spec(case, "sparse", "sensor")), "sparse")
+    result = psl.evaluate(case, locked(spec(case, "sparse")), "sparse")
     assert result["status"] == "ok" and result["interval"]["reason"] == "no_lag_with_min_pairs"
     assert result["candidates"]["cand"]["auc"] is not None and result["candidates"]["cand"]["null"]["n_undefined"] == 0
     assert result["candidates"]["cand"]["ci95"] is None
@@ -272,7 +273,7 @@ def test_kind_names_windows_and_results_must_match_the_lock():
     for reserved in ("label", "state", "exposure"):
         frame = pd.DataFrame({"bi": [0], "bj": [0], "score": [1.0], "in_domain": [True]})
         with pytest.raises(ValueError, match="reserved"):
-            psl.assemble_case("report", case.assign(state="reported")[["bi", "bj", "state"]], {reserved: frame}, {})
+            psl.assemble_case("report", case.assign(state="reported")[["bi", "bj", "state"]], {reserved: frame}, {}, area="synthetic", window=WINDOW)
     with pytest.raises(ValueError, match="integer"):
         psl.case_block_length(case.assign(bi=case["bi"] + 0.5))
 
@@ -293,7 +294,7 @@ def test_every_undefined_path_and_both_fallback_reasons_give_null_metrics(monkey
     bi, bj = grid(40)
     halves = pd.DataFrame({"bi": bi, "bj": bj, "state": np.where(bi < 20, "reported", "not_reported")})
     score = pd.DataFrame({"bi": bi, "bj": bj, "score": bi + 0.5 * bj, "in_domain": True})
-    plane = psl.assemble_case("report", halves, {"cand": score}, {})
+    plane = psl.assemble_case("report", halves, {"cand": score}, {}, area="synthetic", window=WINDOW)
     plane_result = psl.evaluate(plane, locked(spec(plane, "plane")), "plane")
     assert plane_result["interval"]["reason"] == "correlation_range_exceeds_half_grid"
     assert plane_result["candidates"]["cand"]["ci95"] is None and plane_result["candidates"]["cand"]["auc"] is not None
@@ -316,12 +317,43 @@ def test_assembly_intersects_candidate_domains_and_keeps_report_cases_on_covered
                           "in_domain": [True, True, True, False]})
     second = first.assign(in_domain=True, score=1.0)
     rung = {"exposure": pd.DataFrame({"bi": [0, 1, 2, 3], "bj": 0, "value": [0.5, 0.4, 0.0, 0.3]})}
-    case = psl.assemble_case("report", labels, {"a": first, "b": second}, rung)
+    case = psl.assemble_case("report", labels, {"a": first, "b": second}, rung, area="synthetic", window=WINDOW)
     assert case["bi"].tolist() == [0, 1] and case["label"].tolist() == [1, 0]  # block 2: zero cover; 3: not in a's
     sensor = psl.assemble_case("sensor", labels.assign(state=["observed_wet", "observed_dry", "unknown", "unknown"]),
-                               {"a": first}, {})
+                               {"a": first}, {}, area="synthetic", window=WINDOW)
     assert sensor["label"].tolist() == [1, 0, -1]  # a block without a sensor stays in the domain, unlabelled
     with pytest.raises(ValueError, match="exposure"):
-        psl.assemble_case("report", labels, {"a": first}, {"exposure": rung["exposure"].iloc[:1]})
+        psl.assemble_case("report", labels, {"a": first}, {"exposure": rung["exposure"].iloc[:1]}, area="synthetic", window=WINDOW)
     with pytest.raises(ValueError, match="kind"):
-        psl.assemble_case("satellite", labels, {"a": first}, {})
+        psl.assemble_case("satellite", labels, {"a": first}, {}, area="synthetic", window=WINDOW)
+
+
+# Codex review of PR 4: regressions
+def test_evaluation_is_bound_to_the_locked_data_window_area_and_rungs():
+    case = bias_case()
+    protocol = locked(spec(case))
+    assert protocol["cases"][0]["rungs"] == ["exposure", "channel"] and len(protocol["cases"][0]["data_sha256"]) == 64
+    shifted = (WINDOW[0] + pd.Timedelta(days=1), WINDOW[1] + pd.Timedelta(days=1))
+    with pytest.raises(ValueError, match="window"):  # observations labelled for one window, locked for another
+        psl.evaluate(case, locked(spec(case, window=shifted)), "bias")
+    with pytest.raises(ValueError, match="area"):
+        psl.evaluate(case, locked(spec(case, area="elsewhere")), "bias")
+    with pytest.raises(ValueError, match="rung"):  # a baseline dropped after scoring
+        psl.evaluate(case.drop(columns="exposure"), protocol, "bias")
+    with pytest.raises(ValueError, match="rung"):  # or one added
+        psl.evaluate(case.assign(persistence=1.0), protocol, "bias")
+    flipped = case.assign(label=np.where(np.arange(len(case)) == 0, 1 - case["label"], case["label"]))
+    with pytest.raises(ValueError, match="changed after"):
+        psl.evaluate(flipped, protocol, "bias")
+
+
+def test_a_result_carries_the_lock_that_produced_it():
+    case = bias_case()
+    first = locked(spec(case))
+    second = psl.lock_protocol([spec(case)], null_seed=1, interval_seed=2, n_draws=199)
+    result = psl.evaluate(case, second, "bias")
+    assert result["lock_sha256"] == second["lock_sha256"] != first["lock_sha256"]
+    with pytest.raises(ValueError, match="lock"):
+        psl.build_record(run_id="r", protocol=first, results=[result])
+    with pytest.raises(ValueError, match="fields"):  # nothing else, block positions included, enters the record
+        psl.build_record(run_id="r", protocol=second, results=[{**result, "blocks": [[0, 0]]}])
