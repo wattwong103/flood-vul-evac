@@ -61,7 +61,9 @@ North confirmed all of them unchanged on 10 November 2026, in review of PR
   anything mapped or tabulated by place.
 - **ASSUMPTION** (approved with the BKK-056b plan): a block enters a case when
   every candidate evaluated at least half its area inside the AOI (`oec-v1`'s
-  `MIN_EVALUABLE`). There is no channel mask, because the labels are points,
+  `MIN_EVALUABLE`). Each surface's domain is found on its own
+  (`point_skill_scores.block_scores`), and the case keeps the blocks in every
+  candidate's domain. There is no channel mask, because the labels are points,
   not mapped extent.
 
 ### 3.2 Labels (D2)
