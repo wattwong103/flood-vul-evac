@@ -215,3 +215,39 @@ def test_windows_are_checked_and_empty_observations_give_the_bottom():
     assert pks.sensor_persistence(silent, sensors, ORIGIN, WINDOW, blocks_frame((0, 0))).tolist() == [-INF]
     quiet = pd.DataFrame({"bi": [], "bj": [], "time": [], "count": []})
     assert pks.report_persistence(quiet, WINDOW, blocks_frame((1, 0), (0, 0))).tolist() == [0.0, 0.0]
+
+
+# Codex review of PR 3: regressions
+def test_persistence_depths_must_be_finite_numbers():
+    sensors = pd.DataFrame({"sensor_id": ["a"], "x": [10.0], "y": [10.0]})
+    times = [T0 - pd.Timedelta(hours=2), T0 - pd.Timedelta(hours=1)]
+    for depths, message in ((["9.0", "10.0"], "numbers"), ([0.2, np.inf], "finite")):  # "9.0" > "10.0" as text
+        readings = pd.DataFrame({"sensor_id": "a", "time": times, "depth_m": depths})
+        with pytest.raises(ValueError, match=message):
+            pks.sensor_persistence(readings, sensors, ORIGIN, WINDOW, blocks_frame((0, 0)))
+
+
+def test_idw_refuses_a_non_finite_origin_or_block():
+    gauges = pd.DataFrame({"gauge_id": ["g1"], "x": [25.0], "y": [25.0]})
+    totals = pd.DataFrame({"gauge_id": ["g1"], "total_mm": [10.0], "complete": [True]})
+    with pytest.raises(ValueError, match="finite"):
+        pks.idw_rain(blocks_frame((0, 0)), (np.nan, 0.0), gauges, totals)
+    with pytest.raises(ValueError, match="finite"):
+        pks.idw_rain(pd.DataFrame({"bi": [np.nan], "bj": [0.0]}), ORIGIN, gauges, totals)
+
+
+def test_the_scenario_block_score_keeps_distinct_distances_apart():
+    diagonal = gpd.GeoDataFrame(geometry=[LineString([(10, 20), (810, 820)])], crs=CRS)
+    square = box(0, 0, 800, 800)
+    scenario = FloodScenario("t", "moderate", 0, 600, 1200, decay_length_m=40.0, peak_depth_m=0.55)
+    surface = build_depth_surface(diagonal, scenario=scenario, analysis_crs=CRS, aoi_geometry=square)
+    nodes, _ = oec.declared_nodes(build_flood_slices(surface, scenario=scenario), diagonal, square)
+    observed = nodes[["i", "j"]].assign(observed_wet_frac=0.0, channel_frac=0.0, source_role="mapped")
+    ranks = oec.block_table(nodes, observed, "mitrearth-flood-gistda")[["bi", "bj", "min_stored_distance_m"]]
+    joined = ranks.merge(pks.block_scores(pks.scenario_points(nodes), higher_is_wetter=True), on=["bi", "bj"])
+    stored = joined[np.isfinite(joined["min_stored_distance_m"])]
+    d, s = stored["min_stored_distance_m"].to_numpy(), stored["score"].to_numpy()
+    apart = d[:, None] + 5.0 <= d[None, :]  # 5 m nearer is at least 1e-3 m deeper here, above the 1e-4 rounding
+    assert apart.any() and (s[:, None] > s[None, :])[apart].all()
+    same = d[:, None] == d[None, :]
+    assert (s[:, None] == s[None, :])[same].all()
