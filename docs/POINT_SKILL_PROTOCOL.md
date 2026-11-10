@@ -98,7 +98,7 @@ section 3.5 are taken against them only.
 | Rung | Definition | Input today |
 |---|---|---|
 | Chance | `oec-v1`'s toroidal-shift null (`pipeline/bkkflow/observed_extent_stats.py:132`) | always |
-| Exposure | share of the block covered by OSM building footprints | footprints are loaded (`pipeline/bkkflow/sources/osm.py:252`); no code computes block cover yet, so BKK-056b adds it |
+| Exposure | share of the block covered by OSM building footprints | footprints are loaded (`pipeline/bkkflow/sources/osm.py:252`); `point_skill.building_cover` computes block cover (BKK-056b) |
 | Channel | distance to `oec-v1`'s channel mask, the union of MitrEarth water bodies and GSW permanent water (`pipeline/bkkflow/observed_extent_stats.py:51`) | yes |
 | Rain-only | defined in BKK-056b (section 5) | needs admitted event forcing (BKK-036B) |
 | Persistence | defined in BKK-056b (section 5) | needs a prior observation of the same kind |
@@ -223,6 +223,7 @@ rain-only rung's interpolation.
 | Reported block with zero building cover | Both classes of a report case use only blocks with cover above zero. The record counts the reported blocks left out. |
 | Rain-only rung | Inverse-distance weighting, power 2, over every admitted gauge with a complete accumulation in the window. A block centre on a gauge takes that gauge's value. A timed surface uses a locked number of hours before t; a declared scenario uses the event window. Chosen over the recommended nearest gauge. |
 | Persistence rung | The same kind of observation in the equal-length window just before the scoring window: a sensor block's maximum depth, or a block's report count. A block with no prior observation ties at the bottom. |
+| Building cover floor | A block with less than 1 m² of footprint has no cover, so a reprojection sliver never makes a building-free block a report control. Decided in review of the BKK-056b labels PR. |
 | Chance and the correlogram on sparse labels | Section 3.4 (Q6 and Q7). |
 
 ### Still open
@@ -234,6 +235,8 @@ rain-only rung's interpolation.
 - **Scheduled readings** (BKK-056c): each sensor's reporting interval, taken
   from the admitted source and recorded at ingest, which D2b's 90% share
   counts against.
+  Ingest also maps the source's sentinel values (negative or out-of-range
+  depths) to gaps; the harness refuses any depth below 0 m rather than guess.
 - **Event windows, seeds and held-out reservations** (BKK-056c): locked in the
   record before any score, naming the dates, areas and observations reserved
   for BKK-036B/C.
