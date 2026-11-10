@@ -59,6 +59,10 @@ North confirmed all of them unchanged on 10 November 2026, in review of PR
 - **ASSUMPTION:** case-level metrics (AUC, intervals, null p), which carry no
   location, are published as computed. D1's 1 km rule is read as applying to
   anything mapped or tabulated by place.
+- **ASSUMPTION** (approved with the BKK-056b plan): a block enters a case when
+  every candidate evaluated at least half its area inside the AOI (`oec-v1`'s
+  `MIN_EVALUABLE`). There is no channel mask, because the labels are points,
+  not mapped extent.
 
 ### 3.2 Labels (D2)
 
@@ -175,6 +179,14 @@ gets the numbers and intervals. Under the D4 fallback both intervals are null.
   so its rank equals the channel rung's rank. That comparison shows no
   difference **by construction**; the record states this rather than
   reporting it as a finding.
+- **ASSUMPTION** (approved with the BKK-056b plan): the scenario decays from
+  OSM water, while the channel rung uses the MitrEarth ∪ GSW mask. Their ranks
+  are close but not identical, so the record says both are distance-to-water
+  ranks from different water layers rather than "equal".
+- Windows are closed at both ends. The rain-only accumulation for a timed
+  surface is the closed [t − hours, t]. The persistence window has the same
+  length and ends where the scoring window starts, read half-open, so no
+  observation is in both.
 
 ### 3.7 Privacy
 

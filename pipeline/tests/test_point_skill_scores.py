@@ -60,7 +60,8 @@ def test_the_scenario_block_score_orders_blocks_as_oec_v1s_block_rank():
     ranks = oec.block_table(nodes, observed, "mitrearth-flood-gistda")[["bi", "bj", "min_stored_distance_m"]]
     scores = pks.block_scores(pks.scenario_points(nodes), higher_is_wetter=True)
     joined = ranks.merge(scores, on=["bi", "bj"], validate="one_to_one").sort_values("min_stored_distance_m")
-    assert np.all(np.diff(joined["score"].to_numpy()) <= 0)  # nearer is never shallower
+    score = joined["score"].to_numpy()
+    assert np.all(score[1:] <= score[:-1])  # nearer is never shallower; -inf <= -inf holds for the bottom tie
     assert (joined["min_stored_distance_m"] == INF).tolist() == (joined["score"] == -INF).tolist()
     assert (joined["score"] == -INF).any() and (joined["score"] > 0).any()
     with pytest.raises(ValueError, match="state"):
