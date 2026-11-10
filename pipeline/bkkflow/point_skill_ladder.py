@@ -45,6 +45,7 @@ LABELS = {"measures": "timed point observations against per-block scores", "is_c
           "interpretation": "plausibility with baselines: numbers and intervals only (D5)"}
 _DEFINITION = oes.PROTOCOL["definition"]
 RESERVED = frozenset({"bi", "bj", "label", "state", *RUNGS})  # columns a candidate name would collide with
+RESULT_FIELDS = ("case_id", "kind", "status", "counts", "candidates", "rungs", "differences", "interval", "lock_sha256")
 
 PROTOCOL: dict[str, Any] = {
     "protocol_version": psk.PROTOCOL_VERSION, "check_id": psk.CHECK_ID,
@@ -102,10 +103,15 @@ def _lock_case(case: Mapping[str, Any]) -> dict[str, Any]:
     block_m = case["block_m"]
     if block_m is not None and block_m != NOT_ESTIMABLE:
         pss._tile_side(block_m)
+    rungs, data = list(case["rungs"]), case["data_sha256"]
+    if not set(rungs) <= set(RUNGS) or len(set(rungs)) != len(rungs):
+        raise ValueError(f"a case locks which rungs it has, each once, among {sorted(RUNGS)}")
+    if not (isinstance(data, str) and len(data) == 64):
+        raise ValueError("a case locks the SHA-256 of its assembled data (case_spec)")
     return {"case_id": case["case_id"], "kind": case["kind"], "area": case["area"],
             "window": [window[0].isoformat(), window[1].isoformat()],
             "candidates": [_lock_candidate(candidate, window) for candidate in case["candidates"]],
-            "block_m": block_m}
+            "rungs": rungs, "data_sha256": data, "block_m": block_m}
 
 
 def _fingerprint(protocol: Mapping[str, Any]) -> str:
@@ -154,13 +160,14 @@ def lock_protocol(cases: Sequence[Mapping[str, Any]], *, null_seed: int, interva
 
 
 def assemble_case(kind: str, labels: pd.DataFrame, candidates: Mapping[str, pd.DataFrame],
-                  rungs: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+                  rungs: Mapping[str, pd.DataFrame], *, area: str, window: tuple[Any, Any]) -> pd.DataFrame:
     """One case's blocks: the label (1, 0, -1 unknown), each candidate's score and each rung's value.
 
     The domain is the blocks every candidate's own domain holds (block_scores). A report case keeps only
     blocks with building cover, so both classes share one support (Q3) and a shifted label lands only where
     a control could be. A block without a sensor stays in a sensor case, unlabelled (Q6). A rung must have
-    a value on every block of the case; a rung left out is reported null with its reason.
+    a value on every block of the case; a rung left out is reported null with its reason. The case carries
+    its kind, area and labelling window, which the lock fingerprints and evaluation checks.
     """
     if kind not in KINDS or not candidates:
         raise ValueError(f"kind must be one of {sorted(KINDS)}, with at least one candidate")
@@ -186,8 +193,27 @@ def assemble_case(kind: str, labels: pd.DataFrame, candidates: Mapping[str, pd.D
         if case[name].isna().any():
             raise ValueError(f"the {name} rung needs a value on every block of the case")
     out = case.sort_values(["bi", "bj"]).reset_index(drop=True)[["bi", "bj", "label", *candidates, *rungs]]
-    out.attrs["kind"] = kind  # evaluate checks it against the lock
+    out.attrs.update(kind=kind, area=area, window=tuple(window))  # evaluate checks these against the lock
     return out
+
+
+def case_fingerprint(case: pd.DataFrame) -> str:
+    """A SHA-256 of an assembled case: its columns, blocks, labels, scores, rung values, kind, area and window."""
+    window = case.attrs.get("window")
+    header = {"columns": [str(column) for column in case.columns], "dtypes": [str(dtype) for dtype in case.dtypes],
+              "kind": case.attrs.get("kind"), "area": case.attrs.get("area"),
+              "window": [bound.isoformat() for bound in window] if window else None}
+    digest = hashlib.sha256(record_json(header).encode("utf-8"))
+    digest.update(pd.util.hash_pandas_object(case, index=False).to_numpy().tobytes())
+    return digest.hexdigest()
+
+
+def case_spec(case: pd.DataFrame, *, case_id: str, candidates: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The lock entry for an assembled case: its provenance, rungs, data fingerprint and the labels' block length."""
+    return {"case_id": case_id, "kind": case.attrs["kind"], "area": case.attrs["area"],
+            "window": case.attrs["window"], "candidates": list(candidates),
+            "rungs": [rung for rung in RUNGS if rung in case.columns], "data_sha256": case_fingerprint(case),
+            "block_m": case_block_length(case)}
 
 
 def _case_grids(case: pd.DataFrame, columns: Sequence[str]) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
@@ -302,14 +328,21 @@ def evaluate(case: pd.DataFrame, protocol: Mapping[str, Any], case_id: str) -> d
     if case.attrs.get("kind") != spec["kind"]:
         raise ValueError(f"the case was assembled as {case.attrs.get('kind')!r}, but {case_id!r} is locked as "
                          f"a {spec['kind']} case (its kind comes from assemble_case)")
+    window = case.attrs.get("window")
+    if case.attrs.get("area") != spec["area"] or not window or [w.isoformat() for w in window] != spec["window"]:
+        raise ValueError(f"the case's area and window are not those locked for {case_id!r}")
     names = [c["name"] for c in spec["candidates"]]
     if missing := [name for name in names if name not in case.columns]:
         raise ValueError(f"candidate scores {missing} are missing from the case")
+    present = [rung for rung in RUNGS if rung in case.columns]
+    if present != spec["rungs"]:
+        raise ValueError(f"the case has the rungs {present}, but {case_id!r} locked {spec['rungs']}")
+    if case_fingerprint(case) != spec["data_sha256"]:
+        raise ValueError(f"the case data changed after {case_id!r} was locked")
     found = case_block_length(case)
     if found != spec["block_m"]:
         raise ValueError(f"the block length locked for {case_id!r} ({spec['block_m']}) is not the one its labels "
                          f"give ({found}); lock before any score")
-    present = [rung for rung in RUNGS if rung in case.columns]
     if case.empty:
         counts = {"blocks": 0, "positives": 0, "negatives": 0}
         label = domain = None
@@ -321,7 +354,8 @@ def evaluate(case: pd.DataFrame, protocol: Mapping[str, Any], case_id: str) -> d
     if status == "ok" and found is None:
         status = "undefined_no_correlogram_lag"
     result = {"case_id": case_id, "kind": spec["kind"], "status": status, "counts": counts,
-              "candidates": None, "rungs": None, "differences": None, "interval": None}
+              "candidates": None, "rungs": None, "differences": None, "interval": None,
+              "lock_sha256": protocol["lock_sha256"]}
     if status != "ok" or label is None or domain is None:  # an ok case always has blocks
         return result
     return {**result, **_ladder(spec, protocol, label, domain, grids, names, present)}
@@ -336,6 +370,10 @@ def build_record(*, run_id: str, protocol: Mapping[str, Any], results: Sequence[
     _check_lock(protocol)
     if sorted(result["case_id"] for result in results) != sorted(case["case_id"] for case in protocol["cases"]):
         raise ValueError("every locked case needs exactly one result, and nothing else")
+    if any(result["lock_sha256"] != protocol["lock_sha256"] for result in results):
+        raise ValueError("every result must come from this lock (its lock_sha256)")
+    if any(set(result) != set(RESULT_FIELDS) for result in results):
+        raise ValueError(f"a result holds exactly the fields {RESULT_FIELDS}")
     return {"check_id": psk.CHECK_ID, "protocol_version": psk.PROTOCOL_VERSION, "run_id": run_id,
             "protocol": copy.deepcopy(dict(protocol)), "results": copy.deepcopy(list(results)),
             "labels": dict(LABELS), "code_identity": copy.deepcopy(code_identity)}
