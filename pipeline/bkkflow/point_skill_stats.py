@@ -14,7 +14,7 @@ label is scored wherever it lands in the domain (Q6), and a correlogram lag coun
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -42,25 +42,42 @@ def auc(values: Any, positive: Any, *, higher_is_wetter: bool) -> float | None:
 
 def toc(values: Any, positive: Any, *, higher_is_wetter: bool, bottom: str) -> list[dict[str, Any]]:
     """TOC points, wettest first, with thresholds in the score's own units; the bottom tie is named ``bottom``."""
-    rank = as_rank(values, higher_is_wetter=higher_is_wetter)
+    rank = as_rank(values, higher_is_wetter=higher_is_wetter).ravel()
     if np.isnan(rank).any() or np.isneginf(rank).any():
         raise ValueError("scores must be numbers or the bottom tie, never NaN or an infinite top")
     distinct, inverse = np.unique(rank, return_inverse=True)
-    hits = np.cumsum(np.bincount(inverse, weights=np.asarray(positive, dtype=bool), minlength=len(distinct)))
+    weights = np.asarray(positive, dtype=bool).ravel()
+    hits = np.cumsum(np.bincount(inverse, weights=weights, minlength=len(distinct)))
     flagged = np.cumsum(np.bincount(inverse, minlength=len(distinct)))
     thresholds = -distinct if higher_is_wetter else distinct
     return [{"threshold": float(t) + 0.0 if np.isfinite(t) else bottom, "flagged": int(f), "hits": int(h)}
             for t, f, h in zip(thresholds, flagged, hits)]  # + 0.0 turns a negated zero back into 0.0
 
 
-def _grids(label: Any, ranks: Mapping[str, Any], domain: Any) -> tuple[np.ndarray, dict[str, np.ndarray], np.ndarray]:
-    label, domain = np.asarray(label), np.asarray(domain, dtype=bool)
-    ranks = {name: np.asarray(rank, dtype=float) for name, rank in ranks.items()}
-    if label.ndim != 2 or domain.shape != label.shape or any(rank.shape != label.shape for rank in ranks.values()):
+def _check_label(label: Any) -> np.ndarray:
+    label = np.asarray(label)
+    if label.ndim != 2:
         raise ValueError("label, domain and every rank must be block grids of one shape")
     if not set(np.unique(label).tolist()) <= {POSITIVE, NEGATIVE, UNKNOWN}:
         raise ValueError("labels must be 1 (positive), 0 (negative) or -1 (unknown)")
+    return label
+
+
+def _grids(label: Any, ranks: Mapping[str, Any], domain: Any) -> tuple[np.ndarray, dict[str, np.ndarray], np.ndarray]:
+    """The checked grids. A score may be NaN outside the domain, never inside it (a shifted label may land there)."""
+    label, domain = _check_label(label), np.asarray(domain, dtype=bool)
+    ranks = {name: np.asarray(rank, dtype=float) for name, rank in ranks.items()}
+    if domain.shape != label.shape or any(rank.shape != label.shape for rank in ranks.values()):
+        raise ValueError("label, domain and every rank must be block grids of one shape")
+    for name, rank in ranks.items():
+        if np.isnan(rank[domain]).any():
+            raise ValueError(f"score {name!r} has NaN inside the domain; a block without a score is out of the case")
     return label, ranks, domain
+
+
+def _check_draws(n: Any, seed: Any) -> None:
+    if not all(type(value) is int for value in (n, seed)) or n < 1:  # plain ints keep the record JSON-exact
+        raise ValueError(f"n and seed must be plain ints with n >= 1, not {n!r} and {seed!r}")
 
 
 def _span(values: Sequence[float]) -> list[float] | None:
@@ -83,11 +100,13 @@ def toroidal_null(label: Any, ranks: Mapping[str, Any], domain: Any, n: int, see
     A shifted label is scored wherever it lands in the domain (Q6). A shift whose landed labels lack a
     class is undefined for every score, so prevalence and the evaluable count vary between shifts.
     """
+    _check_draws(n, seed)
     label, ranks, domain = _grids(label, ranks, domain)
     keep = domain & (label != UNKNOWN)
-    observed = {name: oes.auc(rank[keep], label[keep] == POSITIVE) for name, rank in ranks.items()}
-    if any(value is None for value in observed.values()):
+    found = {name: oes.auc(rank[keep], label[keep] == POSITIVE) for name, rank in ranks.items()}
+    if any(value is None for value in found.values()):
         raise ValueError("the AUC is undefined in this domain, so there is nothing to test")
+    observed = cast(dict[str, float], found)
     nx, ny = label.shape
     picks = np.random.default_rng(seed).choice(nx * ny - 1, size=min(n, nx * ny - 1), replace=False) + 1
     shifted: dict[str, list[float]] = {name: [] for name in ranks}
@@ -99,7 +118,7 @@ def toroidal_null(label: Any, ranks: Mapping[str, Any], domain: Any, n: int, see
         if positive.all() or not positive.any():  # oec-v1's auc returns None exactly here
             continue
         for name, rank in ranks.items():
-            shifted[name].append(oes.auc(rank[both], positive))
+            shifted[name].append(cast(float, oes.auc(rank[both], positive)))  # both classes: never None
         prevalence.append(float(positive.mean()))
         evaluable.append(int(both.sum()))
     return {name: _null_summary(observed[name], shifted[name], prevalence, evaluable, len(picks), seed)
@@ -124,10 +143,13 @@ def paired_block_bootstrap(label: Any, ranks: Mapping[str, Any], pairs: Iterable
     AUC(candidate) - AUC(rung) over the same resamples. A draw without both classes is undefined for all.
     """
     side = _tile_side(block_m)
+    _check_draws(n, seed)
     label, ranks, domain = _grids(label, ranks, domain)
-    pairs = [tuple(pair) for pair in pairs]
-    if any(name not in ranks for pair in pairs for name in pair):
-        raise ValueError(f"every pair must name a given score, not {pairs}")
+    checked: list[tuple[str, str]] = []
+    for pair in pairs:
+        if len(pair) != 2 or any(name not in ranks for name in pair):
+            raise ValueError(f"every pair must be (candidate, rung), two given scores, not {pair!r}")
+        checked.append((pair[0], pair[1]))
     bi, bj = np.nonzero(domain & (label != UNKNOWN))
     if not bi.size:
         raise ValueError("there is no labelled block in the domain to resample")
@@ -139,24 +161,26 @@ def paired_block_bootstrap(label: Any, ranks: Mapping[str, Any], pairs: Iterable
     n_defined = 0
     for _ in range(n):
         pick = np.concatenate([members[t] for t in rng.integers(len(members), size=len(members))])
-        if positive[pick].all() or not positive[pick].any():
+        drawn = positive[pick]
+        if drawn.all() or not drawn.any():  # drawn after the rng step, so the draw order stays oec-v1's
             continue
         n_defined += 1
         for name, rank in sampled.items():
-            draws[name].append(oes.auc(rank[pick], positive[pick]))
+            draws[name].append(cast(float, oes.auc(rank[pick], drawn)))
     return {"method": "paired_block_bootstrap", "seed": seed, "block_m": block_m, "n_tiles": len(members), "n": n,
             "n_undefined": n - n_defined, "ci95": {name: _ci95(values) for name, values in draws.items()},
             "differences": [{"candidate": a, "rung": b, "ci95": _ci95(list(np.subtract(draws[a], draws[b])))}
-                            for a, b in pairs]}
+                            for a, b in checked]}
 
 
 def correlogram(label: Any) -> dict[str, list[Any]]:
     """Label correlation between labelled blocks h apart on either axis, h = 1 .. half the shorter side.
 
     As oec-v1's, with each lag's pair count kept; r is computed only on lags with MIN_LAG_PAIRS pairs
-    (Q7). It reads labels and positions only, never a score, so it may run at lock time.
+    (Q7). It reads labels and positions only, never a score, so it may run at lock time. The caller
+    passes labels already masked to the case's domain, as the AUC and the bootstrap see them.
     """
-    label, _, _ = _grids(label, {}, np.ones(np.shape(label), dtype=bool))
+    label = _check_label(label)
     lags, r, pairs = [], [], []
     for h in range(1, min(label.shape) // 2 + 1):
         a = np.concatenate([label[:-h].ravel(), label[:, :-h].ravel()])
@@ -178,7 +202,7 @@ def range_from_correlogram(found: Mapping[str, Sequence[Any]]) -> int | str:
     NOT_ESTIMABLE when no such lag qualifies or none falls that low (no interval, never a capped or
     guessed length). Lags that qualify but all have undefined r leave the case undefined, as in D4.
     """
-    qualifying = [(lag, r) for lag, r, count in zip(found["lags_m"], found["r"], found["pairs"])
+    qualifying = [(lag, r) for lag, r, count in zip(found["lags_m"], found["r"], found["pairs"], strict=True)
                   if count >= MIN_LAG_PAIRS]
     for lag, r in qualifying:
         if r is not None and r <= RANGE_THRESHOLD:
@@ -189,14 +213,22 @@ def range_from_correlogram(found: Mapping[str, Sequence[Any]]) -> int | str:
     return NOT_ESTIMABLE
 
 
+def _two_classes(label: Any) -> np.ndarray:
+    label = _check_label(label)
+    if not {POSITIVE, NEGATIVE} <= set(np.unique(label).tolist()):
+        raise ValueError("the labels hold one class only, so the case is locked as undefined (D4), "
+                         "never given a block length or the fallback")
+    return label
+
+
 def correlation_range_m(label: Any) -> int | str:
     """The bootstrap block length the label grid fixes before any score, or NOT_ESTIMABLE."""
-    return range_from_correlogram(correlogram(label))
+    return range_from_correlogram(correlogram(_two_classes(label)))
 
 
 def not_estimable_interval(label: Any) -> dict[str, Any]:
     """The fallback as locked: no interval, with every lag, r and pair count the rule examined, and why."""
-    found = correlogram(label)
+    found = correlogram(_two_classes(label))
     if range_from_correlogram(found) != NOT_ESTIMABLE:
         raise ValueError("this label grid has a range, so the not-estimable fallback does not apply")
     qualifying = any(count >= MIN_LAG_PAIRS for count in found["pairs"])

@@ -135,8 +135,9 @@ them.
   (`RANGE_THRESHOLD`, `pipeline/bkkflow/observed_extent_stats.py:27`).
 - **Fallback:** as `oec-v1`'s option (c): if the correlogram stays above 0.05
   up to half the shorter grid side, the case has no interval, with status
-  `interval_not_estimable` and the lags and r values examined. If no
-  correlogram lag can be computed at all, the case is locked as undefined.
+  `interval_not_estimable` and the lags and r values examined. A case whose
+  labels hold one class only, or whose qualifying lags (below) all have an
+  undefined r, is locked as undefined.
 - **Sparse labels** (North, 10 November 2026, Q7, amending D4): a correlogram
   lag counts only with at least 30 label pairs. BKK-056b's sparse fixture found
   why. On 70–262 spatially independent sensor labels, `oec-v1`'s rule picked
