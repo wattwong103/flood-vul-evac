@@ -145,6 +145,9 @@ def test_correlogram_and_range_reproduce_oec_v1_on_dense_labels(label):
     assert correlogram["r"] == oes.correlogram(blocks)
     assert correlogram["lags_m"] == [100 * h for h in range(1, min(label.shape) // 2 + 1)]
     assert pss.correlation_range_m(label) == oes.correlation_range_m(blocks)
+
+
+def test_correlogram_counts_the_labelled_pairs_at_each_lag():
     assert pss.correlogram(SQUARES)["pairs"] == [2 * 12 * (12 - h) for h in range(1, 7)]
 
 
@@ -190,3 +193,65 @@ def test_the_fallback_keeps_oec_v1s_reason_when_lags_qualify_but_never_fall():
     assert interval["ci95"] is None and interval["status"] == oes.NOT_ESTIMABLE
     with pytest.raises(ValueError, match="has a range"):
         pss.not_estimable_interval(SQUARES)
+
+
+# Review round (code-reviewer, python-reviewer): regressions
+def test_one_class_labels_are_locked_undefined_even_without_qualifying_lags():
+    # D4: a case without both classes is locked as undefined; Q7's fallback is for sparse two-class labels.
+    for one_class in (np.ones((3, 3), dtype=int), np.where(sparse_labels() == -1, -1, 0)):
+        with pytest.raises(ValueError, match="one class"):
+            pss.correlation_range_m(one_class)
+        with pytest.raises(ValueError, match="one class"):
+            pss.not_estimable_interval(one_class)
+    assert pss.not_estimable_interval(np.array([[1, 0, 1, 0]]))["reason"] == "no_lag_with_min_pairs"  # no lag at all
+
+
+def test_a_nan_score_is_refused_inside_the_domain_and_ignored_outside_it():
+    label = np.array([[1, 0, -1, -1]])
+    score = np.array([[1.0, 2.0, np.nan, 4.0]])
+    for domain in (np.ones(label.shape, dtype=bool), label != -1):
+        refused = domain[0, 2]
+        call_null = lambda: pss.toroidal_null(label, {"d": score}, domain=domain, n=9, seed=1)  # noqa: E731
+        call_boot = lambda: pss.paired_block_bootstrap(label, {"d": score}, [], domain=domain,  # noqa: E731
+                                                       block_m=100, n=9, seed=1)
+        for call in (call_null, call_boot):
+            if refused:
+                with pytest.raises(ValueError, match="score 'd' has NaN inside the domain"):
+                    call()
+            else:
+                call()
+
+
+def test_no_defined_shift_or_draw_gives_null_statistics_never_zero():
+    null = pss.toroidal_null(np.array([[1, 0, -1, -1]]), {"d": np.arange(4.0)[None]},
+                             domain=np.array([[True, True, False, False]]), n=9, seed=1)["d"]
+    assert null["n"] == 3 and null["n_undefined"] == 3
+    assert null["p_ge_observed"] is None and null["share_ge_observed"] is None and null["prevalence_range"] is None
+    boot = pss.paired_block_bootstrap(np.ones((2, 2), dtype=int), {"d": np.zeros((2, 2)), "e": np.ones((2, 2))},
+                                      [("d", "e")], domain=np.ones((2, 2), dtype=bool), block_m=100, n=5, seed=1)
+    assert boot["n_undefined"] == 5 and boot["ci95"] == {"d": None, "e": None}
+    assert boot["differences"] == [{"candidate": "d", "rung": "e", "ci95": None}]
+
+
+def test_malformed_grids_pairs_draws_and_correlograms_are_refused():
+    ok = dict(domain=np.ones((2, 2), dtype=bool), block_m=100, n=5, seed=1)
+    score = {"d": np.zeros((2, 2))}
+    for label, message in ((np.array([[2, 0], [1, 0]]), "labels must be"), (np.array([1, 0, 1, 0]), "grids of one shape"),
+                           (np.eye(3, dtype=int), "grids of one shape")):
+        with pytest.raises(ValueError, match=message):
+            pss.paired_block_bootstrap(label, score, [], **ok)
+    with pytest.raises(ValueError, match="pair"):
+        pss.paired_block_bootstrap(np.eye(2, dtype=int), score, [("d", "d", "d")], **ok)
+    for bad in ({"n": 0}, {"n": -3}, {"n": 2.0}, {"seed": True}, {"seed": np.int64(1)}):
+        with pytest.raises(ValueError, match="n and seed"):
+            pss.paired_block_bootstrap(np.eye(2, dtype=int), score, [], **{**ok, **bad})
+        with pytest.raises(ValueError, match="n and seed"):
+            pss.toroidal_null(np.eye(2, dtype=int), score, ok["domain"], **{"n": 5, "seed": 1, **bad})
+    with pytest.raises(ValueError, match="zip"):
+        pss.range_from_correlogram({"lags_m": [100, 200], "r": [0.0], "pairs": [30, 30]})
+
+
+def test_toc_reads_a_grid_as_its_flattened_blocks():
+    grid = np.array([[0.5, 0.0], [0.2, 0.5]])
+    assert pss.toc(grid, grid > 0.3, higher_is_wetter=True, bottom="x") == pss.toc(
+        grid.ravel(), grid.ravel() > 0.3, higher_is_wetter=True, bottom="x")
