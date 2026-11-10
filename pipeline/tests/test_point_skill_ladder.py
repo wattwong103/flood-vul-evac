@@ -58,9 +58,8 @@ def spec(case, case_id="bias", kind="report", candidates=DECLARED, block_m="auto
 
 
 def locked(*specs, n=199):
-    protocol = psl.lock_protocol(list(specs), null_seed=20261110, interval_seed=20261111)
-    protocol["null"]["n"] = protocol["interval"]["n"] = n  # fewer draws keep the suite fast
-    return protocol
+    """The lock with 199 draws, not the protocol's 999, so the suite stays fast; n is part of the lock."""
+    return psl.lock_protocol(list(specs), null_seed=20261110, interval_seed=20261111, n_draws=n)
 
 
 def fixture_record():
@@ -86,7 +85,7 @@ def test_a_surface_that_only_tracks_exposure_beats_chance_but_not_the_exposure_r
     candidate, exposure = result["candidates"]["cand"], result["rungs"]["exposure"]
     assert result["status"] == "ok" and candidate["null"]["p_ge_observed"] < 0.05  # it beats chance
     difference = next(d for d in result["differences"] if d["rung"] == "exposure")
-    assert difference["ci95"] is not None and not difference["ci95"][0] > 0  # a test assertion only
+    assert difference["ci95"] is not None and difference["ci95"][0] <= 0  # not clearly above 0: a test assertion only
     assert difference["difference"] == pytest.approx(candidate["auc"] - exposure["auc"]) and exposure["auc"] > 0.6
 
 
@@ -113,9 +112,10 @@ def test_fixed_seeds_give_a_byte_identical_record_across_processes():
     tests_dir = Path(__file__).resolve().parent
     code = "import sys; sys.path.insert(0, sys.argv[1]); import test_point_skill_ladder as t, bkkflow.point_skill_ladder as l; " \
            "sys.stdout.buffer.write(l.record_json(t.fixture_record()).encode())"
-    env = {**os.environ, "PYTHONHASHSEED": "12345"}
-    other = subprocess.run([sys.executable, "-c", code, str(tests_dir)], capture_output=True, env=env, check=True,
-                           cwd=str(tests_dir.parent), timeout=300)
+    seed = "0" if os.environ.get("PYTHONHASHSEED") != "0" else "1"  # a hash seed this process is not using
+    other = subprocess.run([sys.executable, "-c", code, str(tests_dir)], capture_output=True, timeout=300,
+                           env={**os.environ, "PYTHONHASHSEED": seed}, cwd=str(tests_dir.parent))
+    assert other.returncode == 0, other.stderr.decode(errors="replace")
     assert other.stdout.decode() == first
 
 
@@ -215,12 +215,99 @@ def test_the_lock_fixes_cases_before_any_score_and_evaluation_refuses_the_rest()
         psl.lock_protocol([spec(case), spec(case)], null_seed=1, interval_seed=2)
     with pytest.raises(ValueError, match="candidate"):
         psl.evaluate(case.drop(columns="cand"), protocol, "bias")
-    with pytest.raises(ValueError, match="not locked"):  # a defined case locked without a length
+    with pytest.raises(ValueError, match="block length"):  # a defined case locked without a length
         psl.evaluate(case, locked(spec(case, block_m=None)), "bias")
-    altered = locked(spec(case, block_m=psl.NOT_ESTIMABLE))
-    altered["interval"]["fallback"]["reason"] = "other_policy"
-    with pytest.raises(ValueError, match="fallback"):
-        psl.evaluate(case, altered, "bias")
+
+
+# Review round (code-reviewer, python-reviewer): regressions
+def test_the_locked_block_length_must_be_the_labels_own():
+    # Else an interval width could be chosen after the scores are seen (D4).
+    case = bias_case()
+    assert psl.case_block_length(case) == 100
+    for chosen in (400, psl.NOT_ESTIMABLE):
+        with pytest.raises(ValueError, match="block length"):
+            psl.evaluate(case, locked(spec(case, block_m=chosen)), "bias")
+
+
+def test_a_protocol_changed_after_the_lock_is_refused():
+    case = bias_case()
+    template = json.dumps(psl.PROTOCOL, sort_keys=True)
+    for change in (lambda p: p["definition"].update(min_positives=1), lambda p: p["null"].update(n=5),
+                   lambda p: p["interval"]["fallback"].update(reason="other_policy"),
+                   lambda p: p.update(claim_rule="adds skill when the lower bound is above 0")):
+        protocol = locked(spec(case))
+        change(protocol)
+        with pytest.raises(ValueError, match="changed after"):
+            psl.evaluate(case, protocol, "bias")
+        with pytest.raises(ValueError, match="changed after"):
+            psl.build_record(run_id="r", protocol=protocol, results=[])
+    assert json.dumps(psl.PROTOCOL, sort_keys=True) == template and psl.PROTOCOL["null"]["n"] == 999
+    for bad in ({"n_draws": 0}, {"null_seed": -1}, {"n_draws": 99.0}):
+        with pytest.raises(ValueError, match="seed|n_draws"):
+            psl.lock_protocol([spec(case)], **{"null_seed": 1, "interval_seed": 2, **bad})
+
+
+def test_kind_names_windows_and_results_must_match_the_lock():
+    case = bias_case()
+    with pytest.raises(ValueError, match="kind"):  # a report case evaluated under a sensor lock
+        psl.evaluate(case, locked(spec(case, kind="sensor")), "bias")
+    twice = [{"name": "cand", "timing": "declared"}] * 2
+    for candidates, message in ((twice, "once"), ([{"name": "label", "timing": "declared"}], "reserved"),
+                                ([{"name": 7, "timing": "declared"}], "name")):
+        with pytest.raises(ValueError, match=message):
+            psl.lock_protocol([spec(case, candidates=candidates)], null_seed=1, interval_seed=2)
+    naive = {**spec(case), "window": (WINDOW[0].tz_localize(None), WINDOW[1].tz_localize(None))}
+    with pytest.raises(ValueError, match="time zone"):
+        psl.lock_protocol([naive], null_seed=1, interval_seed=2)
+    timed = [{"name": "cand", "timing": "timed", "issue_time": T0, "lead": pd.Timedelta(hours=6)}]
+    entry = psl.lock_protocol([spec(case, candidates=timed)], null_seed=1, interval_seed=2)["cases"][0]["candidates"][0]
+    assert entry == {"name": "cand", "timing": "timed", "distance_decay": False,
+                     "issue_time": "2026-09-26T09:00:00+07:00", "lead_s": 21600}
+    protocol = locked(spec(case), spec(case, case_id="second"))
+    result = psl.evaluate(case, protocol, "bias")
+    with pytest.raises(ValueError, match="every locked case"):  # a partial run never looks complete
+        psl.build_record(run_id="r", protocol=protocol, results=[result])
+    with pytest.raises(ValueError, match="every locked case"):
+        psl.build_record(run_id="r", protocol=protocol, results=[result, result])
+    for reserved in ("label", "state", "exposure"):
+        frame = pd.DataFrame({"bi": [0], "bj": [0], "score": [1.0], "in_domain": [True]})
+        with pytest.raises(ValueError, match="reserved"):
+            psl.assemble_case("report", case.assign(state="reported")[["bi", "bj", "state"]], {reserved: frame}, {})
+    with pytest.raises(ValueError, match="integer"):
+        psl.case_block_length(case.assign(bi=case["bi"] + 0.5))
+
+
+def test_every_undefined_path_and_both_fallback_reasons_give_null_metrics(monkeypatch):
+    case = bias_case()
+    empty = case.iloc[0:0]
+    assert psl.case_block_length(empty) is None
+    result = psl.evaluate(empty, locked(spec(empty, case_id="empty")), "empty")
+    assert result["status"] == "undefined_no_labelled_blocks" and result["counts"] == {
+        "blocks": 0, "positives": 0, "negatives": 0}
+    few = case.assign(label=np.where(np.arange(len(case)) < 20, 0, 1))
+    assert psl.evaluate(few, locked(spec(few, case_id="few")), "few")["status"] == "undefined_too_few_negatives"
+    with monkeypatch.context() as patch:  # no correlogram lag computable: locked undefined (D4)
+        patch.setattr(psl.pss, "correlation_range_m", lambda label: (_ for _ in ()).throw(ValueError("none")))
+        assert psl.case_block_length(case) is None
+        assert psl.evaluate(case, locked(spec(case, block_m=None)), "bias")["status"] == "undefined_no_correlogram_lag"
+    bi, bj = grid(40)
+    halves = pd.DataFrame({"bi": bi, "bj": bj, "state": np.where(bi < 20, "reported", "not_reported")})
+    score = pd.DataFrame({"bi": bi, "bj": bj, "score": bi + 0.5 * bj, "in_domain": True})
+    plane = psl.assemble_case("report", halves, {"cand": score}, {})
+    plane_result = psl.evaluate(plane, locked(spec(plane, "plane")), "plane")
+    assert plane_result["interval"]["reason"] == "correlation_range_exceeds_half_grid"
+    assert plane_result["candidates"]["cand"]["ci95"] is None and plane_result["candidates"]["cand"]["auc"] is not None
+
+
+def test_rain_and_persistence_rungs_are_scored_wetter_when_higher():
+    case = bias_case()
+    rng = np.random.default_rng(3)
+    with_all = case.assign(rain_only=case["exposure"] * 50 + rng.random(len(case)), persistence=case["exposure"] * 2)
+    result = psl.evaluate(with_all, locked(spec(with_all)), "bias")
+    for rung in ("rain_only", "persistence"):
+        assert result["rungs"][rung]["auc"] > 0.6 and result["rungs"][rung]["ci95"] is not None  # higher is wetter
+        assert next(d for d in result["differences"] if d["rung"] == rung)["ci95"] is not None
+    assert result["rungs"]["persistence"]["auc"] == pytest.approx(result["rungs"]["exposure"]["auc"])
 
 
 def test_assembly_intersects_candidate_domains_and_keeps_report_cases_on_covered_blocks():
