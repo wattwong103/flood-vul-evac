@@ -10,9 +10,11 @@ Cases, windows, seeds and block lengths are locked before any score (docs/POINT_
 from __future__ import annotations
 
 import copy
+import functools
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -42,6 +44,7 @@ LABELS = {"measures": "timed point observations against per-block scores", "is_c
           "is_held_out_validation": False, "is_evacuation_simulation": False,
           "interpretation": "plausibility with baselines: numbers and intervals only (D5)"}
 _DEFINITION = oes.PROTOCOL["definition"]
+RESERVED = frozenset({"bi", "bj", "label", "state", *RUNGS})  # columns a candidate name would collide with
 
 PROTOCOL: dict[str, Any] = {
     "protocol_version": psk.PROTOCOL_VERSION, "check_id": psk.CHECK_ID,
@@ -75,8 +78,8 @@ PROTOCOL: dict[str, Any] = {
 
 def _lock_candidate(candidate: Mapping[str, Any], window: tuple[Any, Any]) -> dict[str, Any]:
     name = candidate["name"]
-    if name in RUNGS or name in {"bi", "bj", "label"}:
-        raise ValueError(f"candidate name {name!r} is reserved")
+    if not isinstance(name, str) or name in RESERVED:
+        raise ValueError(f"candidate name {name!r} must be a string and not reserved ({sorted(RESERVED)})")
     if scoring_window(candidate, window) != window:
         raise ValueError(f"candidate {name!r}: its scoring window must be the case window (D6)")
     entry = {"name": name, "timing": candidate["timing"], "distance_decay": bool(candidate.get("distance_decay", False))}
@@ -85,33 +88,68 @@ def _lock_candidate(candidate: Mapping[str, Any], window: tuple[Any, Any]) -> di
     return entry
 
 
-def lock_protocol(cases: Sequence[Mapping[str, Any]], *, null_seed: int, interval_seed: int) -> dict[str, Any]:
-    """psk-v1 with its cases, seeds and block lengths fixed before any score.
+def _lock_case(case: Mapping[str, Any]) -> dict[str, Any]:
+    if case["kind"] not in KINDS:
+        raise ValueError(f"case kind must be one of {sorted(KINDS)}")
+    window = tuple(case["window"])
+    if len(window) != 2 or not window[0] < window[1] or not case["candidates"]:
+        raise ValueError("a case needs a window that opens before it closes, and at least one candidate")
+    if any(getattr(bound, "tzinfo", None) is None for bound in window):
+        raise ValueError("a case window must carry a time zone, as the admitted observations do")
+    names = [candidate["name"] for candidate in case["candidates"]]
+    if len(set(map(str, names))) != len(names):
+        raise ValueError(f"each candidate is named once in a case, not {names}")
+    block_m = case["block_m"]
+    if block_m is not None and block_m != NOT_ESTIMABLE:
+        pss._tile_side(block_m)
+    return {"case_id": case["case_id"], "kind": case["kind"], "area": case["area"],
+            "window": [window[0].isoformat(), window[1].isoformat()],
+            "candidates": [_lock_candidate(candidate, window) for candidate in case["candidates"]],
+            "block_m": block_m}
 
-    Each case names its kind (sensor or report), area, window and candidates, and the block length from
-    case_block_length (NOT_ESTIMABLE included; None only for a case its labels leave undefined).
+
+def _fingerprint(protocol: Mapping[str, Any]) -> str:
+    unsigned = {key: value for key, value in protocol.items() if key != "lock_sha256"}
+    return hashlib.sha256(record_json(unsigned).encode("utf-8")).hexdigest()
+
+
+def _fixed(protocol: Mapping[str, Any]) -> dict[str, Any]:
+    """The protocol without what a lock sets (cases, draws, seeds, its fingerprint): psk-v1's fixed choices."""
+    fixed = {key: copy.deepcopy(value) for key, value in protocol.items() if key not in ("cases", "lock_sha256")}
+    for part in ("null", "interval"):
+        for key in ("n", "seed"):
+            fixed.get(part, {}).pop(key, None)
+    return fixed
+
+
+def _check_lock(protocol: Mapping[str, Any]) -> None:
+    if protocol.get("protocol_version") != psk.PROTOCOL_VERSION:
+        raise ValueError(f"evaluation needs the {psk.PROTOCOL_VERSION} protocol")
+    if protocol.get("lock_sha256") != _fingerprint(protocol) or _fixed(protocol) != _fixed(PROTOCOL):
+        raise ValueError("the protocol changed after it was locked, or departs from psk-v1's fixed choices")
+
+
+def lock_protocol(cases: Sequence[Mapping[str, Any]], *, null_seed: int, interval_seed: int,
+                  n_draws: int = 999) -> dict[str, Any]:
+    """psk-v1 with its cases, seeds, draws and block lengths fixed before any score, and fingerprinted.
+
+    Each case names its kind (sensor or report), area, time-zone-aware window and candidates, and the block
+    length from case_block_length (NOT_ESTIMABLE included; None only for a case its labels leave undefined).
+    Evaluation refuses a protocol whose content no longer matches its fingerprint.
     """
-    if any(type(seed) is not int for seed in (null_seed, interval_seed)):
-        raise ValueError("null_seed and interval_seed must be plain ints, fixed before any score")
-    locked, seen = [], set()
-    for case in cases:
-        if case["case_id"] in seen:
-            raise ValueError(f"case {case['case_id']!r} must be locked once")
-        seen.add(case["case_id"])
-        if case["kind"] not in KINDS:
-            raise ValueError(f"case kind must be one of {sorted(KINDS)}")
-        start, end = window = tuple(case["window"])
-        if not start < end or not case["candidates"]:
-            raise ValueError("a case needs a window that opens before it closes, and at least one candidate")
-        block_m = case["block_m"]
-        if block_m is not None and block_m != NOT_ESTIMABLE:
-            pss._tile_side(block_m)
-        locked.append({"case_id": case["case_id"], "kind": case["kind"], "area": case["area"],
-                       "window": [start.isoformat(), end.isoformat()],
-                       "candidates": [_lock_candidate(candidate, window) for candidate in case["candidates"]],
-                       "block_m": block_m})
+    if any(type(seed) is not int or seed < 0 for seed in (null_seed, interval_seed)):
+        raise ValueError("null_seed and interval_seed must be plain non-negative ints, fixed before any score")
+    if type(n_draws) is not int or n_draws < 1:
+        raise ValueError(f"n_draws must be a plain int of at least 1, not {n_draws!r}")
+    locked = [_lock_case(case) for case in cases]
+    ids = [case["case_id"] for case in locked]
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"each case must be locked once, not {ids}")
     protocol = copy.deepcopy(PROTOCOL)
-    protocol["null"]["seed"], protocol["interval"]["seed"], protocol["cases"] = null_seed, interval_seed, locked
+    protocol["null"] |= {"n": n_draws, "seed": null_seed}
+    protocol["interval"] |= {"n": n_draws, "seed": interval_seed}
+    protocol["cases"] = locked
+    protocol["lock_sha256"] = _fingerprint(protocol)
     return protocol
 
 
@@ -126,16 +164,17 @@ def assemble_case(kind: str, labels: pd.DataFrame, candidates: Mapping[str, pd.D
     """
     if kind not in KINDS or not candidates:
         raise ValueError(f"kind must be one of {sorted(KINDS)}, with at least one candidate")
+    if clash := sorted(map(str, set(candidates) & RESERVED)):
+        raise ValueError(f"candidate names {clash} are reserved")
     if set(rungs) - set(RUNGS):
         raise ValueError(f"rungs must be among {sorted(RUNGS)}")
     positive_state, negative_state = KINDS[kind]
     if not set(labels["state"]) <= {positive_state, negative_state, "unknown"}:
         raise ValueError(f"{kind} labels must be {positive_state}, {negative_state} or unknown")
-    case: pd.DataFrame | None = None
-    for name, frame in candidates.items():
-        part = frame.loc[frame["in_domain"].astype(bool), ["bi", "bj", "score"]].rename(columns={"score": name})
-        case = part if case is None else case.merge(part, on=["bi", "bj"], how="inner", validate="one_to_one")
-    assert case is not None
+    parts = [frame.loc[frame["in_domain"].astype(bool), ["bi", "bj", "score"]].rename(columns={"score": name})
+             for name, frame in candidates.items()]
+    case = functools.reduce(lambda left, right: left.merge(right, on=["bi", "bj"], how="inner", validate="one_to_one"),
+                            parts)
     case = case.merge(labels[["bi", "bj", "state"]], on=["bi", "bj"], how="left", validate="one_to_one")
     state = case.pop("state").fillna("unknown")
     if kind == "report":
@@ -146,12 +185,16 @@ def assemble_case(kind: str, labels: pd.DataFrame, candidates: Mapping[str, pd.D
                           how="left", validate="one_to_one")
         if case[name].isna().any():
             raise ValueError(f"the {name} rung needs a value on every block of the case")
-    return case.sort_values(["bi", "bj"]).reset_index(drop=True)[["bi", "bj", "label", *candidates, *rungs]]
+    out = case.sort_values(["bi", "bj"]).reset_index(drop=True)[["bi", "bj", "label", *candidates, *rungs]]
+    out.attrs["kind"] = kind  # evaluate checks it against the lock
+    return out
 
 
 def _case_grids(case: pd.DataFrame, columns: Sequence[str]) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
     if case.empty or case.duplicated(["bi", "bj"]).any():
         raise ValueError("a case needs its blocks, each listed once")
+    if not (pd.api.types.is_integer_dtype(case["bi"]) and pd.api.types.is_integer_dtype(case["bj"])):
+        raise ValueError("block indices bi and bj must be integers")
     oi = (case["bi"] - case["bi"].min()).to_numpy(dtype="int64")
     oj = (case["bj"] - case["bj"].min()).to_numpy(dtype="int64")
     shape = (int(oi.max()) + 1, int(oj.max()) + 1)
@@ -185,6 +228,8 @@ def case_block_length(case: pd.DataFrame) -> int | str | None:
 
     None when the labels leave the case undefined: too few of a class, or no computable correlogram lag (D4).
     """
+    if case.empty:
+        return None
     label, domain, _ = _case_grids(case, [])
     counts = _counts(label, domain)
     if _status(counts["positives"], counts["negatives"], PROTOCOL["definition"]) != "ok":
@@ -206,7 +251,7 @@ def _difference(candidate: str, rung: str, scored: Mapping[str, Any], rungs: Map
         entry = {"candidate": candidate, "rung": rung, "difference": None, "ci95": None,
                  "reason": RUNGS[rung]["null_reason"]}
     else:
-        entry = {"candidate": candidate, "rung": rung, "difference": scored[candidate]["auc"] - rungs[rung]["auc"],
+        entry = {"candidate": candidate, "rung": rung, "difference": cast(float, scored[candidate]["auc"]) - cast(float, rungs[rung]["auc"]),
                  "ci95": intervals.get((candidate, rung))}
     if rung == "channel" and decay:
         entry["note"] = BY_CONSTRUCTION
@@ -244,39 +289,53 @@ def _ladder(spec: Mapping[str, Any], protocol: Mapping[str, Any], label: np.ndar
 
 
 def evaluate(case: pd.DataFrame, protocol: Mapping[str, Any], case_id: str) -> dict[str, Any]:
-    """The psk-v1 ladder for one locked case. Every metric is None for an undefined case; there is no verdict."""
-    if protocol.get("protocol_version") != psk.PROTOCOL_VERSION:
-        raise ValueError(f"evaluation needs the {psk.PROTOCOL_VERSION} protocol")
+    """The psk-v1 ladder for one locked case. Every metric is None for an undefined case; there is no verdict.
+
+    The protocol must still match its lock, the case its locked kind, and the locked block length the one
+    the labels give (case_block_length), so no choice can follow a score.
+    """
+    _check_lock(protocol)
     locked = {c["case_id"]: c for c in protocol["cases"]}
     if case_id not in locked:
         raise ValueError(f"{case_id!r} is not a locked {psk.PROTOCOL_VERSION} case; lock before any score")
     spec = locked[case_id]
+    if case.attrs.get("kind") != spec["kind"]:
+        raise ValueError(f"the case was assembled as {case.attrs.get('kind')!r}, but {case_id!r} is locked as "
+                         f"a {spec['kind']} case (its kind comes from assemble_case)")
     names = [c["name"] for c in spec["candidates"]]
     if missing := [name for name in names if name not in case.columns]:
         raise ValueError(f"candidate scores {missing} are missing from the case")
+    found = case_block_length(case)
+    if found != spec["block_m"]:
+        raise ValueError(f"the block length locked for {case_id!r} ({spec['block_m']}) is not the one its labels "
+                         f"give ({found}); lock before any score")
     present = [rung for rung in RUNGS if rung in case.columns]
-    label, domain, grids = _case_grids(case, [*names, *present])
-    counts = _counts(label, domain)
+    if case.empty:
+        counts = {"blocks": 0, "positives": 0, "negatives": 0}
+        label = domain = None
+        grids: dict[str, np.ndarray] = {}
+    else:
+        label, domain, grids = _case_grids(case, [*names, *present])
+        counts = _counts(label, domain)
     status = _status(counts["positives"], counts["negatives"], protocol["definition"])
-    if status == "ok" and spec["block_m"] is None:
-        if case_block_length(case) is not None:
-            raise ValueError(f"the bootstrap block length for {case_id!r} is not locked in the protocol")
+    if status == "ok" and found is None:
         status = "undefined_no_correlogram_lag"
     result = {"case_id": case_id, "kind": spec["kind"], "status": status, "counts": counts,
               "candidates": None, "rungs": None, "differences": None, "interval": None}
-    if status != "ok":
+    if status != "ok" or label is None or domain is None:  # an ok case always has blocks
         return result
     return {**result, **_ladder(spec, protocol, label, domain, grids, names, present)}
 
 
 def build_record(*, run_id: str, protocol: Mapping[str, Any], results: Sequence[Mapping[str, Any]],
                  code_identity: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """The run record: the locked protocol and each case's results, case-level only (no block leaves it, D1)."""
-    if protocol.get("protocol_version") != psk.PROTOCOL_VERSION:
-        raise ValueError(f"a record needs the {psk.PROTOCOL_VERSION} protocol")
-    locked = {case["case_id"] for case in protocol["cases"]}
-    if any(result["case_id"] not in locked for result in results):
-        raise ValueError("every result must come from a locked case")
+    """The run record: the locked protocol and one result for every locked case, case-level only (D1).
+
+    A partial run never looks complete: a missing, extra or repeated case is refused.
+    """
+    _check_lock(protocol)
+    if sorted(result["case_id"] for result in results) != sorted(case["case_id"] for case in protocol["cases"]):
+        raise ValueError("every locked case needs exactly one result, and nothing else")
     return {"check_id": psk.CHECK_ID, "protocol_version": psk.PROTOCOL_VERSION, "run_id": run_id,
             "protocol": copy.deepcopy(dict(protocol)), "results": copy.deepcopy(list(results)),
             "labels": dict(LABELS), "code_identity": copy.deepcopy(code_identity)}
