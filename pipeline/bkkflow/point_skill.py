@@ -49,6 +49,8 @@ def _in_window(frame: pd.DataFrame, window: tuple[Any, Any]) -> pd.DataFrame:
     start, end = window
     if not start < end:
         raise ValueError(f"a window must open before it closes, not {start} to {end}")
+    if frame["time"].isna().any():
+        raise ValueError("every observation needs a time; one without it is never dropped silently")
     if pd.api.types.is_datetime64_any_dtype(frame["time"]):
         aware = isinstance(frame["time"].dtype, pd.DatetimeTZDtype)
         if aware != (getattr(start, "tzinfo", None) is not None) or aware != (getattr(end, "tzinfo", None) is not None):
@@ -65,13 +67,21 @@ def _schedule(scheduled: Mapping[str, Any]) -> dict[str, int]:
     return checked
 
 
+def _numbers(readings: pd.DataFrame, value: str) -> None:
+    column = readings[value]
+    if len(column) and (not pd.api.types.is_numeric_dtype(column) or pd.api.types.is_bool_dtype(column)):
+        raise ValueError(f"{value} must hold numbers, not {column.dtype}: text would aggregate lexically")
+
+
 def window_tally(readings: pd.DataFrame, key: str, value: str, scheduled: Mapping[str, int],
                  window: tuple[Any, Any]) -> pd.DataFrame:
     """For each scheduled id, the readings that arrived in the closed window: their count, maximum and sum.
 
-    A reading that is missing or empty (NaN) is a gap. A reading without an id or a schedule, two at one
-    time, or more than scheduled is refused: a feed that breaks its schedule is never guessed at.
+    A reading that is missing or empty (NaN) is a gap. A reading without an id, a time or a schedule, two
+    at one time, more than scheduled, or a value that is not a number is refused: a feed that breaks its
+    schedule is never guessed at.
     """
+    _numbers(readings, value)
     schedule = _schedule(scheduled)
     if readings[key].isna().any():
         raise ValueError(f"every reading needs a {key}")
@@ -100,6 +110,7 @@ def sensor_labels(readings: pd.DataFrame, scheduled: Mapping[str, int], window: 
     unknown: anything else. A gap (a reading missing or empty) never makes a sensor dry. A negative or
     infinite depth is refused: ingest (BKK-056c) maps any sentinel to a gap, and the harness never guesses.
     """
+    _numbers(readings, "depth_m")
     depth = readings["depth_m"].to_numpy(dtype=float)
     if np.isinf(depth).any() or (depth[~np.isnan(depth)] < 0).any():
         raise ValueError("a depth must be a finite reading of at least 0 m, or NaN for a gap")
@@ -114,14 +125,17 @@ def block_sensor_labels(labels: pd.DataFrame, sensors: pd.DataFrame,
                         origin: tuple[float, float]) -> tuple[pd.DataFrame, dict[str, int]]:
     """North's Q1: a block is wet if any of its sensors is wet, dry only if every one is dry, else unknown.
 
-    ``sensors`` gives each sensor's position (x, y) in EPSG:32647. The counts say how often a block held
-    several sensors, and how often one was wet while another was dry.
+    ``sensors`` gives each sensor's position (x, y) in EPSG:32647. A positioned sensor without a label is
+    unknown, so it keeps its block from being dry. The counts say how often a block held several sensors,
+    and how often one was wet while another was dry.
     """
     if not set(labels["state"]) <= set(SENSOR_STATES):
         raise ValueError(f"sensor states must be among {SENSOR_STATES}")
-    placed = labels.merge(sensors[["sensor_id", "x", "y"]], on="sensor_id", how="left", validate="one_to_one")
+    placed = sensors[["sensor_id", "x", "y"]].merge(labels[["sensor_id", "state"]], on="sensor_id", how="outer",
+                                                    validate="one_to_one")
     if placed[["x", "y"]].isna().any(axis=None):
         raise ValueError("every labelled sensor needs a position (x, y) in EPSG:32647")
+    placed["state"] = placed["state"].fillna("unknown")
     bi, bj = block_of(placed["x"], placed["y"], origin)
     placed = placed.assign(bi=bi, bj=bj, wet=placed["state"] == "observed_wet", dry=placed["state"] == "observed_dry")
     blocks = placed.groupby(["bi", "bj"], as_index=False).agg(
@@ -142,6 +156,10 @@ def check_report_counts(counts: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"report counts must have exactly the columns {', '.join(REPORT_COLUMNS)}")
     if counts.empty:
         return counts.astype({"bi": "int64", "bj": "int64", "count": "int64"})
+    if counts[["bi", "bj"]].isna().any(axis=None):
+        raise ValueError("every report count needs its block (bi, bj)")
+    if counts["time"].isna().any():
+        raise ValueError("every report count needs a time; one without it is never dropped silently")
     if not (pd.api.types.is_integer_dtype(counts["bi"]) and pd.api.types.is_integer_dtype(counts["bj"])):
         raise ValueError("bi and bj must be integer block indices")
     if counts["count"].isna().any() or not pd.api.types.is_integer_dtype(counts["count"]) or (counts["count"] < 0).any():
