@@ -306,9 +306,10 @@ also confirmed the note's five ASSUMPTION readings in review of PR #105. The
 options listed below are kept as the record of what was offered.
 
 - Three PRs. **BKK-056a** (DECISION, done): a protocol note `psk-v1` recording
-  North's choices D1–D6. **BKK-056b** (READY): the harness, tested
-  on synthetic fixtures only; if it passes about 300 changed lines, split the
-  null and bootstrap from the ladder. **BKK-056c** (EXTERNAL): the first
+  North's choices D1–D6. **BKK-056b** (IN REVIEW): the harness, tested
+  on synthetic fixtures only, in four stacked PRs from #106: grid statistics,
+  labels and building cover, block scores and rungs, then the ladder and
+  record. North decided its open points on 10 November 2026 (note s5). **BKK-056c** (EXTERNAL): the first
   locked real run, once the Data steward admits a timed point-observation
   source (BKK-036B covers forcing and extent, not sensors or reports) and
   North decides privacy and consent for any citizen-report source.

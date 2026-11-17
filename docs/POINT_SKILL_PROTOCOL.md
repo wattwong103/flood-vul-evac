@@ -1,7 +1,7 @@
 # BKK/FLOW point-observation skill check
 
 **Protocol version:** `psk-v1`
-**Status:** decisions locked (BKK-056a); harness not built (BKK-056b); no real run (BKK-056c)
+**Status:** decisions locked (BKK-056a); harness in review (BKK-056b, four PRs from #106); no real run (BKK-056c)
 **Applies to:** the BKK-056b harness and every BKK-056c run
 **Decided by:** North, 10 November 2026
 
@@ -59,6 +59,12 @@ North confirmed all of them unchanged on 10 November 2026, in review of PR
 - **ASSUMPTION:** case-level metrics (AUC, intervals, null p), which carry no
   location, are published as computed. D1's 1 km rule is read as applying to
   anything mapped or tabulated by place.
+- **ASSUMPTION** (approved with the BKK-056b plan): a block enters a case when
+  every candidate evaluated at least half its area inside the AOI (`oec-v1`'s
+  `MIN_EVALUABLE`). Each surface's domain is found on its own
+  (`point_skill_scores.block_scores`), and the case keeps the blocks in every
+  candidate's domain. There is no channel mask, because the labels are points,
+  not mapped extent.
 
 ### 3.2 Labels (D2)
 
@@ -98,7 +104,7 @@ section 3.5 are taken against them only.
 | Rung | Definition | Input today |
 |---|---|---|
 | Chance | `oec-v1`'s toroidal-shift null (`pipeline/bkkflow/observed_extent_stats.py:132`) | always |
-| Exposure | share of the block covered by OSM building footprints | footprints are loaded (`pipeline/bkkflow/sources/osm.py:252`); no code computes block cover yet, so BKK-056b adds it |
+| Exposure | share of the block covered by OSM building footprints | footprints are loaded (`pipeline/bkkflow/sources/osm.py:252`); `point_skill.building_cover` computes block cover (BKK-056b) |
 | Channel | distance to `oec-v1`'s channel mask, the union of MitrEarth water bodies and GSW permanent water (`pipeline/bkkflow/observed_extent_stats.py:51`) | yes |
 | Rain-only | defined in BKK-056b (section 5) | needs admitted event forcing (BKK-036B) |
 | Persistence | defined in BKK-056b (section 5) | needs a prior observation of the same kind |
@@ -126,16 +132,26 @@ them.
   surface depths are negated before scoring. The TOC curve is reported in the
   score's own units.
 - **Chance:** the toroidal-shift null; p = (1 + k) / (1 + n) over defined
-  shifts, as in `oec-v1`.
+  shifts, as in `oec-v1`. A shifted label is scored wherever it lands in the
+  case's domain (North, 10 November 2026, Q6). `oec-v1` scores it only where a
+  label already sat. On sparse sensor labels that left 60–80% of shifts
+  undefined. On `oec-v1`'s fixtures the two rules give the same result.
 - **Interval:** a paired spatial block bootstrap, percentile 95%. The block
   length is the first lag at which the label correlogram is ≤ 0.05
   (`RANGE_THRESHOLD`, `pipeline/bkkflow/observed_extent_stats.py:27`).
 - **Fallback:** as `oec-v1`'s option (c): if the correlogram stays above 0.05
   up to half the shorter grid side, the case has no interval, with status
-  `interval_not_estimable` and the lags and r values examined. If no
-  correlogram lag can be computed at all, the case is locked as undefined.
-- The rule is **untested on sparse sensor labels**; BKK-056b must test it on a
-  sparse fixture before any real run.
+  `interval_not_estimable` and the lags and r values examined. A case whose
+  labels hold one class only, or whose qualifying lags (below) all have an
+  undefined r, is locked as undefined.
+- **Sparse labels** (North, 10 November 2026, Q7, amending D4): a correlogram
+  lag counts only with at least 30 label pairs. BKK-056b's sparse fixture found
+  why. On 70–262 spatially independent sensor labels, `oec-v1`'s rule picked
+  lengths of 100 m to over 600 m, from lags holding a median of 3.5–4 pairs. If
+  no lag qualifies, the case takes the fallback with reason
+  `no_lag_with_min_pairs`: no interval, but the AUC and the null are kept.
+  Lags that qualify but never fall to 0.05 keep `oec-v1`'s reason. Dense report
+  cases and `oec-v1`'s fixtures are unaffected.
 - The null, bootstrap, correlogram and TOC are new code, because `oec-v1`'s are
   bound to its rows; on `oec-v1`'s fixtures they must reproduce `oec-v1`'s
   results. `oec-v1`'s code, `PROTOCOL` and tests stay untouched.
@@ -165,6 +181,14 @@ gets the numbers and intervals. Under the D4 fallback both intervals are null.
   so its rank equals the channel rung's rank. That comparison shows no
   difference **by construction**; the record states this rather than
   reporting it as a finding.
+- **ASSUMPTION** (approved with the BKK-056b plan): the scenario decays from
+  OSM water, while the channel rung uses the MitrEarth ∪ GSW mask. Their ranks
+  are close but not identical, so the record says both are distance-to-water
+  ranks from different water layers rather than "equal".
+- Windows are closed at both ends. The rain-only accumulation for a timed
+  surface is the closed [t − hours, t]. The persistence window has the same
+  length and ends where the scoring window starts, read half-open, so no
+  observation is in both.
 
 ### 3.7 Privacy
 
@@ -200,22 +224,33 @@ a test assertion only; the record itself still carries no verdict.
 None of these was put to North in BKK-056a. Each is proposed in the PR that
 needs it and approved by North there, never chosen silently.
 
-- **Several sensors in one block** (BKK-056b): how their readings combine into
-  one block label. With about 262 sensors citywide this should be rare, and the
-  harness must count how often it happens.
-- **Surface to block score** (BKK-056b): how a candidate surface becomes one
-  score per block (block mean, block maximum, or a point rule like oec-v1's),
-  and how ties are handled.
-- **A reported block with zero building cover** (BKK-056b): keep it as a
-  positive, or restrict both classes of a report case to blocks with cover
-  above zero. As written, D2c restricts only the controls, and zero-cover
-  positives would rank lowest on the exposure rung.
+### Decided for BKK-056b (North, 10 November 2026)
+
+North chose these in structured prompts in the BKK-056b session, from two to
+four options each. One choice differs from the recommended option: the
+rain-only rung's interpolation.
+
+| Point | Chosen |
+|---|---|
+| Several sensors in one block | Wet if any sensor is wet. Dry only if every sensor is dry under D2b. Otherwise unknown. The record counts multi-sensor blocks and wet/dry conflicts. |
+| Surface to block score | The wettest of the block's four 50 m lattice points: the maximum depth or index, or the nearest point for a distance rung. Points evaluated but not stored tie at the bottom, and AUC ties count 1/2. A coarser surface gives each point its cell's value. |
+| Reported block with zero building cover | Both classes of a report case use only blocks with cover above zero. The record counts the reported blocks left out. |
+| Rain-only rung | Inverse-distance weighting, power 2, over every admitted gauge with a complete accumulation in the window. A block centre on a gauge takes that gauge's value. A timed surface uses a locked number of hours before t; a declared scenario uses the event window. Chosen over the recommended nearest gauge. |
+| Persistence rung | The same kind of observation in the equal-length window just before the scoring window: a sensor block's maximum depth, or a block's report count. A block with no prior observation ties at the bottom. |
+| Building cover floor | A block with less than 1 m² of footprint has no cover, so a reprojection sliver never makes a building-free block a report control. Decided in review of the BKK-056b labels PR. |
+| Chance and the correlogram on sparse labels | Section 3.4 (Q6 and Q7). |
+
+### Still open
+
 - **Minimum reports per published 1 km cell** (BKK-056c): a floor below which
   a cell is suppressed, so no published cell points to a single reporter.
-- **Rain-only and persistence rungs** (BKK-056b): their exact definitions.
+- **The rain-only rung's accumulation hours before t** (BKK-056c): locked in the
+  record with the other windows.
 - **Scheduled readings** (BKK-056c): each sensor's reporting interval, taken
   from the admitted source and recorded at ingest, which D2b's 90% share
   counts against.
+  Ingest also maps the source's sentinel values (negative or out-of-range
+  depths) to gaps; the harness refuses any depth below 0 m rather than guess.
 - **Event windows, seeds and held-out reservations** (BKK-056c): locked in the
   record before any score, naming the dates, areas and observations reserved
   for BKK-036B/C.
